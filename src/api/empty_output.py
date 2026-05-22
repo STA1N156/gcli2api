@@ -80,7 +80,7 @@ def is_empty_model_output_payload(payload: Any) -> bool:
     return not any(_candidate_has_visible_output(candidate) for candidate in candidates)
 
 
-def has_visible_model_output_payload(payload: Any) -> bool:
+def has_visible_model_output_payload(payload: Any, *, include_thought: bool = False) -> bool:
     response_data = _get_response_data(payload)
     if response_data is None:
         return False
@@ -89,7 +89,10 @@ def has_visible_model_output_payload(payload: Any) -> bool:
     if not isinstance(candidates, list) or not candidates:
         return False
 
-    return any(_candidate_has_visible_output(candidate) for candidate in candidates)
+    return any(
+        _candidate_has_visible_output(candidate, include_thought=include_thought)
+        for candidate in candidates
+    )
 
 
 def stream_chunk_has_visible_output(chunk: Any) -> bool:
@@ -109,7 +112,7 @@ def stream_chunk_has_visible_output(chunk: Any) -> bool:
         except (TypeError, ValueError):
             continue
 
-        if has_visible_model_output_payload(payload):
+        if has_visible_model_output_payload(payload, include_thought=True):
             return True
 
     return False
@@ -148,7 +151,7 @@ def _iter_stream_payloads(chunk_text: str):
         yield stripped
 
 
-def _candidate_has_visible_output(candidate: Any) -> bool:
+def _candidate_has_visible_output(candidate: Any, *, include_thought: bool = False) -> bool:
     if not isinstance(candidate, Mapping):
         return False
 
@@ -170,9 +173,6 @@ def _candidate_has_visible_output(candidate: Any) -> bool:
         if any(key in part for key in _STRUCTURED_OUTPUT_KEYS):
             return True
 
-        if part.get("thought") is True:
-            continue
-
         if "text" not in part:
             continue
 
@@ -181,8 +181,12 @@ def _candidate_has_visible_output(candidate: Any) -> bool:
             if is_internal_placeholder_text(text):
                 continue
             if text.strip():
+                if part.get("thought") is True and not include_thought:
+                    continue
                 return True
         elif text is not None:
+            if part.get("thought") is True and not include_thought:
+                continue
             return True
 
     return False
