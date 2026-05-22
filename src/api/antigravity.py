@@ -474,20 +474,14 @@ async def stream_request(
                 log.debug(f"[ANTIGRAVITY STREAM] 流式响应完成，模型: {model_name}")
                 return
             elif not need_retry:
-                # 没有收到任何数据（空回复），需要重试
-                log.warning(f"[ANTIGRAVITY STREAM] 收到空回复，无任何内容，凭证: {current_file}")
+                log.warning(f"[ANTIGRAVITY STREAM] Model returned empty output, credential: {current_file}")
                 await record_api_call_error(
-                    credential_manager, current_file, 200,
+                    credential_manager, current_file, 461,
                     None, mode="antigravity", model_name=model_name,
-                    error_message="Empty response from API"
+                    error_message="可能触发外审导致空回"
                 )
-                
-                if attempt < max_retries:
-                    need_retry = True
-                else:
-                    log.error(f"[ANTIGRAVITY STREAM] 空回复达到最大重试次数")
-                    yield build_empty_model_output_response()
-                    return
+                yield build_empty_model_output_response()
+                return
             
             # 统一处理重试
             if need_retry:
@@ -692,32 +686,14 @@ async def non_stream_request(
                     )
                     return build_empty_model_output_response()
 
-                # 检查是否为空回复
-                if not response.content or len(response.content) == 0:
-                    log.warning(f"[ANTIGRAVITY] 收到200响应但内容为空，凭证: {current_file}")
-                    
-                    # 记录错误
-                    await record_api_call_error(
-                        credential_manager, current_file, 200,
-                        None, mode="antigravity", model_name=model_name,
-                        error_message="Empty response from API"
-                    )
-                    
-                    if attempt < max_retries:
-                        need_retry = True
-                    else:
-                        log.error(f"[ANTIGRAVITY] 空回复达到最大重试次数")
-                        return build_empty_model_output_response()
-                else:
-                    # 正常响应
-                    await record_api_call_success(
-                        credential_manager, current_file, mode="antigravity", model_name=model_name
-                    )
-                    return Response(
-                        content=response.content,
-                        status_code=200,
-                        headers=dict(response.headers)
-                    )
+                await record_api_call_success(
+                    credential_manager, current_file, mode="antigravity", model_name=model_name
+                )
+                return Response(
+                    content=response.content,
+                    status_code=200,
+                    headers=dict(response.headers)
+                )
 
             # 失败 - 记录最后一次错误
             if status_code != 200:
