@@ -1,4 +1,4 @@
-full_hash=b8964df6260d5fe95e374bd9bd29deda53b6e3b1
-short_hash=b8964df
-message=fix: return 461 for empty model output
-date=2026-05-23 03:23:39 +0800
+full_hash=8a30688d84e1f7022711b4e3f16a17918b63d4db
+short_hash=8a30688
+message=fix: skip retries for empty antigravity output
+date=2026-05-23 03:31:58 +0800
