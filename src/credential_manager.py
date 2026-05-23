@@ -235,8 +235,18 @@ class CredentialManager:
         """
         await self._ensure_initialized()
         binding_key = self._session_binding_key(mode, model_name, session_key)
+        bypass_session_routing = bool(binding_key and exclude_credential)
 
-        if binding_key:
+        if bypass_session_routing:
+            await self._forget_session_binding(binding_key)
+            log.info(
+                "Session route bypassed for retry: "
+                f"session={self._session_log_id(binding_key)}, "
+                f"excluded={os.path.basename(exclude_credential)}, "
+                f"mode={mode}, model={model_name}"
+            )
+
+        if binding_key and not bypass_session_routing:
             bound_filename = await self._get_session_binding(binding_key)
             if bound_filename:
                 bound_result = await self._get_bound_credential_if_available(
