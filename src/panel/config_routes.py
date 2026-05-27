@@ -85,6 +85,11 @@ async def get_config(token: str = Depends(verify_panel_token)):
             if key not in env_locked_keys:
                 current_config[key] = value
 
+        # Return normalized retry values so stale empty config does not blank the inputs.
+        current_config["empty_output_max_retries"] = await config.get_empty_output_max_retries()
+        current_config["geminicli_empty_output_max_retries"] = await config.get_geminicli_empty_output_max_retries()
+        current_config["antigravity_empty_output_max_retries"] = await config.get_antigravity_empty_output_max_retries()
+
         return JSONResponse(content={"config": current_config, "env_locked": list(env_locked_keys)})
 
     except Exception as e:

@@ -190,6 +190,8 @@ def _parse_nonnegative_int(value: Any) -> Optional[int]:
 
 async def _get_empty_output_max_retries_for_mode(config_key: str, *env_vars: str) -> int:
     """Get immediate retry count for empty output, with legacy shared fallback."""
+    await reload_config()
+
     stored_value = await get_config_value(config_key, None)
     parsed_value = _parse_nonnegative_int(stored_value) if stored_value is not None else None
     if parsed_value is not None:

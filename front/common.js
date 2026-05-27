@@ -2968,9 +2968,19 @@ function populateConfigForm() {
     document.getElementById('retry429Enabled').checked = Boolean(c.retry_429_enabled);
     setConfigField('retry429MaxRetries', c.retry_429_max_retries || 20);
     setConfigField('retry429Interval', c.retry_429_interval || 0.1);
-    const emptyRetryFallback = c.empty_output_max_retries ?? 4;
-    setConfigField('geminicliEmptyOutputMaxRetries', c.geminicli_empty_output_max_retries ?? emptyRetryFallback);
-    setConfigField('antigravityEmptyOutputMaxRetries', c.antigravity_empty_output_max_retries ?? emptyRetryFallback);
+    const normalizeRetryCount = (value, fallback) => {
+        const parsed = parseInt(value, 10);
+        return Number.isNaN(parsed) || parsed < 0 ? fallback : parsed;
+    };
+    const emptyRetryFallback = normalizeRetryCount(c.empty_output_max_retries, 4);
+    setConfigField(
+        'geminicliEmptyOutputMaxRetries',
+        normalizeRetryCount(c.geminicli_empty_output_max_retries, emptyRetryFallback)
+    );
+    setConfigField(
+        'antigravityEmptyOutputMaxRetries',
+        normalizeRetryCount(c.antigravity_empty_output_max_retries, emptyRetryFallback)
+    );
 
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);

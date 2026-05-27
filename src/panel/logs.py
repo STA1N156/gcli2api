@@ -5,6 +5,7 @@
 import asyncio
 import datetime
 import os
+from collections import deque
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -21,6 +22,14 @@ router = APIRouter(prefix="/logs", tags=["logs"])
 
 # WebSocket连接管理器
 manager = ConnectionManager()
+
+
+def _get_log_stream_history_lines() -> int:
+    """Get how many historical log lines to send when the live log panel connects."""
+    try:
+        return max(0, min(int(os.getenv("LOG_STREAM_HISTORY_LINES", "1000")), 5000))
+    except ValueError:
+        return 1000
 
 
 @router.post("/clear")
@@ -124,15 +133,16 @@ async def websocket_logs(websocket: WebSocket):
     try:
         # 直接使用环境变量获取日志文件路径
         log_file_path = os.getenv("LOG_FILE", "log.txt")
+        history_lines = _get_log_stream_history_lines()
 
-        # 发送初始日志（限制为最后50行，减少内存占用）
+        # 发送初始日志，默认最多回放最近 1000 行
         if os.path.exists(log_file_path):
             try:
                 # 使用 with 确保文件正确关闭
-                with open(log_file_path, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                    # 只发送最后50行，减少初始内存消耗
-                    for line in lines[-50:]:
+                with open(log_file_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = deque(f, maxlen=history_lines)
+                    # 只发送配置的最近历史日志，避免一次性加载太多内容
+                    for line in lines:
                         if line.strip():
                             await websocket.send_text(line.strip())
             except Exception as e:
