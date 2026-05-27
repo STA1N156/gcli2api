@@ -35,6 +35,7 @@ ENV_MAPPINGS = {
     "RETRY_429_MAX_RETRIES": "retry_429_max_retries",
     "RETRY_429_ENABLED": "retry_429_enabled",
     "RETRY_429_INTERVAL": "retry_429_interval",
+    "EMPTY_OUTPUT_MAX_RETRIES": "empty_output_max_retries",
     "ANTI_TRUNCATION_MAX_ATTEMPTS": "anti_truncation_max_attempts",
     "COMPATIBILITY_MODE": "compatibility_mode_enabled",
     "RETURN_THOUGHTS_TO_FRONTEND": "return_thoughts_to_frontend",
@@ -179,6 +180,21 @@ async def get_retry_429_interval() -> float:
             pass
 
     return float(await get_config_value("retry_429_interval", 1))
+
+
+async def get_empty_output_max_retries() -> int:
+    """Get immediate retry count for empty model output."""
+    env_value = os.getenv("EMPTY_OUTPUT_MAX_RETRIES")
+    if env_value:
+        try:
+            return max(0, int(env_value))
+        except ValueError:
+            pass
+
+    try:
+        return max(0, int(await get_config_value("empty_output_max_retries", 2)))
+    except (ValueError, TypeError):
+        return 2
 
 
 async def get_anti_truncation_max_attempts() -> int:

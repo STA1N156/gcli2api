@@ -47,6 +47,7 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["retry_429_max_retries"] = await config.get_retry_429_max_retries()
         current_config["retry_429_enabled"] = await config.get_retry_429_enabled()
         current_config["retry_429_interval"] = await config.get_retry_429_interval()
+        current_config["empty_output_max_retries"] = await config.get_empty_output_max_retries()
         # 抗截断配置
         current_config["anti_truncation_max_attempts"] = await config.get_anti_truncation_max_attempts()
 
@@ -119,6 +120,13 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                     raise HTTPException(status_code=400, detail="429重试间隔必须在0.01-10秒之间")
             except (ValueError, TypeError):
                 raise HTTPException(status_code=400, detail="429重试间隔必须是有效的数字")
+
+        if "empty_output_max_retries" in new_config:
+            if (
+                not isinstance(new_config["empty_output_max_retries"], int)
+                or new_config["empty_output_max_retries"] < 0
+            ):
+                raise HTTPException(status_code=400, detail="空回自动重试次数必须是大于等于0的整数")
 
         if "anti_truncation_max_attempts" in new_config:
             if (

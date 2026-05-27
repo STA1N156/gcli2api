@@ -18,7 +18,7 @@ import json
 from typing import Any, Dict, Optional, Callable, Tuple
 
 from fastapi import Response
-from config import get_code_assist_endpoint, get_auto_ban_error_codes
+from config import get_code_assist_endpoint, get_auto_ban_error_codes, get_empty_output_max_retries
 from log import log
 
 from src.credential_manager import credential_manager
@@ -182,6 +182,7 @@ async def stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
+    empty_output_max_retries = await get_empty_output_max_retries()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -222,7 +223,9 @@ async def stream_request(
         final_payload["project"] = project_id
         return True
 
-    for attempt in range(max_retries + 1):
+    attempt = 0
+    empty_output_retries = 0
+    while True:
         success_recorded = False  # 标记是否已记录成功
         need_retry = False  # 标记是否需要重试
         buffered_chunks = []
@@ -362,6 +365,14 @@ async def stream_request(
                 return
 
             if not need_retry:
+                if empty_output_retries < empty_output_max_retries:
+                    empty_output_retries += 1
+                    log.warning(
+                        f"[GEMINICLI STREAM] Model returned empty output, retrying immediately "
+                        f"({empty_output_retries}/{empty_output_max_retries}), credential: {current_file}"
+                    )
+                    continue
+
                 log.warning(f"[GEMINICLI STREAM] Model returned empty output, credential: {current_file}")
                 await record_api_call_error(
                     credential_manager, current_file, 461,
@@ -403,6 +414,7 @@ async def stream_request(
                         media_type="application/json"
                     )
                     return
+                attempt += 1
                 continue  # 重试
 
         except Exception as e:
@@ -410,6 +422,7 @@ async def stream_request(
             if attempt < max_retries:
                 log.info(f"[GEMINICLI STREAM] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
                 await asyncio.sleep(retry_interval)
+                attempt += 1
                 continue
             else:
                 # 所有重试都失败，返回最后一次的错误（如果有）
@@ -494,6 +507,7 @@ async def non_stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
+    empty_output_max_retries = await get_empty_output_max_retries()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -534,7 +548,9 @@ async def non_stream_request(
         final_payload["project"] = project_id
         return True
 
-    for attempt in range(max_retries + 1):
+    attempt = 0
+    empty_output_retries = 0
+    while True:
         try:
             response = await post_async(
                 url=target_url,
@@ -548,6 +564,14 @@ async def non_stream_request(
             # 成功
             if status_code == 200:
                 if is_empty_model_output(response.content):
+                    if empty_output_retries < empty_output_max_retries:
+                        empty_output_retries += 1
+                        log.warning(
+                            f"[NON-STREAM] Model returned empty output, retrying immediately "
+                            f"({empty_output_retries}/{empty_output_max_retries}), credential: {current_file}"
+                        )
+                        continue
+
                     log.warning(f"[NON-STREAM] Model returned empty output, credential: {current_file}")
                     await record_api_call_error(
                         credential_manager, current_file, 461,
@@ -643,6 +667,7 @@ async def non_stream_request(
                             status_code=500,
                             media_type="application/json"
                         )
+                    attempt += 1
                     continue  # 重试
                 else:
                     # 不重试，直接返回原始错误
@@ -695,6 +720,7 @@ async def non_stream_request(
                             status_code=500,
                             media_type="application/json"
                         )
+                    attempt += 1
                     continue  # 重试
                 else:
                     log.error(f"[NON-STREAM] 达到最大重试次数，返回404错误")
@@ -714,6 +740,7 @@ async def non_stream_request(
             if attempt < max_retries:
                 log.info(f"[NON-STREAM] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
                 await asyncio.sleep(retry_interval)
+                attempt += 1
                 continue
             else:
                 # 所有重试都失败，返回最后一次的错误（如果有）或500错误

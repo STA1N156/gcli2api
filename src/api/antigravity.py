@@ -15,6 +15,7 @@ from config import (
     get_antigravity_api_url,
     get_antigravity_stream2nostream,
     get_auto_ban_error_codes,
+    get_empty_output_max_retries,
 )
 from log import log
 
@@ -329,6 +330,7 @@ async def stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
+    empty_output_max_retries = await get_empty_output_max_retries()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -366,7 +368,9 @@ async def stream_request(
         apply_enabled_credit_types(credential_data)
         return True
 
-    for attempt in range(max_retries + 1):
+    attempt = 0
+    empty_output_retries = 0
+    while True:
         success_recorded = False  # 标记是否已记录成功
         need_retry = False  # 标记是否需要重试
         buffered_chunks = []
@@ -474,6 +478,14 @@ async def stream_request(
                 log.debug(f"[ANTIGRAVITY STREAM] 流式响应完成，模型: {model_name}")
                 return
             elif not need_retry:
+                if empty_output_retries < empty_output_max_retries:
+                    empty_output_retries += 1
+                    log.warning(
+                        f"[ANTIGRAVITY STREAM] Model returned empty output, retrying immediately "
+                        f"({empty_output_retries}/{empty_output_max_retries}), credential: {current_file}"
+                    )
+                    continue
+
                 log.warning(f"[ANTIGRAVITY STREAM] Model returned empty output, credential: {current_file}")
                 await record_api_call_error(
                     credential_manager, current_file, 461,
@@ -502,6 +514,7 @@ async def stream_request(
                         media_type="application/json"
                     )
                     return
+                attempt += 1
                 continue  # 重试
 
         except Exception as e:
@@ -509,6 +522,7 @@ async def stream_request(
             if attempt < max_retries:
                 log.info(f"[ANTIGRAVITY STREAM] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
                 await asyncio.sleep(retry_interval)
+                attempt += 1
                 continue
             else:
                 # 所有重试都失败，返回最后一次的错误（如果有）
@@ -625,6 +639,7 @@ async def non_stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
+    empty_output_max_retries = await get_empty_output_max_retries()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -662,7 +677,9 @@ async def non_stream_request(
         apply_enabled_credit_types(credential_data)
         return True
 
-    for attempt in range(max_retries + 1):
+    attempt = 0
+    empty_output_retries = 0
+    while True:
         need_retry = False  # 标记是否需要重试
         
         try:
@@ -678,6 +695,14 @@ async def non_stream_request(
             # 成功
             if status_code == 200:
                 if is_empty_model_output(response.content):
+                    if empty_output_retries < empty_output_max_retries:
+                        empty_output_retries += 1
+                        log.warning(
+                            f"[ANTIGRAVITY] Model returned empty output, retrying immediately "
+                            f"({empty_output_retries}/{empty_output_max_retries}), credential: {current_file}"
+                        )
+                        continue
+
                     log.warning(f"[ANTIGRAVITY] Model returned empty output, credential: {current_file}")
                     await record_api_call_error(
                         credential_manager, current_file, 461,
@@ -779,6 +804,7 @@ async def non_stream_request(
                         status_code=500,
                         media_type="application/json"
                     )
+                attempt += 1
                 continue  # 重试
 
         except Exception as e:
@@ -786,6 +812,7 @@ async def non_stream_request(
             if attempt < max_retries:
                 log.info(f"[ANTIGRAVITY] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
                 await asyncio.sleep(retry_interval)
+                attempt += 1
                 continue
             else:
                 # 所有重试都失败，返回最后一次的错误（如果有）或500错误
