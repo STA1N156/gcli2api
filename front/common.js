@@ -40,7 +40,7 @@ const AppState = {
     cooldownTimerInterval: null,
 
     // Antigravity total quota UI
-    antigravityCreditSummaryTimer: null,
+    antigravityCreditSummaryProgressTimer: null,
     antigravityCreditSummaryLoaded: false,
     antigravityCreditSummaryLoading: false
 };
@@ -1042,7 +1042,6 @@ function triggerTabDataLoad(tabName) {
     if (tabName === 'manage') AppState.creds.refresh();
     if (tabName === 'antigravity-manage') {
         AppState.antigravityCreds.refresh();
-        startAntigravityCreditSummaryAutoRefresh(true);
     }
     if (tabName === 'config') loadConfig();
     if (tabName === 'logs') connectWebSocket();
@@ -1465,8 +1464,6 @@ async function downloadAllCreds() {
 // Antigravity凭证管理
 function refreshAntigravityCredsList() {
     AppState.antigravityCreds.refresh();
-    startAntigravityCreditSummaryAutoRefresh(false);
-    refreshAntigravityCreditSummary(true);
 }
 
 function getAntigravityCreditSummaryElement(id) {
@@ -1606,6 +1603,57 @@ function setAntigravityCreditSummaryLoading(isLoading) {
     }
 }
 
+function updateAntigravityCreditSummaryProgress(progress) {
+    if (!progress || !progress.running) return;
+
+    const total = Number(progress.total) || 0;
+    const completed = Number(progress.completed) || 0;
+    const failed = Number(progress.failed) || 0;
+    const progressText = total > 0
+        ? `正在获取 ${completed}/${total}`
+        : '正在获取...';
+    const metaParts = [total > 0 ? `正在获取启用凭证额度 ${completed}/${total}` : '正在获取启用凭证额度'];
+
+    if (failed > 0) metaParts.push(`失败 ${failed} 个`);
+
+    setAntigravityCreditSummaryText('antigravityCreditSummaryCompact', progressText);
+    setAntigravityCreditSummaryText('antigravityCreditSummaryMeta', metaParts.join(' · '));
+}
+
+async function pollAntigravityCreditSummaryProgress() {
+    if (!AppState.antigravityCreditSummaryLoading) return;
+
+    try {
+        const response = await fetch('./creds/antigravity-credit-summary-progress', {
+            method: 'GET',
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            updateAntigravityCreditSummaryProgress(data);
+        }
+    } catch (error) {
+        // Progress polling is only a UI helper; the main refresh request handles real errors.
+    }
+}
+
+function startAntigravityCreditSummaryProgressPolling() {
+    stopAntigravityCreditSummaryProgressPolling();
+    pollAntigravityCreditSummaryProgress();
+    AppState.antigravityCreditSummaryProgressTimer = setInterval(
+        pollAntigravityCreditSummaryProgress,
+        1000
+    );
+}
+
+function stopAntigravityCreditSummaryProgressPolling() {
+    if (!AppState.antigravityCreditSummaryProgressTimer) return;
+
+    clearInterval(AppState.antigravityCreditSummaryProgressTimer);
+    AppState.antigravityCreditSummaryProgressTimer = null;
+}
+
 function toggleAntigravityCreditSummary() {
     const body = getAntigravityCreditSummaryElement('antigravityCreditSummaryBody');
     const card = getAntigravityCreditSummaryElement('antigravityCreditSummaryCard');
@@ -1617,24 +1665,6 @@ function toggleAntigravityCreditSummary() {
     card.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
     setAntigravityCreditSummaryText('antigravityCreditSummaryToggleIcon', shouldOpen ? '收起' : '展开');
 
-    if (shouldOpen && !AppState.antigravityCreditSummaryLoaded) {
-        refreshAntigravityCreditSummary(false);
-    }
-}
-
-function startAntigravityCreditSummaryAutoRefresh(fetchNow = false) {
-    const card = getAntigravityCreditSummaryElement('antigravityCreditSummaryCard');
-    if (!card) return;
-
-    if (!AppState.antigravityCreditSummaryTimer) {
-        AppState.antigravityCreditSummaryTimer = setInterval(() => {
-            refreshAntigravityCreditSummary(true);
-        }, 10 * 60 * 1000);
-    }
-
-    if (fetchNow) {
-        refreshAntigravityCreditSummary(true);
-    }
 }
 
 async function refreshAntigravityCreditSummary(silent = false) {
@@ -1642,6 +1672,7 @@ async function refreshAntigravityCreditSummary(silent = false) {
     if (!card || AppState.antigravityCreditSummaryLoading) return;
 
     setAntigravityCreditSummaryLoading(true);
+    startAntigravityCreditSummaryProgressPolling();
 
     try {
         const response = await fetch('./creds/antigravity-credit-summary', {
@@ -1664,13 +1695,13 @@ async function refreshAntigravityCreditSummary(silent = false) {
         setAntigravityCreditSummaryText('antigravityCreditSummaryMeta', error.message);
         if (!silent) showStatus(`获取总额度失败: ${error.message}`, 'error');
     } finally {
+        stopAntigravityCreditSummaryProgressPolling();
         setAntigravityCreditSummaryLoading(false);
     }
 }
 
 window.toggleAntigravityCreditSummary = toggleAntigravityCreditSummary;
 window.refreshAntigravityCreditSummary = refreshAntigravityCreditSummary;
-window.startAntigravityCreditSummaryAutoRefresh = startAntigravityCreditSummaryAutoRefresh;
 
 function applyAntigravityStatusFilter() { AppState.antigravityCreds.applyStatusFilter(); }
 function changeAntigravityPage(direction) { AppState.antigravityCreds.changePage(direction); }

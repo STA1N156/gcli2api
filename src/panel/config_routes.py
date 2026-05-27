@@ -17,6 +17,19 @@ from .utils import get_env_locked_keys
 # 创建路由器
 router = APIRouter(prefix="/config", tags=["config"])
 
+EMPTY_OUTPUT_RETRY_KEYS = (
+    "empty_output_max_retries",
+    "geminicli_empty_output_max_retries",
+    "antigravity_empty_output_max_retries",
+)
+
+
+def _normalize_nonnegative_int(value, default: int) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
 
 @router.get("/get")
 async def get_config(token: str = Depends(verify_panel_token)):
@@ -108,6 +121,18 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         log.debug(f"收到的password值: {new_config.get('password', 'NOT_FOUND')}")
 
         # 验证配置项
+        empty_retry_defaults = {
+            "empty_output_max_retries": await config.get_empty_output_max_retries(),
+            "geminicli_empty_output_max_retries": await config.get_geminicli_empty_output_max_retries(),
+            "antigravity_empty_output_max_retries": await config.get_antigravity_empty_output_max_retries(),
+        }
+        for retry_key in EMPTY_OUTPUT_RETRY_KEYS:
+            if retry_key in new_config:
+                new_config[retry_key] = _normalize_nonnegative_int(
+                    new_config[retry_key],
+                    empty_retry_defaults[retry_key],
+                )
+
         if "retry_429_max_retries" in new_config:
             if (
                 not isinstance(new_config["retry_429_max_retries"], int)

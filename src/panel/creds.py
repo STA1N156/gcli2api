@@ -30,6 +30,16 @@ from .utils import validate_mode
 # 创建路由器
 router = APIRouter(prefix="/creds", tags=["credentials"])
 
+ANTIGRAVITY_CREDIT_SUMMARY_CONCURRENCY = 20
+_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS: Dict[str, Any] = {
+    "running": False,
+    "total": 0,
+    "completed": 0,
+    "failed": 0,
+    "started_at": None,
+    "updated_at": None,
+}
+
 
 # =============================================================================
 # 工具函数 (Helper Functions)
@@ -136,6 +146,35 @@ def _average_quota_remaining(models: Dict[str, Any]) -> Optional[float]:
         return None
 
     return sum(remaining_values) / len(remaining_values)
+
+
+def _reset_antigravity_credit_summary_progress(total: int) -> None:
+    now = time.time()
+    _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.update({
+        "running": total > 0,
+        "total": total,
+        "completed": 0,
+        "failed": 0,
+        "started_at": now,
+        "updated_at": now,
+    })
+
+
+def _update_antigravity_credit_summary_progress(*, failed: bool = False) -> None:
+    _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["completed"] = min(
+        int(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("completed") or 0) + 1,
+        int(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("total") or 0),
+    )
+    if failed:
+        _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["failed"] = (
+            int(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("failed") or 0) + 1
+        )
+    _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["updated_at"] = time.time()
+
+
+def _finish_antigravity_credit_summary_progress() -> None:
+    _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["running"] = False
+    _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["updated_at"] = time.time()
 
 
 async def upload_credentials_common(
@@ -1264,8 +1303,10 @@ async def get_antigravity_credit_summary(
             for filename, state in all_states.items()
             if not state.get("disabled", False)
         ]
+        _reset_antigravity_credit_summary_progress(len(enabled_filenames))
 
         if not enabled_filenames:
+            _finish_antigravity_credit_summary_progress()
             return JSONResponse(content={
                 "success": True,
                 "enabled_accounts": 0,
@@ -1282,7 +1323,7 @@ async def get_antigravity_credit_summary(
             })
 
         api_base_url = await get_antigravity_api_url()
-        semaphore = asyncio.Semaphore(5)
+        semaphore = asyncio.Semaphore(ANTIGRAVITY_CREDIT_SUMMARY_CONCURRENCY)
 
         async def fetch_one(filename: str) -> Dict[str, Any]:
             result: Dict[str, Any] = {
@@ -1374,7 +1415,17 @@ async def get_antigravity_credit_summary(
                     )
                     return result
 
-        results = await asyncio.gather(*(fetch_one(filename) for filename in enabled_filenames))
+        async def fetch_one_with_progress(filename: str) -> Dict[str, Any]:
+            result = await fetch_one(filename)
+            _update_antigravity_credit_summary_progress(
+                failed=not result.get("success")
+            )
+            return result
+
+        results = await asyncio.gather(
+            *(fetch_one_with_progress(filename) for filename in enabled_filenames)
+        )
+        _finish_antigravity_credit_summary_progress()
 
         quota_fractions = [
             item["quota_remaining_fraction"]
@@ -1457,8 +1508,20 @@ async def get_antigravity_credit_summary(
         })
 
     except Exception as e:
+        _finish_antigravity_credit_summary_progress()
         log.error(f"[ANTIGRAVITY SUMMARY] Failed to build summary: {e}")
         raise HTTPException(status_code=500, detail=f"获取总额度失败: {str(e)}")
+
+
+@router.get("/antigravity-credit-summary-progress")
+async def get_antigravity_credit_summary_progress(
+    token: str = Depends(verify_panel_token),
+):
+    """Return current aggregate Antigravity quota refresh progress."""
+    return JSONResponse(content={
+        "success": True,
+        **_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS,
+    })
 
 
 @router.post("/configure-preview/{filename}")
