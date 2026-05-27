@@ -10,7 +10,7 @@ from collections import deque
 import atexit
 
 # 日志级别定义
-LOG_LEVELS = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
+LOG_LEVELS = {"debug": 0, "info": 1, "warning": 2, "empty_retry": 2, "error": 3, "critical": 4}
 
 # 文件写入状态标志（仅由 writer 线程修改，无需锁保护）
 _file_writing_disabled = False
@@ -273,6 +273,9 @@ class Logger:
 
     def info(self, message: str):
         _log("info", message)
+
+    def empty_retry(self, message: str):
+        _log("empty_retry", message)
 
     def warning(self, message: str):
         _log("warning", message)

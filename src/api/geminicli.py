@@ -367,7 +367,7 @@ async def stream_request(
             if not need_retry:
                 if empty_output_retries < empty_output_max_retries:
                     empty_output_retries += 1
-                    log.warning(
+                    log.empty_retry(
                         f"[GEMINICLI STREAM] Model returned empty output, retrying immediately "
                         f"({empty_output_retries}/{empty_output_max_retries}), credential: {current_file}"
                     )
@@ -566,7 +566,7 @@ async def non_stream_request(
                 if is_empty_model_output(response.content):
                     if empty_output_retries < empty_output_max_retries:
                         empty_output_retries += 1
-                        log.warning(
+                        log.empty_retry(
                             f"[NON-STREAM] Model returned empty output, retrying immediately "
                             f"({empty_output_retries}/{empty_output_max_retries}), credential: {current_file}"
                         )
