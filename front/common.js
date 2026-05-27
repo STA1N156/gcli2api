@@ -2968,7 +2968,7 @@ function populateConfigForm() {
     document.getElementById('retry429Enabled').checked = Boolean(c.retry_429_enabled);
     setConfigField('retry429MaxRetries', c.retry_429_max_retries || 20);
     setConfigField('retry429Interval', c.retry_429_interval || 0.1);
-    setConfigField('emptyOutputMaxRetries', c.empty_output_max_retries ?? 2);
+    setConfigField('emptyOutputMaxRetries', c.empty_output_max_retries ?? 4);
 
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
@@ -3027,7 +3027,7 @@ async function saveConfig() {
             retry_429_enabled: getChecked('retry429Enabled'),
             retry_429_max_retries: getInt('retry429MaxRetries', 20),
             retry_429_interval: getFloat('retry429Interval', 0.1),
-            empty_output_max_retries: getIntAllowZero('emptyOutputMaxRetries', 2),
+            empty_output_max_retries: getIntAllowZero('emptyOutputMaxRetries', 4),
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),
