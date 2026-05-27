@@ -102,7 +102,7 @@ def get_available_models(router_type: str = "openai") -> List[str]:
         # 假流式模型 (前缀格式)
         models.append(f"假流式/{base_model}")
 
-        # 流式抗截断模型 (仅在流式传输时有效，前缀格式)
+        # 流式抗截断模型 (流式和非流式都支持，前缀格式)
         models.append(f"流式抗截断/{base_model}")
 
         # 定义思考后缀（根据模型系列不同）

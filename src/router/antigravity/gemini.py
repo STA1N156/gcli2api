@@ -92,9 +92,9 @@ async def generate_content(
     use_anti_truncation = is_anti_truncation_model(model)
     real_model = get_base_model_from_feature_model(model)
 
-    # 对于抗截断模型的非流式请求，给出警告
+    # 对于抗截断模型的非流式请求，后端会使用流式抗截断并收集为非流式响应
     if use_anti_truncation:
-        log.warning("抗截断功能仅在流式传输时有效，非流式请求将忽略此设置")
+        log.info("非流式请求启用抗截断，将使用流式续写后收集为完整响应")
 
     # 更新模型名为真实模型名
     normalized_dict["model"] = real_model
@@ -110,9 +110,16 @@ async def generate_content(
         "cache_session_key": cache_session_key
     }
 
-    # 调用 API 层的非流式请求
-    from src.api.antigravity import non_stream_request
-    response = await non_stream_request(body=api_request)
+    if use_anti_truncation:
+        from src.api.antigravity import stream_request
+        from src.router.anti_truncation import collect_anti_truncation_response
+
+        max_attempts = await get_anti_truncation_max_attempts()
+        response = await collect_anti_truncation_response(api_request, stream_request, max_attempts)
+    else:
+        # 调用 API 层的非流式请求
+        from src.api.antigravity import non_stream_request
+        response = await non_stream_request(body=api_request)
 
     # 解包装响应：Antigravity API 可能返回的格式有额外的 response 包装层
     # 需要提取并返回标准 Gemini 格式

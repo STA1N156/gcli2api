@@ -93,9 +93,9 @@ async def chat_completions(
     # 获取流式标志
     is_streaming = openai_request.stream
 
-    # 对于抗截断模型的非流式请求，给出警告
+    # 对于抗截断模型的非流式请求，后端会使用流式抗截断并收集为非流式响应
     if use_anti_truncation and not is_streaming:
-        log.warning("抗截断功能仅在流式传输时有效，非流式请求将忽略此设置")
+        log.info("非流式请求启用抗截断，将使用流式续写后收集为完整响应")
 
     # 更新模型名为真实模型名
     normalized_dict["model"] = real_model
@@ -120,9 +120,16 @@ async def chat_completions(
 
     # ========== 非流式请求 ==========
     if not is_streaming:
-        # 调用 API 层的非流式请求
-        from src.api.antigravity import non_stream_request
-        response = await non_stream_request(body=api_request)
+        if use_anti_truncation:
+            from src.api.antigravity import stream_request
+            from src.router.anti_truncation import collect_anti_truncation_response
+
+            max_attempts = await get_anti_truncation_max_attempts()
+            response = await collect_anti_truncation_response(api_request, stream_request, max_attempts)
+        else:
+            # 调用 API 层的非流式请求
+            from src.api.antigravity import non_stream_request
+            response = await non_stream_request(body=api_request)
 
         # 检查响应状态码
         status_code = getattr(response, "status_code", 200)
