@@ -15,7 +15,7 @@ from config import (
     get_antigravity_api_url,
     get_antigravity_stream2nostream,
     get_auto_ban_error_codes,
-    get_empty_output_max_retries,
+    get_antigravity_empty_output_max_retries,
 )
 from log import log
 
@@ -330,7 +330,7 @@ async def stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
-    empty_output_max_retries = await get_empty_output_max_retries()
+    empty_output_max_retries = await get_antigravity_empty_output_max_retries()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -461,6 +461,11 @@ async def stream_request(
                         if not stream_chunk_has_visible_output(chunk):
                             continue
 
+                        if empty_output_retries > 0:
+                            log.empty_retry(
+                                f"[ANTIGRAVITY STREAM] 重试成功{empty_output_retries}/{empty_output_max_retries}"
+                            )
+
                         await record_api_call_success(
                             credential_manager, current_file, mode="antigravity", model_name=model_name
                         )
@@ -480,11 +485,10 @@ async def stream_request(
             elif not need_retry:
                 if empty_output_retries < empty_output_max_retries:
                     empty_output_retries += 1
-                    log.empty_retry(
-                        f"[ANTIGRAVITY STREAM] Model returned empty output, retrying immediately "
-                        f"({empty_output_retries}/{empty_output_max_retries}), credential: {current_file}"
-                    )
                     continue
+
+                if empty_output_retries > 0:
+                    log.empty_retry("[ANTIGRAVITY STREAM] 失败")
 
                 log.warning(f"[ANTIGRAVITY STREAM] Model returned empty output, credential: {current_file}")
                 await record_api_call_error(
@@ -639,7 +643,7 @@ async def non_stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
-    empty_output_max_retries = await get_empty_output_max_retries()
+    empty_output_max_retries = await get_antigravity_empty_output_max_retries()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -697,11 +701,10 @@ async def non_stream_request(
                 if is_empty_model_output(response.content):
                     if empty_output_retries < empty_output_max_retries:
                         empty_output_retries += 1
-                        log.empty_retry(
-                            f"[ANTIGRAVITY] Model returned empty output, retrying immediately "
-                            f"({empty_output_retries}/{empty_output_max_retries}), credential: {current_file}"
-                        )
                         continue
+
+                    if empty_output_retries > 0:
+                        log.empty_retry("[ANTIGRAVITY] 失败")
 
                     log.warning(f"[ANTIGRAVITY] Model returned empty output, credential: {current_file}")
                     await record_api_call_error(
@@ -710,6 +713,11 @@ async def non_stream_request(
                         error_message="可能触发外审导致空回"
                     )
                     return build_empty_model_output_response()
+
+                if empty_output_retries > 0:
+                    log.empty_retry(
+                        f"[ANTIGRAVITY] 重试成功{empty_output_retries}/{empty_output_max_retries}"
+                    )
 
                 await record_api_call_success(
                     credential_manager, current_file, mode="antigravity", model_name=model_name

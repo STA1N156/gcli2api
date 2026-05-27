@@ -18,7 +18,7 @@ import json
 from typing import Any, Dict, Optional, Callable, Tuple
 
 from fastapi import Response
-from config import get_code_assist_endpoint, get_auto_ban_error_codes, get_empty_output_max_retries
+from config import get_code_assist_endpoint, get_auto_ban_error_codes, get_geminicli_empty_output_max_retries
 from log import log
 
 from src.credential_manager import credential_manager
@@ -182,7 +182,7 @@ async def stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
-    empty_output_max_retries = await get_empty_output_max_retries()
+    empty_output_max_retries = await get_geminicli_empty_output_max_retries()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -347,6 +347,11 @@ async def stream_request(
                         if not stream_chunk_has_visible_output(chunk):
                             continue
 
+                        if empty_output_retries > 0:
+                            log.empty_retry(
+                                f"[GEMINICLI STREAM] 重试成功{empty_output_retries}/{empty_output_max_retries}"
+                            )
+
                         await record_api_call_success(
                             credential_manager, current_file, mode="geminicli", model_name=model_name
                         )
@@ -367,11 +372,10 @@ async def stream_request(
             if not need_retry:
                 if empty_output_retries < empty_output_max_retries:
                     empty_output_retries += 1
-                    log.empty_retry(
-                        f"[GEMINICLI STREAM] Model returned empty output, retrying immediately "
-                        f"({empty_output_retries}/{empty_output_max_retries}), credential: {current_file}"
-                    )
                     continue
+
+                if empty_output_retries > 0:
+                    log.empty_retry("[GEMINICLI STREAM] 失败")
 
                 log.warning(f"[GEMINICLI STREAM] Model returned empty output, credential: {current_file}")
                 await record_api_call_error(
@@ -507,7 +511,7 @@ async def non_stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
-    empty_output_max_retries = await get_empty_output_max_retries()
+    empty_output_max_retries = await get_geminicli_empty_output_max_retries()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -566,11 +570,10 @@ async def non_stream_request(
                 if is_empty_model_output(response.content):
                     if empty_output_retries < empty_output_max_retries:
                         empty_output_retries += 1
-                        log.empty_retry(
-                            f"[NON-STREAM] Model returned empty output, retrying immediately "
-                            f"({empty_output_retries}/{empty_output_max_retries}), credential: {current_file}"
-                        )
                         continue
+
+                    if empty_output_retries > 0:
+                        log.empty_retry("[GEMINICLI] 失败")
 
                     log.warning(f"[NON-STREAM] Model returned empty output, credential: {current_file}")
                     await record_api_call_error(
@@ -579,6 +582,11 @@ async def non_stream_request(
                         error_message="可能触发外审导致空回"
                     )
                     return build_empty_model_output_response()
+
+                if empty_output_retries > 0:
+                    log.empty_retry(
+                        f"[GEMINICLI] 重试成功{empty_output_retries}/{empty_output_max_retries}"
+                    )
 
                 await record_api_call_success(
                     credential_manager, current_file, mode="geminicli", model_name=model_name

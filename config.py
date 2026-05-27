@@ -181,23 +181,54 @@ async def get_retry_429_interval() -> float:
     return float(await get_config_value("retry_429_interval", 1))
 
 
-async def get_empty_output_max_retries() -> int:
-    """Get immediate retry count for empty model output."""
-    stored_value = await get_config_value("empty_output_max_retries", None)
-    if stored_value is not None:
-        try:
-            return max(0, int(stored_value))
-        except (ValueError, TypeError):
-            pass
+def _parse_nonnegative_int(value: Any) -> Optional[int]:
+    try:
+        return max(0, int(value))
+    except (ValueError, TypeError):
+        return None
 
-    env_value = os.getenv("EMPTY_OUTPUT_MAX_RETRIES")
-    if env_value is not None and env_value != "":
-        try:
-            return max(0, int(env_value))
-        except ValueError:
-            pass
+
+async def _get_empty_output_max_retries_for_mode(config_key: str, *env_vars: str) -> int:
+    """Get immediate retry count for empty output, with legacy shared fallback."""
+    stored_value = await get_config_value(config_key, None)
+    parsed_value = _parse_nonnegative_int(stored_value) if stored_value is not None else None
+    if parsed_value is not None:
+        return parsed_value
+
+    legacy_value = await get_config_value("empty_output_max_retries", None)
+    parsed_value = _parse_nonnegative_int(legacy_value) if legacy_value is not None else None
+    if parsed_value is not None:
+        return parsed_value
+
+    for env_var in (*env_vars, "EMPTY_OUTPUT_MAX_RETRIES"):
+        env_value = os.getenv(env_var)
+        parsed_value = _parse_nonnegative_int(env_value) if env_value not in (None, "") else None
+        if parsed_value is not None:
+            return parsed_value
 
     return 4
+
+
+async def get_geminicli_empty_output_max_retries() -> int:
+    """Get immediate retry count for Geminicli empty model output."""
+    return await _get_empty_output_max_retries_for_mode(
+        "geminicli_empty_output_max_retries",
+        "GEMINICLI_EMPTY_OUTPUT_MAX_RETRIES",
+        "GCLI_EMPTY_OUTPUT_MAX_RETRIES",
+    )
+
+
+async def get_antigravity_empty_output_max_retries() -> int:
+    """Get immediate retry count for Antigravity empty model output."""
+    return await _get_empty_output_max_retries_for_mode(
+        "antigravity_empty_output_max_retries",
+        "ANTIGRAVITY_EMPTY_OUTPUT_MAX_RETRIES",
+    )
+
+
+async def get_empty_output_max_retries() -> int:
+    """Get legacy shared immediate retry count for empty model output."""
+    return await _get_empty_output_max_retries_for_mode("empty_output_max_retries")
 
 
 async def get_anti_truncation_max_attempts() -> int:

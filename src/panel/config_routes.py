@@ -48,6 +48,8 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["retry_429_enabled"] = await config.get_retry_429_enabled()
         current_config["retry_429_interval"] = await config.get_retry_429_interval()
         current_config["empty_output_max_retries"] = await config.get_empty_output_max_retries()
+        current_config["geminicli_empty_output_max_retries"] = await config.get_geminicli_empty_output_max_retries()
+        current_config["antigravity_empty_output_max_retries"] = await config.get_antigravity_empty_output_max_retries()
         # 抗截断配置
         current_config["anti_truncation_max_attempts"] = await config.get_anti_truncation_max_attempts()
 
@@ -127,6 +129,11 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                 or new_config["empty_output_max_retries"] < 0
             ):
                 raise HTTPException(status_code=400, detail="空回自动重试次数必须是大于等于0的整数")
+
+        for retry_key in ("geminicli_empty_output_max_retries", "antigravity_empty_output_max_retries"):
+            if retry_key in new_config:
+                if not isinstance(new_config[retry_key], int) or new_config[retry_key] < 0:
+                    raise HTTPException(status_code=400, detail="空回自动重试次数必须是大于等于0的整数")
 
         if "anti_truncation_max_attempts" in new_config:
             if (
