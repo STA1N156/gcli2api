@@ -1,4 +1,4 @@
-full_hash=8a30688d84e1f7022711b4e3f16a17918b63d4db
-short_hash=8a30688
-message=fix: skip retries for empty antigravity output
-date=2026-05-23 03:31:58 +0800
+full_hash=6851752e248e8ef4e074d1152598dc61c1c8934f
+short_hash=6851752
+message=fix: sync quota cooldown state
+date=2026-06-05 02:03:18 +0800
