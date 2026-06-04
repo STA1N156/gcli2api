@@ -30,7 +30,7 @@ from .utils import validate_mode
 # 创建路由器
 router = APIRouter(prefix="/creds", tags=["credentials"])
 
-ANTIGRAVITY_CREDIT_SUMMARY_CONCURRENCY = 20
+ANTIGRAVITY_CREDIT_SUMMARY_CONCURRENCY = 30
 _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS: Dict[str, Any] = {
     "running": False,
     "total": 0,
@@ -112,6 +112,108 @@ async def clear_all_model_cooldowns_for_credential(
         log.warning(f"清空模型CD时出错: {filename} (mode={mode}), error={e}")
 
 
+def _quota_remaining_float(quota_data: Any) -> Optional[float]:
+    if not isinstance(quota_data, dict):
+        return None
+
+    try:
+        return float(quota_data.get("remaining"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _quota_model_base_name(model_name: Any) -> str:
+    normalized = str(model_name or "").strip().replace("-thinking", "")
+    suffixes = (
+        "-maxthinking", "-nothinking",
+        "-minimal", "-medium", "-search", "-think",
+        "-high", "-max", "-low",
+    )
+
+    changed = True
+    while changed:
+        changed = False
+        for suffix in suffixes:
+            if normalized.endswith(suffix):
+                normalized = normalized[:-len(suffix)]
+                changed = True
+
+    return normalized
+
+
+def _active_model_cooldowns_from_state(state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    cooldowns = (state or {}).get("model_cooldowns") or {}
+    if not isinstance(cooldowns, dict):
+        return {}
+
+    now = time.time()
+    active: Dict[str, Any] = {}
+    for model_name, cooldown_until in cooldowns.items():
+        try:
+            if float(cooldown_until) > now:
+                active[model_name] = cooldown_until
+        except (TypeError, ValueError):
+            continue
+
+    return active
+
+
+async def sync_model_cooldowns_from_quota(
+    storage_adapter: Any,
+    filename: str,
+    mode: str,
+    models: Dict[str, Any],
+    credential_state: Optional[Dict[str, Any]] = None,
+) -> None:
+    if mode != "antigravity" or not isinstance(models, dict) or not models:
+        return
+
+    parsed_count = 0
+    available_count = 0
+    available_model_keys = set()
+
+    for model_name, quota_data in models.items():
+        remaining = _quota_remaining_float(quota_data)
+        if remaining is None:
+            continue
+
+        parsed_count += 1
+        if remaining > 0:
+            available_count += 1
+            available_model_keys.add(str(model_name))
+            available_model_keys.add(_quota_model_base_name(model_name))
+
+    if available_count <= 0:
+        return
+
+    if credential_state is None:
+        try:
+            credential_state = await storage_adapter.get_credential_state(filename, mode=mode)
+        except Exception as e:
+            log.warning(f"获取凭证CD状态失败: {filename} (mode={mode}), error={e}")
+            credential_state = None
+
+    active_cooldowns = _active_model_cooldowns_from_state(credential_state)
+    if not active_cooldowns:
+        return
+
+    if parsed_count > 0 and available_count == parsed_count:
+        await clear_all_model_cooldowns_for_credential(storage_adapter, filename, mode)
+        return
+
+    for model_name in active_cooldowns:
+        if model_name in available_model_keys or _quota_model_base_name(model_name) in available_model_keys:
+            try:
+                await storage_adapter._backend.set_model_cooldown(
+                    filename, model_name, None, mode=mode
+                )
+            except Exception as e:
+                log.warning(
+                    f"清空可用模型CD失败: {filename}, model={model_name}, "
+                    f"mode={mode}, error={e}"
+                )
+
+
 def _normalize_credit_amount(value: Any) -> Optional[float]:
     """Return a numeric credit amount when the provider sends one."""
     if value is None:
@@ -131,13 +233,8 @@ def _average_quota_remaining(models: Dict[str, Any]) -> Optional[float]:
     remaining_values: List[float] = []
 
     for quota_data in models.values():
-        if not isinstance(quota_data, dict):
-            continue
-
-        remaining = quota_data.get("remaining")
-        try:
-            remaining_float = float(remaining)
-        except (TypeError, ValueError):
+        remaining_float = _quota_remaining_float(quota_data)
+        if remaining_float is None:
             continue
 
         remaining_values.append(max(0.0, min(1.0, remaining_float)))
@@ -1266,10 +1363,14 @@ async def get_credential_quota(
         quota_info = await fetch_quota_info(access_token)
 
         if quota_info.get("success"):
+            models = quota_info.get("models", {}) or {}
+            await sync_model_cooldowns_from_quota(
+                storage_adapter, filename, mode, models
+            )
             return JSONResponse(content={
                 "success": True,
                 "filename": filename,
-                "models": quota_info.get("models", {})
+                "models": models
             })
         else:
             return JSONResponse(
@@ -1379,6 +1480,13 @@ async def get_antigravity_credit_summary(
 
                     if quota_info.get("success"):
                         models = quota_info.get("models", {}) or {}
+                        await sync_model_cooldowns_from_quota(
+                            storage_adapter,
+                            filename,
+                            "antigravity",
+                            models,
+                            credential_state=all_states.get(filename),
+                        )
                         result["quota_model_count"] = len(models)
                         result["quota_remaining_fraction"] = _average_quota_remaining(models)
 

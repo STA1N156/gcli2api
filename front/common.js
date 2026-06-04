@@ -98,7 +98,8 @@ function createCredsManager(type) {
         },
 
         // 刷新凭证列表
-        async refresh() {
+        async refresh(options = {}) {
+            const silent = options === true || (options && options.silent === true);
             const loading = document.getElementById(this.getElementId('CredsLoading'));
             const list = document.getElementById(this.getElementId('CredsList'));
 
@@ -153,12 +154,12 @@ function createCredsManager(type) {
                     if (this.currentStatusFilter !== 'all') {
                         msg += ` (筛选: ${this.currentStatusFilter === 'enabled' ? '仅启用' : '仅禁用'})`;
                     }
-                    showStatus(msg, 'success');
+                    if (!silent) showStatus(msg, 'success');
                 } else {
-                    showStatus(`加载失败: ${data.detail || data.error || '未知错误'}`, 'error');
+                    if (!silent) showStatus(`加载失败: ${data.detail || data.error || '未知错误'}`, 'error');
                 }
             } catch (error) {
-                showStatus(`网络错误: ${error.message}`, 'error');
+                if (!silent) showStatus(`网络错误: ${error.message}`, 'error');
             } finally {
                 loading.style.display = 'none';
             }
@@ -1683,6 +1684,7 @@ async function refreshAntigravityCreditSummary(silent = false) {
 
         if (response.ok && data.success) {
             updateAntigravityCreditSummaryUI(data);
+            await AppState.antigravityCreds.refresh({ silent: true });
             if (!silent) showStatus('Antigravity 总额度已刷新', 'success');
         } else {
             const errorMsg = data.error || data.detail || '获取总额度失败';
@@ -2153,6 +2155,7 @@ async function toggleAntigravityQuotaDetails(pathId) {
                     }
 
                     showStatus('✅ 成功加载额度信息', 'success');
+                    await AppState.antigravityCreds.refresh({ silent: true });
                 } else {
                     // 失败时显示错误
                     const errorMsg = data.error || '获取额度信息失败';
