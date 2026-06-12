@@ -2064,6 +2064,29 @@ async function configurePreviewChannel(filename) {
     }
 }
 
+function updateAntigravityCooldownDisplayFromQuota(pathId, filename, models) {
+    if (!models || typeof models !== 'object') return;
+
+    let parsedCount = 0;
+    let availableCount = 0;
+    for (const quotaData of Object.values(models)) {
+        const remaining = Number(quotaData?.remaining);
+        if (!Number.isFinite(remaining)) continue;
+
+        parsedCount += 1;
+        if (remaining > 0) availableCount += 1;
+    }
+
+    if (parsedCount === 0 || availableCount !== parsedCount) return;
+
+    const credInfo = AppState.antigravityCreds.data[filename];
+    if (credInfo) credInfo.model_cooldowns = {};
+
+    const quotaDetails = document.getElementById('quota-' + pathId);
+    const card = quotaDetails?.closest('.cred-card');
+    card?.querySelectorAll('.cooldown-badge').forEach(badge => badge.remove());
+}
+
 async function toggleAntigravityQuotaDetails(pathId) {
     const quotaDetails = document.getElementById('quota-' + pathId);
     if (!quotaDetails) return;
@@ -2154,8 +2177,8 @@ async function toggleAntigravityQuotaDetails(pathId) {
                         contentDiv.innerHTML = quotaHTML;
                     }
 
+                    updateAntigravityCooldownDisplayFromQuota(pathId, filename, models);
                     showStatus('✅ 成功加载额度信息', 'success');
-                    await AppState.antigravityCreds.refresh({ silent: true });
                 } else {
                     // 失败时显示错误
                     const errorMsg = data.error || '获取额度信息失败';
