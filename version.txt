@@ -1,4 +1,4 @@
-full_hash=6851752e248e8ef4e074d1152598dc61c1c8934f
-short_hash=6851752
-message=fix: sync quota cooldown state
-date=2026-06-05 02:03:18 +0800
+full_hash=b817f8535ddbbed270185e87e050eedaea5fe3ac
+short_hash=b817f85
+message=fix: keep quota details open
+date=2026-06-12 20:50:00 +0800
