@@ -1516,6 +1516,7 @@ function formatAntigravityCreditPercent(value) {
     }
 
     return `${Number(value).toLocaleString('zh-CN', {
+        minimumFractionDigits: 2,
         maximumFractionDigits: 2
     })}%`;
 }
@@ -2278,8 +2279,9 @@ async function toggleAntigravityQuotaDetails(pathId) {
                             const resetTime = quotaData.resetTime || 'N/A';
 
                             // 计算已使用百分比（1 - 剩余比例）
-                            const usedPercentage = Math.round((1 - remainingFraction) * 100);
-                            const remainingPercentage = Math.round(remainingFraction * 100);
+                            const remainingPercentValue = Math.max(0, Math.min(100, remainingFraction * 100));
+                            const usedPercentage = Math.max(0, Math.min(100, (1 - remainingFraction) * 100));
+                            const remainingPercentage = remainingPercentValue.toFixed(2);
 
                             // 根据使用情况选择颜色
                             let percentageColor = '#28a745'; // 绿色：使用少
