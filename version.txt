@@ -1,4 +1,4 @@
-full_hash=13d7dacd7e679aa7f04e05527c73c5e2bd2730b8
-short_hash=13d7dac
-message=fix: show quota percent decimals
-date=2026-06-17 03:38:05 +0800
+full_hash=878d949368fbbd1156887d183cd93d7a196cd123
+short_hash=878d949
+message=fix: cooldown near-empty quotas
+date=2026-06-17 03:43:28 +0800
