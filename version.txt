@@ -1,4 +1,4 @@
-full_hash=b817f8535ddbbed270185e87e050eedaea5fe3ac
-short_hash=b817f85
-message=fix: keep quota details open
-date=2026-06-12 20:50:00 +0800
+full_hash=056100e0dbea2cdd4914f8b24c03d6bcec580a7a
+short_hash=056100e
+message=fix: auto-disable failed credential checks
+date=2026-06-17 02:41:58 +0800
