@@ -633,6 +633,53 @@ function formatCooldownTime(remainingSeconds) {
     return `${seconds}s`;
 }
 
+function getCooldownModelGroup(modelName) {
+    const model = String(modelName || '').toLowerCase();
+    if (model.includes('gemini')) return 'Gemini 模型';
+    if (model.includes('claude')) return 'Claude 模型';
+    return null;
+}
+
+function getGroupedCooldowns(modelCooldowns) {
+    const currentTime = Date.now() / 1000;
+    const groups = {};
+
+    for (const [modelName, until] of Object.entries(modelCooldowns || {})) {
+        if (until <= currentTime) continue;
+
+        const groupName = getCooldownModelGroup(modelName);
+        if (!groupName) continue;
+
+        const remaining = Math.max(0, Math.floor(until - currentTime));
+        const existing = groups[groupName];
+        if (!existing || remaining > existing.remaining) {
+            groups[groupName] = {
+                group: groupName,
+                remaining,
+                count: existing ? existing.count + 1 : 1
+            };
+        } else {
+            existing.count += 1;
+        }
+    }
+
+    return ['Gemini 模型', 'Claude 模型']
+        .map(groupName => groups[groupName])
+        .filter(Boolean)
+        .map(item => ({
+            ...item,
+            time: formatCooldownTime(item.remaining).replace(/s$/, '').replace(/ /g, '')
+        }));
+}
+
+function renderCooldownBadges(modelCooldowns) {
+    return getGroupedCooldowns(modelCooldowns)
+        .map(item => (
+            `<span class="cooldown-badge" data-cooldown-group="${item.group}" style="background-color: #17a2b8;" title="${item.group}冷却中，覆盖 ${item.count} 个模型">⏰ ${item.group}: ${item.time}</span>`
+        ))
+        .join('');
+}
+
 // =====================================================================
 // 凭证卡片创建（通用）
 // =====================================================================
@@ -686,30 +733,7 @@ function createCredCard(credInfo, manager) {
 
     // 模型级冷却状态
     if (credInfo.model_cooldowns && Object.keys(credInfo.model_cooldowns).length > 0) {
-        const currentTime = Date.now() / 1000;
-        const activeCooldowns = Object.entries(credInfo.model_cooldowns)
-            .filter(([, until]) => until > currentTime)
-            .map(([model, until]) => {
-                const remaining = Math.max(0, Math.floor(until - currentTime));
-                const shortModel = model.replace('gemini-', '').replace('-exp', '')
-                    .replace('2.0-', '2-').replace('1.5-', '1.5-');
-                return {
-                    model: shortModel,
-                    time: formatCooldownTime(remaining).replace(/s$/, '').replace(/ /g, ''),
-                    fullModel: model
-                };
-            });
-
-        if (activeCooldowns.length > 0) {
-            activeCooldowns.slice(0, 2).forEach(item => {
-                statusBadges += `<span class="cooldown-badge" style="background-color: #17a2b8;" title="模型: ${item.fullModel}">⏰ ${item.model}: ${item.time}</span>`;
-            });
-            if (activeCooldowns.length > 2) {
-                const remaining = activeCooldowns.length - 2;
-                const remainingModels = activeCooldowns.slice(2).map(i => `${i.fullModel}: ${i.time}`).join('\n');
-                statusBadges += `<span class="cooldown-badge" style="background-color: #17a2b8;" title="其他模型:\n${remainingModels}">+${remaining}</span>`;
-            }
-        }
+        statusBadges += renderCooldownBadges(credInfo.model_cooldowns);
     }
 
     // 路径ID
@@ -1515,10 +1539,7 @@ function getAntigravityQuotaColor(percent) {
 }
 
 function getAntigravityQuotaModelGroup(modelName) {
-    const model = String(modelName || '').toLowerCase();
-    if (model.includes('gemini')) return 'Gemini 模型';
-    if (model.includes('claude')) return 'Claude 模型';
-    return null;
+    return getCooldownModelGroup(modelName);
 }
 
 function groupAntigravityQuotaModels(models) {
@@ -1554,6 +1575,39 @@ function groupAntigravityQuotaModels(models) {
             };
         })
         .filter(Boolean);
+}
+
+function getFullyAvailableQuotaGroups(models) {
+    const groups = {
+        'Gemini 模型': { total: 0, available: 0 },
+        'Claude 模型': { total: 0, available: 0 }
+    };
+
+    for (const [modelName, quotaData] of Object.entries(models || {})) {
+        const groupName = getAntigravityQuotaModelGroup(modelName);
+        if (!groupName) continue;
+
+        const remaining = Number(quotaData?.remaining);
+        if (!Number.isFinite(remaining)) continue;
+
+        groups[groupName].total += 1;
+        if (remaining > 0) groups[groupName].available += 1;
+    }
+
+    return new Set(
+        Object.entries(groups)
+            .filter(([, group]) => group.total > 0 && group.available === group.total)
+            .map(([groupName]) => groupName)
+    );
+}
+
+function getQuotaResetTimestamp(quotaData) {
+    const resetTimeRaw = quotaData?.resetTimeRaw;
+    const resetTimestamp = resetTimeRaw ? Date.parse(resetTimeRaw) / 1000 : NaN;
+    if (Number.isFinite(resetTimestamp) && resetTimestamp > Date.now() / 1000) {
+        return resetTimestamp;
+    }
+    return Date.now() / 1000 + 4 * 3600;
 }
 
 function renderAntigravityCreditModelList(modelSummaries) {
@@ -2113,24 +2167,39 @@ async function configurePreviewChannel(filename) {
 function updateAntigravityCooldownDisplayFromQuota(pathId, filename, models) {
     if (!models || typeof models !== 'object') return;
 
-    let parsedCount = 0;
-    let availableCount = 0;
-    for (const quotaData of Object.values(models)) {
-        const remaining = Number(quotaData?.remaining);
-        if (!Number.isFinite(remaining)) continue;
+    const availableGroups = getFullyAvailableQuotaGroups(models);
+    const exhaustedModels = Object.entries(models)
+        .map(([modelName, quotaData]) => ({
+            modelName,
+            groupName: getCooldownModelGroup(modelName),
+            remaining: Number(quotaData?.remaining),
+            cooldownUntil: getQuotaResetTimestamp(quotaData)
+        }))
+        .filter(item => item.groupName && Number.isFinite(item.remaining) && item.remaining <= 0);
 
-        parsedCount += 1;
-        if (remaining > 0) availableCount += 1;
-    }
-
-    if (parsedCount === 0 || availableCount !== parsedCount) return;
+    if (availableGroups.size === 0 && exhaustedModels.length === 0) return;
 
     const credInfo = AppState.antigravityCreds.data[filename];
-    if (credInfo) credInfo.model_cooldowns = {};
+    if (credInfo) {
+        if (!credInfo.model_cooldowns) credInfo.model_cooldowns = {};
+        for (const modelName of Object.keys(credInfo.model_cooldowns)) {
+            const groupName = getCooldownModelGroup(modelName);
+            if (availableGroups.has(groupName)) {
+                delete credInfo.model_cooldowns[modelName];
+            }
+        }
+        exhaustedModels.forEach(item => {
+            credInfo.model_cooldowns[item.modelName] = item.cooldownUntil;
+        });
+    }
 
     const quotaDetails = document.getElementById('quota-' + pathId);
     const card = quotaDetails?.closest('.cred-card');
-    card?.querySelectorAll('.cooldown-badge').forEach(badge => badge.remove());
+    const statusEl = card?.querySelector('.cred-status');
+    if (statusEl && credInfo?.model_cooldowns) {
+        statusEl.querySelectorAll('.cooldown-badge').forEach(badge => badge.remove());
+        statusEl.insertAdjacentHTML('beforeend', renderCooldownBadges(credInfo.model_cooldowns));
+    }
 }
 
 async function toggleAntigravityQuotaDetails(pathId) {
@@ -2182,7 +2251,7 @@ async function toggleAntigravityQuotaDetails(pathId) {
                                 </h4>
                                 <div style="font-size: 12px; opacity: 0.9; margin-top: 5px;">文件: ${filename}</div>
                             </div>
-                            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 10px;">
                         `;
 
                         for (const quotaData of groupedModels) {
@@ -3372,23 +3441,25 @@ function stopCooldownTimer() {
 }
 
 function updateCooldownDisplays() {
-    let needsRefresh = false;
+    const managersToRefresh = new Set();
 
     // 检查模型级冷却是否过期
-    for (const credInfo of Object.values(AppState.creds.data)) {
-        if (credInfo.model_cooldowns && Object.keys(credInfo.model_cooldowns).length > 0) {
-            const currentTime = Date.now() / 1000;
-            const hasExpiredCooldowns = Object.entries(credInfo.model_cooldowns).some(([, until]) => until <= currentTime);
+    for (const manager of [AppState.creds, AppState.antigravityCreds]) {
+        for (const credInfo of Object.values(manager.data)) {
+            if (credInfo.model_cooldowns && Object.keys(credInfo.model_cooldowns).length > 0) {
+                const currentTime = Date.now() / 1000;
+                const hasExpiredCooldowns = Object.entries(credInfo.model_cooldowns).some(([, until]) => until <= currentTime);
 
-            if (hasExpiredCooldowns) {
-                needsRefresh = true;
-                break;
+                if (hasExpiredCooldowns) {
+                    managersToRefresh.add(manager);
+                    break;
+                }
             }
         }
     }
 
-    if (needsRefresh) {
-        AppState.creds.renderList();
+    if (managersToRefresh.size > 0) {
+        managersToRefresh.forEach(manager => manager.renderList());
         return;
     }
 
@@ -3399,25 +3470,21 @@ function updateCooldownDisplays() {
         if (!filenameEl) return;
 
         const filename = filenameEl.textContent;
-        const credInfo = Object.values(AppState.creds.data).find(c => c.filename === filename);
+        const manager = card?.querySelector('.antigravityFile-checkbox')
+            ? AppState.antigravityCreds
+            : AppState.creds;
+        const credInfo = manager.data[filename];
+        const groupName = badge.dataset.cooldownGroup;
+        const cooldownGroup = getGroupedCooldowns(credInfo?.model_cooldowns)
+            .find(item => item.group === groupName);
 
-        if (credInfo && credInfo.model_cooldowns) {
-            const currentTime = Date.now() / 1000;
-            const titleMatch = badge.getAttribute('title')?.match(/模型: (.+)/);
-            if (titleMatch) {
-                const model = titleMatch[1];
-                const cooldownUntil = credInfo.model_cooldowns[model];
-                if (cooldownUntil) {
-                    const remaining = Math.max(0, Math.floor(cooldownUntil - currentTime));
-                    if (remaining > 0) {
-                        const shortModel = model.replace('gemini-', '').replace('-exp', '')
-                            .replace('2.0-', '2-').replace('1.5-', '1.5-');
-                        const timeDisplay = formatCooldownTime(remaining).replace(/s$/, '').replace(/ /g, '');
-                        badge.innerHTML = `⏰ ${shortModel}: ${timeDisplay}`;
-                    }
-                }
-            }
+        if (!cooldownGroup) {
+            badge.remove();
+            return;
         }
+
+        badge.innerHTML = `⏰ ${cooldownGroup.group}: ${cooldownGroup.time}`;
+        badge.title = `${cooldownGroup.group}冷却中，覆盖 ${cooldownGroup.count} 个模型`;
     });
 }
 

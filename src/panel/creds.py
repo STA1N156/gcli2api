@@ -8,6 +8,7 @@ import json
 import os
 import time
 import zipfile
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response
@@ -158,6 +159,27 @@ def _active_model_cooldowns_from_state(state: Optional[Dict[str, Any]]) -> Dict[
     return active
 
 
+def _quota_reset_timestamp(quota_data: Any) -> Optional[float]:
+    if not isinstance(quota_data, dict):
+        return None
+
+    reset_time_raw = quota_data.get("resetTimeRaw")
+    if not reset_time_raw:
+        return None
+
+    try:
+        reset_dt = datetime.fromisoformat(str(reset_time_raw).replace("Z", "+00:00"))
+        if reset_dt.tzinfo is None:
+            reset_dt = reset_dt.replace(tzinfo=timezone.utc)
+        reset_timestamp = reset_dt.astimezone(timezone.utc).timestamp()
+        if reset_timestamp > time.time():
+            return reset_timestamp
+    except (TypeError, ValueError):
+        return None
+
+    return None
+
+
 async def sync_model_cooldowns_from_quota(
     storage_adapter: Any,
     filename: str,
@@ -171,6 +193,8 @@ async def sync_model_cooldowns_from_quota(
     parsed_count = 0
     available_count = 0
     available_model_keys = set()
+    group_counts: Dict[str, Dict[str, int]] = {}
+    exhausted_model_cooldowns = []
 
     for model_name, quota_data in models.items():
         remaining = _quota_remaining_float(quota_data)
@@ -178,10 +202,31 @@ async def sync_model_cooldowns_from_quota(
             continue
 
         parsed_count += 1
+        group_name = _antigravity_quota_model_group(model_name)
+        if group_name:
+            group_counts.setdefault(group_name, {"total": 0, "available": 0})
+            group_counts[group_name]["total"] += 1
+
         if remaining > 0:
             available_count += 1
             available_model_keys.add(str(model_name))
             available_model_keys.add(_quota_model_base_name(model_name))
+            if group_name:
+                group_counts[group_name]["available"] += 1
+        else:
+            cooldown_until = _quota_reset_timestamp(quota_data) or (time.time() + 4 * 3600)
+            exhausted_model_cooldowns.append((str(model_name), cooldown_until))
+
+    for model_name, cooldown_until in exhausted_model_cooldowns:
+        try:
+            await storage_adapter._backend.set_model_cooldown(
+                filename, model_name, cooldown_until, mode=mode
+            )
+        except Exception as e:
+            log.warning(
+                f"设置耗尽模型CD失败: {filename}, model={model_name}, "
+                f"mode={mode}, error={e}"
+            )
 
     if available_count <= 0:
         return
@@ -197,12 +242,23 @@ async def sync_model_cooldowns_from_quota(
     if not active_cooldowns:
         return
 
+    available_groups = {
+        group_name
+        for group_name, counts in group_counts.items()
+        if counts["total"] > 0 and counts["available"] == counts["total"]
+    }
+
     if parsed_count > 0 and available_count == parsed_count:
         await clear_all_model_cooldowns_for_credential(storage_adapter, filename, mode)
         return
 
     for model_name in active_cooldowns:
-        if model_name in available_model_keys or _quota_model_base_name(model_name) in available_model_keys:
+        model_group = _antigravity_quota_model_group(model_name)
+        if (
+            model_name in available_model_keys
+            or _quota_model_base_name(model_name) in available_model_keys
+            or model_group in available_groups
+        ):
             try:
                 await storage_adapter._backend.set_model_cooldown(
                     filename, model_name, None, mode=mode
