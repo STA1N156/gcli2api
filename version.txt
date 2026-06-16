@@ -1,4 +1,4 @@
-full_hash=dc4bc50e75d624e701e0f58acfe44d1d5095b8ee
-short_hash=dc4bc50
-message=fix: sync model cooldown routing
-date=2026-06-17 03:26:30 +0800
+full_hash=f3e2cd7aea2e12facf2c06bf6c1a3882d6efe494
+short_hash=f3e2cd7
+message=fix: refresh quota cooldown filters
+date=2026-06-17 03:32:42 +0800
