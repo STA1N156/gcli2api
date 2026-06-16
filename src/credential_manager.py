@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from log import log
 
 from src.google_oauth_api import Credentials
+from src.model_cooldown import has_active_model_cooldown
 from src.storage_adapter import get_storage_adapter
 
 
@@ -106,14 +107,8 @@ class CredentialManager:
             return None
 
         model_lower = (model_name or "").lower()
-        if model_name:
-            cooldown_until = (state.get("model_cooldowns") or {}).get(model_name)
-            if cooldown_until is not None:
-                try:
-                    if time.time() < float(cooldown_until):
-                        return None
-                except (TypeError, ValueError):
-                    return None
+        if has_active_model_cooldown(state.get("model_cooldowns"), model_name):
+            return None
 
         if mode == "geminicli":
             if "pro" in model_lower and state.get("tier") == "free":
@@ -141,14 +136,8 @@ class CredentialManager:
             return False
 
         model_lower = (model_name or "").lower()
-        if model_name:
-            cooldown_until = (state.get("model_cooldowns") or {}).get(model_name)
-            if cooldown_until is not None:
-                try:
-                    if time.time() < float(cooldown_until):
-                        return False
-                except (TypeError, ValueError):
-                    return False
+        if has_active_model_cooldown(state.get("model_cooldowns"), model_name):
+            return False
 
         if mode == "geminicli":
             if "pro" in model_lower and state.get("tier") == "free":

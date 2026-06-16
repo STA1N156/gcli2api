@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import asyncpg
 
 from log import log
+from src.model_cooldown import has_active_model_cooldown
 
 
 class PSQLManager:
@@ -276,8 +277,7 @@ class PSQLManager:
 
                     for row in rows:
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                        cd = model_cooldowns.get(model_name)
-                        if cd is None or current_time >= cd:
+                        if not has_active_model_cooldown(model_cooldowns, model_name, current_time):
                             if row["preview"]:
                                 preview_creds.append((row["filename"], row["credential_data"]))
                             else:
@@ -310,8 +310,7 @@ class PSQLManager:
 
                     for row in rows:
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                        cd = model_cooldowns.get(model_name)
-                        if cd is None or current_time >= cd:
+                        if not has_active_model_cooldown(model_cooldowns, model_name, current_time):
                             credential_data = json.loads(row["credential_data"])
                             credential_data["enable_credit"] = bool(row["enable_credit"])
                             return row["filename"], credential_data

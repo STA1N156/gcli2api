@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import aiosqlite
 
 from log import log
+from src.model_cooldown import has_active_model_cooldown
 
 
 class SQLiteManager:
@@ -418,8 +419,7 @@ class SQLiteManager:
 
                         for filename, credential_json, model_cooldowns_json, preview in rows:
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
-                            model_cooldown = model_cooldowns.get(model_name)
-                            if model_cooldown is None or current_time >= model_cooldown:
+                            if not has_active_model_cooldown(model_cooldowns, model_name, current_time):
                                 if preview:
                                     preview_creds.append((filename, credential_json))
                                 else:
@@ -460,8 +460,7 @@ class SQLiteManager:
 
                         for filename, credential_json, model_cooldowns_json, enable_credit in rows:
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
-                            model_cooldown = model_cooldowns.get(model_name)
-                            if model_cooldown is None or current_time >= model_cooldown:
+                            if not has_active_model_cooldown(model_cooldowns, model_name, current_time):
                                 credential_data = json.loads(credential_json)
                                 credential_data["enable_credit"] = bool(enable_credit)
                                 return filename, credential_data

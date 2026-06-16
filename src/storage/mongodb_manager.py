@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from log import log
+from src.model_cooldown import has_active_model_cooldown, model_cooldown_group
 
 
 class MongoDBManager:
@@ -441,16 +442,25 @@ class MongoDBManager:
             # 过滤冷却中的凭证
             if model_name:
                 escaped = self._escape_model_name(model_name)
+                group_aware_cooldown = bool(model_cooldown_group(model_name))
                 for filename in candidates:
-                    cd_key = self._rk_cd(mode, filename, escaped)
-                    if not await self._redis.exists(cd_key):
-                        credential_data = await self.get_credential(filename, mode)
-                        if mode == "antigravity":
-                            state = await self.get_credential_state(filename, mode)
-                            credential_data = credential_data or {}
-                            credential_data["enable_credit"] = bool(state.get("enable_credit", False))
-                        log.debug(f"[Redis HIT] mode={mode} model={model_name} -> {filename}")
-                        return filename, credential_data
+                    state = None
+                    if group_aware_cooldown:
+                        state = await self.get_credential_state(filename, mode)
+                        if has_active_model_cooldown(state.get("model_cooldowns"), model_name):
+                            continue
+                    else:
+                        cd_key = self._rk_cd(mode, filename, escaped)
+                        if await self._redis.exists(cd_key):
+                            continue
+
+                    credential_data = await self.get_credential(filename, mode)
+                    if mode == "antigravity":
+                        state = state or await self.get_credential_state(filename, mode)
+                        credential_data = credential_data or {}
+                        credential_data["enable_credit"] = bool(state.get("enable_credit", False))
+                    log.debug(f"[Redis HIT] mode={mode} model={model_name} -> {filename}")
+                    return filename, credential_data
                 # 所有候选都在冷却中，降级到 MongoDB
                 log.debug(f"[Redis MISS] mode={mode} model={model_name}: all {len(candidates)} candidates in cooldown, fallback to MongoDB")
                 return None
@@ -545,13 +555,37 @@ class MongoDBManager:
                 match_query["preview"] = True
 
             # 冷却检查：直接用 MongoDB 查询表达，无需 $addFields
-            if model_name:
+            group_aware_cooldown = bool(model_name and model_cooldown_group(model_name))
+            if model_name and not group_aware_cooldown:
                 escaped_model_name = self._escape_model_name(model_name)
                 field = f"model_cooldowns.{escaped_model_name}"
                 match_query["$or"] = [
                     {field: {"$exists": False}},
                     {field: {"$lte": current_time}},
                 ]
+
+            # Gemini/Claude 同类模型共用额度，先取候选再按组过滤
+            if group_aware_cooldown:
+                projection = {
+                    "filename": 1,
+                    "credential_data": 1,
+                    "enable_credit": 1,
+                    "model_cooldowns": 1,
+                    "_id": 0,
+                }
+                docs = await collection.find(match_query, projection).to_list(length=None)
+                random.shuffle(docs)
+
+                for doc in docs:
+                    if has_active_model_cooldown(doc.get("model_cooldowns"), model_name, current_time):
+                        continue
+
+                    credential_data = doc.get("credential_data") or {}
+                    if mode == "antigravity":
+                        credential_data["enable_credit"] = bool(doc.get("enable_credit", False))
+                    return doc["filename"], credential_data
+
+                return None
 
             # 统计符合条件的凭证总数（走索引，极快）
             count = await collection.count_documents(match_query)

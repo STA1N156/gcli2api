@@ -2200,6 +2200,15 @@ function updateAntigravityCooldownDisplayFromQuota(pathId, filename, models) {
         statusEl.querySelectorAll('.cooldown-badge').forEach(badge => badge.remove());
         statusEl.insertAdjacentHTML('beforeend', renderCooldownBadges(credInfo.model_cooldowns));
     }
+
+    const cooldownCount = getGroupedCooldowns(credInfo?.model_cooldowns).length;
+    const cooldownFilter = AppState.antigravityCreds.currentCooldownFilter;
+    if (
+        (cooldownFilter === 'no_cooldown' && cooldownCount > 0) ||
+        (cooldownFilter === 'in_cooldown' && cooldownCount === 0)
+    ) {
+        AppState.antigravityCreds.refresh({ silent: true });
+    }
 }
 
 async function toggleAntigravityQuotaDetails(pathId) {
