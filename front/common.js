@@ -45,6 +45,8 @@ const AppState = {
     antigravityCreditSummaryLoading: false
 };
 
+const ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD = 0.0002; // 0.02%
+
 // =====================================================================
 // 凭证管理器工厂
 // =====================================================================
@@ -1592,7 +1594,7 @@ function getFullyAvailableQuotaGroups(models) {
         if (!Number.isFinite(remaining)) continue;
 
         groups[groupName].total += 1;
-        if (remaining > 0) groups[groupName].available += 1;
+        if (remaining > ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD) groups[groupName].available += 1;
     }
 
     return new Set(
@@ -2180,7 +2182,11 @@ function updateAntigravityCooldownDisplayFromQuota(pathId, filename, models) {
             remaining: Number(quotaData?.remaining),
             cooldownUntil: getQuotaResetTimestamp(quotaData)
         }))
-        .filter(item => item.groupName && Number.isFinite(item.remaining) && item.remaining <= 0);
+        .filter(item => (
+            item.groupName &&
+            Number.isFinite(item.remaining) &&
+            item.remaining <= ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD
+        ));
 
     if (availableGroups.size === 0 && exhaustedModels.length === 0) return;
 

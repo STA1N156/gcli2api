@@ -32,6 +32,7 @@ from .utils import validate_mode
 router = APIRouter(prefix="/creds", tags=["credentials"])
 
 ANTIGRAVITY_CREDIT_SUMMARY_CONCURRENCY = 30
+ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD = 0.0002  # 0.02%
 _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS: Dict[str, Any] = {
     "running": False,
     "total": 0,
@@ -207,7 +208,7 @@ async def sync_model_cooldowns_from_quota(
             group_counts.setdefault(group_name, {"total": 0, "available": 0})
             group_counts[group_name]["total"] += 1
 
-        if remaining > 0:
+        if remaining > ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD:
             available_count += 1
             available_model_keys.add(str(model_name))
             available_model_keys.add(_quota_model_base_name(model_name))
@@ -1679,7 +1680,10 @@ async def get_antigravity_credit_summary(
                 continue
 
             average_remaining = sum(remaining_values) / len(remaining_values)
-            exhausted_accounts = sum(1 for value in remaining_values if value <= 0)
+            exhausted_accounts = sum(
+                1 for value in remaining_values
+                if value <= ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD
+            )
 
             model_summaries.append({
                 "model": model_name,
