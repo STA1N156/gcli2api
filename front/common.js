@@ -1780,6 +1780,10 @@ async function refreshAntigravityCreditSummary(silent = false) {
 
         if (response.ok && data.success) {
             updateAntigravityCreditSummaryUI(data);
+            const cooldownFilterEl = document.getElementById('antigravityCooldownFilter');
+            if (cooldownFilterEl) {
+                AppState.antigravityCreds.currentCooldownFilter = cooldownFilterEl.value;
+            }
             await AppState.antigravityCreds.refresh({ silent: true });
             if (!silent) showStatus('Antigravity 总额度已刷新', 'success');
         } else {
@@ -2201,10 +2205,14 @@ function updateAntigravityCooldownDisplayFromQuota(pathId, filename, models) {
         statusEl.insertAdjacentHTML('beforeend', renderCooldownBadges(credInfo.model_cooldowns));
     }
 
+    const cooldownFilterEl = document.getElementById('antigravityCooldownFilter');
+    const cooldownFilter = cooldownFilterEl?.value || AppState.antigravityCreds.currentCooldownFilter;
+    AppState.antigravityCreds.currentCooldownFilter = cooldownFilter || 'all';
+
     const cooldownCount = getGroupedCooldowns(credInfo?.model_cooldowns).length;
-    const cooldownFilter = AppState.antigravityCreds.currentCooldownFilter;
+    const quotaHasCooldown = exhaustedModels.length > 0;
     if (
-        (cooldownFilter === 'no_cooldown' && cooldownCount > 0) ||
+        (cooldownFilter === 'no_cooldown' && (cooldownCount > 0 || quotaHasCooldown)) ||
         (cooldownFilter === 'in_cooldown' && cooldownCount === 0)
     ) {
         AppState.antigravityCreds.refresh({ silent: true });
