@@ -1,4 +1,4 @@
-full_hash=122ad761f30283813137297ac957403f47be8cd2
-short_hash=122ad76
-message=feat: group antigravity quota models
-date=2026-06-17 03:03:59 +0800
+full_hash=b1a391f3f28192e22785fbf0d98194ead9d3e9dd
+short_hash=b1a391f
+message=fix: sync antigravity quota cooldown groups
+date=2026-06-17 03:13:06 +0800
