@@ -1,4 +1,4 @@
-full_hash=b1a391f3f28192e22785fbf0d98194ead9d3e9dd
-short_hash=b1a391f
-message=fix: sync antigravity quota cooldown groups
-date=2026-06-17 03:13:06 +0800
+full_hash=dc4bc50e75d624e701e0f58acfe44d1d5095b8ee
+short_hash=dc4bc50
+message=fix: sync model cooldown routing
+date=2026-06-17 03:26:30 +0800
