@@ -1879,6 +1879,7 @@ async function verifyProjectId(filename) {
             const errorMsg = data.message || '检验失败';
             showStatus(`❌ ${errorMsg}`, 'error');
             showMessageModal('检验失败', `❌ 检验失败\n\n${errorMsg}`, 'error');
+            await AppState.creds.refresh();
         }
     } catch (error) {
         const errorMsg = `检验失败: ${error.message}`;
@@ -1916,6 +1917,7 @@ async function verifyAntigravityProjectId(filename) {
             const errorMsg = data.message || '检验失败';
             showStatus(`❌ ${errorMsg}`, 'error');
             showMessageModal('检验失败', `❌ 检验失败\n\n${errorMsg}`, 'error');
+            await AppState.antigravityCreds.refresh();
         }
     } catch (error) {
         const errorMsg = `检验失败: ${error.message}`;
@@ -1937,7 +1939,7 @@ async function testCredential(filename) {
         // 解析JSON响应
         const data = await response.json();
 
-        if (response.status === 200) {
+        if (data.success) {
             // 凭证可用
             const successMsg = `✅ 测试成功！\n文件: ${filename}\n状态: ${data.message || '凭证可用'} (${data.status_code || 200})`;
             showStatus('✅ 测试成功！', 'success');
@@ -1964,6 +1966,7 @@ async function testCredential(filename) {
 
             showStatus(`❌ 测试失败 - ${data.message || '错误码: ' + (data.status_code || response.status)}`, 'error');
             showMessageModal('测试失败', errorDetails, 'error');
+            await AppState.creds.refresh();
         }
     } catch (error) {
         const errorMsg = `测试失败: ${error.message}`;
@@ -1985,7 +1988,7 @@ async function testAntigravityCredential(filename) {
         // 解析JSON响应
         const data = await response.json();
 
-        if (response.status === 200) {
+        if (data.success) {
             // 凭证可用
             const successMsg = `✅ 测试成功！\n文件: ${filename}\n状态: ${data.message || 'Antigravity凭证可用'} (${data.status_code || 200})`;
             showStatus('✅ 测试成功！', 'success');
@@ -2012,6 +2015,7 @@ async function testAntigravityCredential(filename) {
 
             showStatus(`❌ 测试失败 - ${data.message || '错误码: ' + (data.status_code || response.status)}`, 'error');
             showMessageModal('测试失败', errorDetails, 'error');
+            await AppState.antigravityCreds.refresh();
         }
     } catch (error) {
         const errorMsg = `测试失败: ${error.message}`;

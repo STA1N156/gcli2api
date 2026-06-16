@@ -214,6 +214,25 @@ async def sync_model_cooldowns_from_quota(
                 )
 
 
+async def mark_credential_unavailable(
+    storage_adapter: Any,
+    filename: str,
+    mode: str,
+    status_code: int,
+    message: str,
+) -> None:
+    error_message = message or f"HTTP {status_code}"
+    await storage_adapter.update_credential_state(filename, {
+        "disabled": True,
+        "error_codes": [status_code],
+        "error_messages": {str(status_code): error_message},
+    }, mode=mode)
+    log.warning(
+        f"凭证已因检验失败自动禁用: {filename} "
+        f"(mode={mode}, status={status_code}, error={error_message})"
+    )
+
+
 def _normalize_credit_amount(value: Any) -> Optional[float]:
     """Return a numeric credit amount when the provider sends one."""
     if value is None:
@@ -789,12 +808,16 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
 
         return JSONResponse(content=response_data)
     else:
+        message = "检验失败：无法获取Project ID，请检查凭证是否有效"
+        await mark_credential_unavailable(
+            storage_adapter, filename, mode, 400, message
+        )
         return JSONResponse(
             status_code=400,
             content={
                 "success": False,
                 "filename": filename,
-                "message": "检验失败：无法获取Project ID，请检查凭证是否有效"
+                "message": message
             }
         )
 
@@ -1975,11 +1998,12 @@ async def test_credential(
 
                 # 更新状态
                 await storage_adapter.update_credential_state(filename, {
+                    "disabled": True,
                     "error_codes": error_codes,
                     "error_messages": error_messages
                 }, mode=mode)
 
-                log.info(f"已保存测试错误信息: {filename} - 错误码 {status_code}")
+                log.info(f"已保存测试错误信息并自动禁用: {filename} - 错误码 {status_code}")
             except Exception as e:
                 log.error(f"保存测试错误信息失败: {e}")
 
