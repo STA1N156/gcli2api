@@ -1,4 +1,4 @@
-full_hash=056100e0dbea2cdd4914f8b24c03d6bcec580a7a
-short_hash=056100e
-message=fix: auto-disable failed credential checks
-date=2026-06-17 02:41:58 +0800
+full_hash=122ad761f30283813137297ac957403f47be8cd2
+short_hash=122ad76
+message=feat: group antigravity quota models
+date=2026-06-17 03:03:59 +0800
