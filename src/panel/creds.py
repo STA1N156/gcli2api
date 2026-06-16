@@ -264,6 +264,47 @@ def _average_quota_remaining(models: Dict[str, Any]) -> Optional[float]:
     return sum(remaining_values) / len(remaining_values)
 
 
+def _antigravity_quota_model_group(model_name: Any) -> Optional[str]:
+    model = str(model_name or "").lower()
+    if "gemini" in model:
+        return "Gemini 模型"
+    if "claude" in model:
+        return "Claude 模型"
+    return None
+
+
+def _group_antigravity_quota_models(models: Dict[str, Any]) -> Dict[str, Any]:
+    grouped_values: Dict[str, List[float]] = {
+        "Gemini 模型": [],
+        "Claude 模型": [],
+    }
+
+    for model_name, quota_data in (models or {}).items():
+        group_name = _antigravity_quota_model_group(model_name)
+        if not group_name:
+            continue
+
+        remaining = _quota_remaining_float(quota_data)
+        if remaining is None:
+            continue
+
+        grouped_values[group_name].append(max(0.0, min(1.0, remaining)))
+
+    grouped_models: Dict[str, Any] = {}
+    for group_name in ("Gemini 模型", "Claude 模型"):
+        values = grouped_values[group_name]
+        if not values:
+            continue
+
+        average_remaining = sum(values) / len(values)
+        grouped_models[group_name] = {
+            "remaining_fraction": average_remaining,
+            "remaining_percent": round(average_remaining * 100, 2),
+        }
+
+    return grouped_models
+
+
 def _reset_antigravity_credit_summary_progress(total: int) -> None:
     now = time.time()
     _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.update({
@@ -1513,23 +1554,7 @@ async def get_antigravity_credit_summary(
                         result["quota_model_count"] = len(models)
                         result["quota_remaining_fraction"] = _average_quota_remaining(models)
 
-                        model_entries: Dict[str, Any] = {}
-                        for model_name, quota_data in models.items():
-                            if not isinstance(quota_data, dict):
-                                continue
-
-                            try:
-                                remaining_float = float(quota_data.get("remaining"))
-                            except (TypeError, ValueError):
-                                continue
-
-                            remaining_float = max(0.0, min(1.0, remaining_float))
-                            model_entries[model_name] = {
-                                "remaining_fraction": remaining_float,
-                                "remaining_percent": round(remaining_float * 100, 2),
-                            }
-
-                        result["models"] = model_entries
+                        result["models"] = _group_antigravity_quota_models(models)
                     else:
                         result["error"] = quota_info.get("error", "quota fetch failed")
 
@@ -1608,7 +1633,8 @@ async def get_antigravity_credit_summary(
                 "remaining_percent": round(average_remaining * 100, 2),
             })
 
-        model_summaries.sort(key=lambda item: (item["remaining_percent"], item["model"]))
+        order = {"Gemini 模型": 0, "Claude 模型": 1}
+        model_summaries.sort(key=lambda item: order.get(item["model"], 99))
 
         failed_results = [item for item in results if not item.get("success")]
         errors = [

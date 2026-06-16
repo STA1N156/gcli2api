@@ -1514,6 +1514,48 @@ function getAntigravityQuotaColor(percent) {
     return '#dc3545';
 }
 
+function getAntigravityQuotaModelGroup(modelName) {
+    const model = String(modelName || '').toLowerCase();
+    if (model.includes('gemini')) return 'Gemini 模型';
+    if (model.includes('claude')) return 'Claude 模型';
+    return null;
+}
+
+function groupAntigravityQuotaModels(models) {
+    const groups = {
+        'Gemini 模型': { remainingValues: [], resetTime: 'N/A' },
+        'Claude 模型': { remainingValues: [], resetTime: 'N/A' }
+    };
+
+    for (const [modelName, quotaData] of Object.entries(models || {})) {
+        const groupName = getAntigravityQuotaModelGroup(modelName);
+        if (!groupName) continue;
+
+        const remaining = Number(quotaData?.remaining);
+        if (!Number.isFinite(remaining)) continue;
+
+        const group = groups[groupName];
+        group.remainingValues.push(Math.max(0, Math.min(1, remaining)));
+        if (group.resetTime === 'N/A' && quotaData?.resetTime && quotaData.resetTime !== 'N/A') {
+            group.resetTime = quotaData.resetTime;
+        }
+    }
+
+    return ['Gemini 模型', 'Claude 模型']
+        .map(groupName => {
+            const group = groups[groupName];
+            if (group.remainingValues.length === 0) return null;
+
+            const remaining = group.remainingValues.reduce((sum, value) => sum + value, 0) / group.remainingValues.length;
+            return {
+                model: groupName,
+                remaining,
+                resetTime: group.resetTime
+            };
+        })
+        .filter(Boolean);
+}
+
 function renderAntigravityCreditModelList(modelSummaries) {
     const container = getAntigravityCreditSummaryElement('antigravityCreditModelList');
     if (!container) return;
@@ -2122,8 +2164,9 @@ async function toggleAntigravityQuotaDetails(pathId) {
                 if (response.ok && data.success) {
                     // 成功时渲染美化的额度信息
                     const models = data.models || {};
+                    const groupedModels = groupAntigravityQuotaModels(models);
 
-                    if (Object.keys(models).length === 0) {
+                    if (groupedModels.length === 0) {
                         contentDiv.innerHTML = `
                             <div style="text-align: center; padding: 20px; color: #999;">
                                 <div style="font-size: 48px; margin-bottom: 10px;">📊</div>
@@ -2142,8 +2185,9 @@ async function toggleAntigravityQuotaDetails(pathId) {
                             <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
                         `;
 
-                        for (const [modelName, quotaData] of Object.entries(models)) {
+                        for (const quotaData of groupedModels) {
                             // 后端返回的是剩余比例 (0-1)，不是绝对数量
+                            const modelName = quotaData.model;
                             const remainingFraction = quotaData.remaining || 0;
                             const resetTime = quotaData.resetTime || 'N/A';
 
