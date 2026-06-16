@@ -1,4 +1,4 @@
-full_hash=f3e2cd7aea2e12facf2c06bf6c1a3882d6efe494
-short_hash=f3e2cd7
-message=fix: refresh quota cooldown filters
-date=2026-06-17 03:32:42 +0800
+full_hash=13d7dacd7e679aa7f04e05527c73c5e2bd2730b8
+short_hash=13d7dac
+message=fix: show quota percent decimals
+date=2026-06-17 03:38:05 +0800
