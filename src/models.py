@@ -61,7 +61,7 @@ class OpenAIChatCompletionRequest(BaseModel):
     model: str
     messages: List[OpenAIChatMessage]
     stream: bool = False
-    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    temperature: Optional[float] = Field(None, ge=0.0)
     top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
     max_tokens: Optional[int] = Field(None, ge=1)
     stop: Optional[Union[str, List[str]]] = None
@@ -148,7 +148,7 @@ class GeminiImageConfig(BaseModel):
 
 
 class GeminiGenerationConfig(BaseModel):
-    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    temperature: Optional[float] = Field(None, ge=0.0)
     topP: Optional[float] = Field(None, ge=0.0, le=1.0)
     topK: Optional[int] = Field(None, ge=1)
     maxOutputTokens: Optional[int] = Field(None, ge=1)
@@ -238,7 +238,7 @@ class ClaudeRequest(BaseModel):
     messages: List[ClaudeMessage]
     max_tokens: int = Field(..., ge=1)
     system: Optional[Union[str, List[Dict[str, Any]]]] = None
-    temperature: Optional[float] = Field(None, ge=0.0, le=1.0)
+    temperature: Optional[float] = Field(None, ge=0.0)
     top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
     top_k: Optional[int] = Field(None, ge=1)
     stop_sequences: Optional[List[str]] = None

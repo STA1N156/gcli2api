@@ -490,6 +490,23 @@ def get_base_model_name(model_name: str) -> str:
     return result
 
 
+def get_antigravity_base_model_name(model_name: str) -> str:
+    """Remove Antigravity-only control suffixes while preserving real model suffixes like -low."""
+    result = model_name
+    for suffix in ("-nothinking", "-maxthinking"):
+        result = result.replace(suffix, "")
+    return result.replace("-thinking", "")
+
+
+def clamp_generation_config(generation_config: Dict[str, Any]) -> None:
+    temperature = generation_config.get("temperature")
+    if temperature is not None:
+        try:
+            generation_config["temperature"] = min(float(temperature), 1.0)
+        except (TypeError, ValueError):
+            generation_config.pop("temperature", None)
+
+
 def get_thinking_settings(model_name: str) -> tuple[Optional[int], Optional[str]]:
     """
     根据模型名称获取思考配置
@@ -643,7 +660,9 @@ async def normalize_gemini_request(
             # 1. 如果是 pro 模型，为 return_thoughts
             # 2. 如果不是 pro 模型，检查是否有思考预算或思考等级
             base_model = get_base_model_name(model)
-            if "pro" in base_model:
+            if "-nothinking" in model:
+                include_thoughts = False
+            elif "pro" in base_model:
                 include_thoughts = return_thoughts
             elif "3-flash" in base_model:
                 if thinking_level is None:
@@ -688,13 +707,17 @@ async def normalize_gemini_request(
         }
         '''
 
+        no_thinking = "-nothinking" in model
+
         # 2. 判断图片模型
         if "image" in model.lower():
             # 调用图片生成专用处理函数
             return prepare_image_generation_request(result, model)
         else:
             # 3. 思考模型处理
-            if is_thinking_model(model) or ("thinkingBudget" in generation_config.get("thinkingConfig", {}) and generation_config["thinkingConfig"]["thinkingBudget"] != 0):
+            if no_thinking:
+                generation_config["thinkingConfig"] = {"includeThoughts": False}
+            elif is_thinking_model(model) or ("thinkingBudget" in generation_config.get("thinkingConfig", {}) and generation_config["thinkingConfig"]["thinkingBudget"] != 0):
                 # 直接设置 thinkingConfig
                 if "thinkingConfig" not in generation_config:
                     generation_config["thinkingConfig"] = {}
@@ -745,8 +768,8 @@ async def normalize_gemini_request(
                                     log.debug(f"[ANTIGRAVITY] 已在最后一个 assistant 消息开头插入思考块（含跳过验证签名）")
                                 break
                 
-            # 移除 -thinking 后缀
-            model = model.replace("-thinking", "")
+            # 移除 Antigravity 控制后缀，保留上游真实模型后缀（如 gemini-3.1-pro-low）
+            model = get_antigravity_base_model_name(model)
 
             # 4. Claude 模型关键词映射
             # 使用关键词匹配而不是精确匹配，更灵活地处理各种变体
@@ -796,6 +819,7 @@ async def normalize_gemini_request(
 
     # 2. 参数范围限制
     if generation_config:
+        clamp_generation_config(generation_config)
         # 强制设置 maxOutputTokens 为 64000
         generation_config["maxOutputTokens"] = 64000
         # 强制设置 topK 为 64
