@@ -1,4 +1,4 @@
-full_hash=878d949368fbbd1156887d183cd93d7a196cd123
-short_hash=878d949
-message=fix: cooldown near-empty quotas
-date=2026-06-17 03:43:28 +0800
+full_hash=805ee87784c102b032ffcfcf28b35492bfa75673
+short_hash=805ee87
+message=fix: support antigravity nothinking suffix
+date=2026-06-21 11:24:29 +0800
