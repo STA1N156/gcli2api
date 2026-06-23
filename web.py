@@ -194,6 +194,7 @@ def main():
 
         config = Config()
         config.bind = [f"{host}:{port}"]
+        config.backlog = int(os.environ.get("SERVER_BACKLOG", "4096"))
         config.accesslog = "-" if os.environ.get("ACCESS_LOG") == "1" else None
         config.errorlog = "-" if os.environ.get("SERVER_LOG") == "1" else None
         config.loglevel = os.environ.get("SERVER_LOG_LEVEL", "WARNING")
@@ -216,6 +217,7 @@ def main():
 
         config = Config()
         config.bind = [f"{host}:{port}"]
+        config.backlog = int(os.environ.get("SERVER_BACKLOG", "4096"))
         config.accesslog = "-" if os.environ.get("ACCESS_LOG") == "1" else None
         config.errorlog = "-" if os.environ.get("SERVER_LOG") == "1" else None
         config.loglevel = os.environ.get("SERVER_LOG_LEVEL", "WARNING")
