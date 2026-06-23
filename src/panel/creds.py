@@ -23,7 +23,14 @@ from src.models import (
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
 from src.api.antigravity import fetch_quota_info
-from src.google_oauth_api import Credentials, fetch_credit_amount, fetch_project_id_and_tier
+from src.google_oauth_api import (
+    Credentials,
+    enable_required_apis,
+    fetch_credit_amount,
+    fetch_project_id_and_tier,
+    get_user_projects,
+    select_default_project,
+)
 from config import get_code_assist_endpoint, get_antigravity_api_url
 from .utils import validate_mode
 
@@ -846,16 +853,10 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
         credential_data = credentials.to_dict()
         await storage_adapter.store_credential(filename, credential_data, mode=mode)
 
-    # 获取API端点和对应的User-Agent
+    # 重新获取project id（仅 antigravity 模式请求积分）
     if mode == "antigravity":
         api_base_url = await get_antigravity_api_url()
         user_agent = ANTIGRAVITY_USER_AGENT
-    else:
-        api_base_url = await get_code_assist_endpoint()
-        user_agent = GEMINICLI_USER_AGENT
-
-    # 重新获取project id（仅 antigravity 模式请求积分）
-    if mode == "antigravity":
         project_id, subscription_tier, credit_amount = await fetch_project_id_and_tier(
             access_token=credentials.access_token,
             user_agent=user_agent,
@@ -863,12 +864,24 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
             include_credits=True,
         )
     else:
-        project_id, subscription_tier = await fetch_project_id_and_tier(
-            access_token=credentials.access_token,
-            user_agent=user_agent,
-            api_base_url=api_base_url,
-        )
+        # geminicli 模式：通过项目列表获取 project_id
         credit_amount = None
+        subscription_tier = None
+        user_projects = await get_user_projects(credentials)
+        if user_projects:
+            if len(user_projects) == 1:
+                project_id = user_projects[0].get("projectId")
+            else:
+                project_id = await select_default_project(user_projects)
+        else:
+            project_id = None
+
+        if project_id:
+            log.info(f"正在为项目 {project_id} 启用必需的API服务...")
+            try:
+                await enable_required_apis(credentials, project_id)
+            except Exception as e:
+                log.warning(f"启用API服务失败: {e}")
 
     if project_id:
         credential_data["project_id"] = project_id
@@ -1829,11 +1842,61 @@ async def configure_preview_channel(
 
         setting_status = setting_response.status_code
 
+        # 调用 Google Cloud API 配置 preview 通道
+        # 根据文档，需要两个步骤：
+        # 1. 创建 Release Channel Setting (EXPERIMENTAL)
+        # 2. 创建 Setting Binding (绑定到目标项目)
+        from src.httpx_client import post_async, get_async
+        import uuid
+
+        # 生成唯一的 ID
+        setting_id = f"preview-setting-{uuid.uuid4().hex[:8]}"
+        binding_id = f"preview-binding-{uuid.uuid4().hex[:8]}"
+
+        base_url = f"https://cloudaicompanion.googleapis.com/v1/projects/{project_id}/locations/global"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        log.info(f"开始配置 preview 通道: {filename} (project_id={project_id})")
+
+        # 步骤 1: 创建 Release Channel Setting
+        setting_url = f"{base_url}/releaseChannelSettings"
+        setting_response = await post_async(
+            url=setting_url,
+            json={"release_channel": "EXPERIMENTAL"},
+            headers=headers,
+            params={"release_channel_setting_id": setting_id},
+            timeout=30.0
+        )
+
+        setting_status = setting_response.status_code
+
         if setting_status == 200 or setting_status == 201:
             log.info(f"步骤 1/2: Release Channel Setting 创建成功 (setting_id={setting_id})")
         elif setting_status == 409:
-            # Setting 已存在，继续下一步
-            log.info(f"步骤 1/2: Release Channel Setting 已存在")
+            # Setting 已存在，需要 LIST 获取真实的 setting_id，否则 Step 2 的 URL 会用错误的 ID
+            log.info(f"步骤 1/2: Release Channel Setting 已存在，正在获取已有 setting_id...")
+            list_response = await get_async(
+                url=setting_url,
+                headers=headers,
+                timeout=30.0
+            )
+            if list_response.status_code == 200:
+                try:
+                    list_data = list_response.json()
+                    settings = list_data.get("releaseChannelSettings", [])
+                    if settings:
+                        existing_name = settings[0].get("name", "")
+                        setting_id = existing_name.split("/")[-1]
+                        log.info(f"步骤 1/2: 获取到已有 setting_id={setting_id}")
+                    else:
+                        log.warning(f"步骤 1/2: LIST 返回空列表，保持随机 setting_id")
+                except Exception as e:
+                    log.warning(f"步骤 1/2: 解析 LIST 响应失败: {e}，保持随机 setting_id")
+            else:
+                log.warning(f"步骤 1/2: LIST 请求失败 (status={list_response.status_code})，保持随机 setting_id")
         else:
             # 步骤 1 失败
             error_text = setting_response.text if hasattr(setting_response, 'text') else ""
@@ -1983,7 +2046,7 @@ async def test_credential(
         if mode == "antigravity":
             api_base_url = await get_antigravity_api_url()
             from src.api.antigravity import build_antigravity_headers
-            headers = build_antigravity_headers(access_token, test_model)
+            headers = build_antigravity_headers(access_token)
         else:
             api_base_url = await get_code_assist_endpoint()
             headers = {

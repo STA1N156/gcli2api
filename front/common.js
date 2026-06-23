@@ -3184,6 +3184,7 @@ function populateConfigForm() {
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
     document.getElementById('antigravityStream2nostream').checked = Boolean(c.antigravity_stream2nostream !== false);
+    document.getElementById('antigravitySwitchCredentialEnabled').checked = Boolean(c.antigravity_switch_credential_enabled);
 
     setConfigField('antiTruncationMaxAttempts', c.anti_truncation_max_attempts || 3);
 
@@ -3243,6 +3244,7 @@ async function saveConfig() {
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),
+            antigravity_switch_credential_enabled: getChecked('antigravitySwitchCredentialEnabled'),
             anti_truncation_max_attempts: getInt('antiTruncationMaxAttempts', 3),
             keepalive_url: getValue('keepaliveUrl'),
             keepalive_interval: getInt('keepaliveInterval', 60)

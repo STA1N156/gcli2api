@@ -1,4 +1,4 @@
-full_hash=805ee87784c102b032ffcfcf28b35492bfa75673
-short_hash=805ee87
-message=fix: support antigravity nothinking suffix
-date=2026-06-21 11:24:29 +0800
+full_hash=0db225cfd92df4fa1c38ecf0cb30ba02f78d71c8
+short_hash=0db225c
+message=Merge branch 'master' of https://github.com/su-kaka/gcli2api
+date=2026-06-23 02:55:23 +0800
