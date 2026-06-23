@@ -876,6 +876,15 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
         else:
             project_id = None
 
+        if not project_id:
+            log.info(f"项目列表未返回可用项目，尝试使用 Antigravity UA 获取 GCLI Project ID: {filename}")
+            api_base_url = await get_code_assist_endpoint()
+            project_id, subscription_tier = await fetch_project_id_and_tier(
+                access_token=credentials.access_token,
+                user_agent=ANTIGRAVITY_USER_AGENT,
+                api_base_url=api_base_url,
+            )
+
         if project_id:
             log.info(f"正在为项目 {project_id} 启用必需的API服务...")
             try:
