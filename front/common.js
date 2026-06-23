@@ -263,7 +263,7 @@ function createCredsManager(type) {
             const selectedCount = this.selectedFiles.size;
             document.getElementById(this.getElementId('SelectedCount')).textContent = `已选择 ${selectedCount} 项`;
 
-            const batchBtnNames = ['Enable', 'Disable', 'Delete', 'Verify', 'Preview'];
+            const batchBtnNames = ['Enable', 'Disable', 'Delete', 'Verify', 'MessageVerify', 'Preview'];
             if (this.type === 'antigravity') {
                 batchBtnNames.push('EnableCredit');
                 batchBtnNames.push('DisableCredit');
@@ -2599,6 +2599,90 @@ async function batchVerifyProjectIds() {
     }
 
     console.log(summary);
+}
+
+async function batchVerifyMessageCredentials(isAntigravity = false) {
+    const manager = isAntigravity ? AppState.antigravityCreds : AppState.creds;
+    const selectedFiles = Array.from(manager.selectedFiles);
+    const label = isAntigravity ? 'Antigravity凭证' : '凭证';
+
+    if (selectedFiles.length === 0) {
+        showStatus(`❌ 请先选择要消息校验的${label}`, 'error');
+        showMessageModal('提示', `请先选择要消息校验的${label}`, 'error');
+        return;
+    }
+
+    if (!confirm(`确定要批量消息校验 ${selectedFiles.length} 个${label}吗？\n\n成功后会自动启用凭证。`)) {
+        return;
+    }
+
+    showStatus(`正在并行消息校验 ${selectedFiles.length} 个${label}，请稍候...`, 'info');
+
+    const modeParam = isAntigravity ? '&mode=antigravity' : '';
+    const promises = selectedFiles.map(async (filename) => {
+        try {
+            const response = await fetch(`./creds/test/${encodeURIComponent(filename)}?enable_on_success=true${modeParam}`, {
+                method: 'POST',
+                headers: getAuthHeaders()
+            });
+            const data = await response.json();
+
+            if (data.success && (data.status_code || response.status) === 200) {
+                return {
+                    success: true,
+                    filename,
+                    statusCode: data.status_code || response.status,
+                    message: data.message || '已启用'
+                };
+            }
+
+            return {
+                success: false,
+                filename,
+                error: data.message || `HTTP ${data.status_code || response.status}`
+            };
+        } catch (error) {
+            return { success: false, filename, error: error.message };
+        }
+    });
+
+    const results = await Promise.all(promises);
+
+    let successCount = 0;
+    let failCount = 0;
+    const resultMessages = [];
+
+    results.forEach(result => {
+        if (result.success) {
+            successCount++;
+            resultMessages.push(`✅ ${result.filename}: ${result.message} (${result.statusCode})`);
+        } else {
+            failCount++;
+            resultMessages.push(`❌ ${result.filename}: ${result.error}`);
+        }
+    });
+
+    await manager.refresh();
+
+    const title = isAntigravity ? 'Antigravity批量消息校验完成' : '批量消息校验完成';
+    const summary = `${title}！\n\n成功: ${successCount} 个\n失败: ${failCount} 个\n总计: ${selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
+
+    if (failCount === 0) {
+        showStatus(`全部消息校验成功！成功启用 ${successCount}/${selectedFiles.length} 个${label}`, 'success');
+        showMessageModal(title, summary, 'success');
+    } else if (successCount === 0) {
+        showStatus(`全部消息校验失败！失败 ${failCount}/${selectedFiles.length} 个${label}`, 'error');
+        showMessageModal(title, summary, 'error');
+    } else {
+        showStatus(`批量消息校验完成：成功 ${successCount}/${selectedFiles.length} 个，失败 ${failCount} 个`, 'info');
+        showMessageModal(title, summary, 'info');
+    }
+
+    console.log(summary);
+}
+
+async function batchVerifyAntigravityMessageCredentials() {
+    return batchVerifyMessageCredentials(true);
 }
 
 async function batchVerifyAntigravityProjectIds() {

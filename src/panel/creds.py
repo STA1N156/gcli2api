@@ -1986,6 +1986,7 @@ async def configure_preview_channel(
 async def test_credential(
     filename: str,
     mode: str = "geminicli",
+    enable_on_success: bool = False,
     _token: str = Depends(verify_panel_token)
 ):
     """
@@ -2122,13 +2123,36 @@ async def test_credential(
                     except Exception as e:
                         log.error(f"Preview 模型测试异常: {filename} - {e}")
 
+            if enable_on_success:
+                if status_code != 200:
+                    error_text = response.text if hasattr(response, 'text') else ""
+                    return JSONResponse(
+                        status_code=status_code,
+                        content={
+                            "success": False,
+                            "status_code": status_code,
+                            "message": f"消息校验未通过: HTTP {status_code}",
+                            "enabled": False,
+                            "error": error_text,
+                            "filename": filename
+                        }
+                    )
+
+                await storage_adapter.update_credential_state(filename, {
+                    "disabled": False,
+                    "error_codes": [],
+                    "error_messages": {}
+                }, mode=mode)
+                log.info(f"消息校验成功，已启用凭证: {filename} (mode={mode}, status={status_code})")
+
             # 返回成功响应
             return JSONResponse(
                 status_code=status_code,
                 content={
                     "success": True,
                     "status_code": status_code,
-                    "message": "测试成功",
+                    "message": "消息校验成功，已启用凭证" if enable_on_success else "测试成功",
+                    "enabled": enable_on_success,
                     "filename": filename
                 }
             )
