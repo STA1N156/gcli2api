@@ -1,4 +1,4 @@
-full_hash=0db225cfd92df4fa1c38ecf0cb30ba02f78d71c8
-short_hash=0db225c
-message=Merge branch 'master' of https://github.com/su-kaka/gcli2api
-date=2026-06-23 02:55:23 +0800
+full_hash=faa5d6cfd790c8f6c9fef136a454a83a81f93810
+short_hash=faa5d6c
+message=Remove unused antigravity credential switch setting
+date=2026-06-23 11:04:20 +0800
