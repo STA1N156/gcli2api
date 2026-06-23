@@ -521,7 +521,7 @@ async def stream_request(
                 await record_api_call_error(
                     credential_manager, current_file, 461,
                     None, mode="antigravity", model_name=model_name,
-                    error_message="可能触发外审导致空回"
+                    error_message="模型输出为空，请检查是否含有敏感内容"
                 )
                 yield build_empty_model_output_response()
                 return
@@ -724,7 +724,7 @@ async def non_stream_request(
                     await record_api_call_error(
                         credential_manager, current_file, 461,
                         None, mode="antigravity", model_name=model_name,
-                        error_message="可能触发外审导致空回"
+                        error_message="模型输出为空，请检查是否含有敏感内容"
                     )
                     return build_empty_model_output_response()
 

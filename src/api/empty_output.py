@@ -10,7 +10,7 @@ from src.converter.thoughtSignature_fix import (
 
 
 EMPTY_MODEL_OUTPUT_STATUS_CODE = 461
-EMPTY_MODEL_OUTPUT_MESSAGE = "可能触发外审导致空回"
+EMPTY_MODEL_OUTPUT_MESSAGE = "模型输出为空，请检查是否含有敏感内容"
 EMPTY_MODEL_OUTPUT_STATUS = "EMPTY_MODEL_OUTPUT"
 
 _STRUCTURED_OUTPUT_KEYS = (
