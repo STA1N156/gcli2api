@@ -30,6 +30,7 @@ from src.router.vertex.gemini import router as vertex_gemini_router
 from src.router.vertex.openai import router as vertex_openai_router
 from src.router.vertex.model_list import router as vertex_model_list_router
 from src.task_manager import shutdown_all_tasks
+from src.httpx_client import close_http_clients
 from src.panel import router as panel_router
 from src.keeplive import keepalive_service
 
@@ -89,6 +90,12 @@ async def lifespan(app: FastAPI):
         log.error(f"关闭异步任务时出错: {e}")
 
     # 然后关闭凭证管理器
+    try:
+        await close_http_clients()
+        log.info("HTTP client pool closed")
+    except Exception as e:
+        log.error(f"Error closing HTTP client pool: {e}")
+
     if global_credential_manager:
         try:
             await global_credential_manager.close()
