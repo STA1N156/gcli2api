@@ -194,9 +194,9 @@ def main():
 
         config = Config()
         config.bind = [f"{host}:{port}"]
-        config.accesslog = "-"
-        config.errorlog = "-"
-        config.loglevel = "INFO"
+        config.accesslog = "-" if os.environ.get("ACCESS_LOG") == "1" else None
+        config.errorlog = "-" if os.environ.get("SERVER_LOG") == "1" else None
+        config.loglevel = os.environ.get("SERVER_LOG_LEVEL", "WARNING")
 
         await serve(app, config)
 
@@ -216,9 +216,9 @@ def main():
 
         config = Config()
         config.bind = [f"{host}:{port}"]
-        config.accesslog = "-"
-        config.errorlog = "-"
-        config.loglevel = "INFO"
+        config.accesslog = "-" if os.environ.get("ACCESS_LOG") == "1" else None
+        config.errorlog = "-" if os.environ.get("SERVER_LOG") == "1" else None
+        config.loglevel = os.environ.get("SERVER_LOG_LEVEL", "WARNING")
         config.workers = workers
         config.application_path = "web:app"
 

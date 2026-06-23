@@ -13,6 +13,26 @@ from config import get_proxy_config
 from log import log
 
 
+_CLIENT_KWARGS = {
+    "auth",
+    "base_url",
+    "cert",
+    "cookies",
+    "event_hooks",
+    "follow_redirects",
+    "headers",
+    "http1",
+    "http2",
+    "limits",
+    "mounts",
+    "proxy",
+    "timeout",
+    "transport",
+    "trust_env",
+    "verify",
+}
+
+
 class HttpxClientManager:
     """Reuse HTTP clients so high RPM traffic can keep connections warm."""
 
@@ -25,9 +45,9 @@ class HttpxClientManager:
         client_kwargs.setdefault(
             "limits",
             httpx.Limits(
-                max_connections=int(os.getenv("HTTPX_MAX_CONNECTIONS", "512")),
-                max_keepalive_connections=int(os.getenv("HTTPX_MAX_KEEPALIVE_CONNECTIONS", "128")),
-                keepalive_expiry=float(os.getenv("HTTPX_KEEPALIVE_EXPIRY", "30")),
+                max_connections=int(os.getenv("HTTPX_MAX_CONNECTIONS", "128")),
+                max_keepalive_connections=int(os.getenv("HTTPX_MAX_KEEPALIVE_CONNECTIONS", "8")),
+                keepalive_expiry=float(os.getenv("HTTPX_KEEPALIVE_EXPIRY", "5")),
             ),
         )
 
@@ -84,11 +104,18 @@ async def close_http_clients():
     await http_client.close()
 
 
+def _split_httpx_kwargs(kwargs: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    client_kwargs = {key: value for key, value in kwargs.items() if key in _CLIENT_KWARGS}
+    request_kwargs = {key: value for key, value in kwargs.items() if key not in _CLIENT_KWARGS}
+    return client_kwargs, request_kwargs
+
+
 async def get_async(
     url: str, headers: Optional[Dict[str, str]] = None, timeout: float = 30.0, **kwargs
 ) -> httpx.Response:
-    async with http_client.get_client(timeout=timeout, **kwargs) as client:
-        return await client.get(url, headers=headers)
+    client_kwargs, request_kwargs = _split_httpx_kwargs(kwargs)
+    async with http_client.get_client(timeout=timeout, **client_kwargs) as client:
+        return await client.get(url, headers=headers, **request_kwargs)
 
 
 async def post_async(
@@ -99,8 +126,9 @@ async def post_async(
     timeout: float = 900.0,
     **kwargs,
 ) -> httpx.Response:
-    async with http_client.get_client(timeout=timeout, **kwargs) as client:
-        return await client.post(url, data=data, json=json, headers=headers)
+    client_kwargs, request_kwargs = _split_httpx_kwargs(kwargs)
+    async with http_client.get_client(timeout=timeout, **client_kwargs) as client:
+        return await client.post(url, data=data, json=json, headers=headers, **request_kwargs)
 
 
 _MOCK_STREAM_429 = False
@@ -124,8 +152,9 @@ async def stream_post_async(
         )
         return
 
-    async with http_client.get_streaming_client(**kwargs) as client:
-        async with client.stream("POST", url, json=body, headers=headers) as r:
+    client_kwargs, request_kwargs = _split_httpx_kwargs(kwargs)
+    async with http_client.get_streaming_client(**client_kwargs) as client:
+        async with client.stream("POST", url, json=body, headers=headers, **request_kwargs) as r:
             if r.status_code != 200:
                 from fastapi import Response
 
