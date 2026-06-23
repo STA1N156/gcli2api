@@ -415,7 +415,7 @@ class SQLiteManager:
 
                         for filename, credential_json, model_cooldowns_json, preview in rows:
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
-                            if not has_active_model_cooldown(model_cooldowns, model_name, current_time):
+                            if not has_active_model_cooldown(model_cooldowns, model_name, current_time, mode=mode):
                                 if preview:
                                     preview_creds.append((filename, credential_json))
                                 else:
@@ -456,7 +456,7 @@ class SQLiteManager:
 
                         for filename, credential_json, model_cooldowns_json, enable_credit in rows:
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
-                            if not has_active_model_cooldown(model_cooldowns, model_name, current_time):
+                            if not has_active_model_cooldown(model_cooldowns, model_name, current_time, mode=mode):
                                 credential_data = json.loads(credential_json)
                                 credential_data["enable_credit"] = bool(enable_credit)
                                 return filename, credential_data

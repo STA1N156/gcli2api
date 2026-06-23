@@ -442,12 +442,12 @@ class MongoDBManager:
             # 过滤冷却中的凭证
             if model_name:
                 escaped = self._escape_model_name(model_name)
-                group_aware_cooldown = bool(model_cooldown_group(model_name))
+                group_aware_cooldown = bool(model_cooldown_group(model_name, mode=mode))
                 for filename in candidates:
                     state = None
                     if group_aware_cooldown:
                         state = await self.get_credential_state(filename, mode)
-                        if has_active_model_cooldown(state.get("model_cooldowns"), model_name):
+                        if has_active_model_cooldown(state.get("model_cooldowns"), model_name, mode=mode):
                             continue
                     else:
                         cd_key = self._rk_cd(mode, filename, escaped)
@@ -551,7 +551,7 @@ class MongoDBManager:
                 match_query["preview"] = True
 
             # 冷却检查：直接用 MongoDB 查询表达，无需 $addFields
-            group_aware_cooldown = bool(model_name and model_cooldown_group(model_name))
+            group_aware_cooldown = bool(model_name and model_cooldown_group(model_name, mode=mode))
             if model_name and not group_aware_cooldown:
                 escaped_model_name = self._escape_model_name(model_name)
                 field = f"model_cooldowns.{escaped_model_name}"
@@ -573,7 +573,7 @@ class MongoDBManager:
                 random.shuffle(docs)
 
                 for doc in docs:
-                    if has_active_model_cooldown(doc.get("model_cooldowns"), model_name, current_time):
+                    if has_active_model_cooldown(doc.get("model_cooldowns"), model_name, current_time, mode=mode):
                         continue
 
                     credential_data = doc.get("credential_data") or {}

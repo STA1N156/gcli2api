@@ -107,7 +107,7 @@ class CredentialManager:
             return None
 
         model_lower = (model_name or "").lower()
-        if has_active_model_cooldown(state.get("model_cooldowns"), model_name):
+        if has_active_model_cooldown(state.get("model_cooldowns"), model_name, mode=mode):
             return None
 
         if mode == "geminicli":
@@ -136,7 +136,7 @@ class CredentialManager:
             return False
 
         model_lower = (model_name or "").lower()
-        if has_active_model_cooldown(state.get("model_cooldowns"), model_name):
+        if has_active_model_cooldown(state.get("model_cooldowns"), model_name, mode=mode):
             return False
 
         if mode == "geminicli":

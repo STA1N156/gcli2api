@@ -273,7 +273,7 @@ class PSQLManager:
 
                     for row in rows:
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                        if not has_active_model_cooldown(model_cooldowns, model_name, current_time):
+                        if not has_active_model_cooldown(model_cooldowns, model_name, current_time, mode=mode):
                             if row["preview"]:
                                 preview_creds.append((row["filename"], row["credential_data"]))
                             else:
@@ -306,7 +306,7 @@ class PSQLManager:
 
                     for row in rows:
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                        if not has_active_model_cooldown(model_cooldowns, model_name, current_time):
+                        if not has_active_model_cooldown(model_cooldowns, model_name, current_time, mode=mode):
                             credential_data = json.loads(row["credential_data"])
                             credential_data["enable_credit"] = bool(row["enable_credit"])
                             return row["filename"], credential_data

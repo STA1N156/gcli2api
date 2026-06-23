@@ -635,21 +635,31 @@ function formatCooldownTime(remainingSeconds) {
     return `${seconds}s`;
 }
 
-function getCooldownModelGroup(modelName) {
+function isGcliManagerType(managerType) {
+    return managerType === 'normal' || managerType === 'geminicli';
+}
+
+function getCooldownModelGroup(modelName, managerType = null) {
     const model = String(modelName || '').toLowerCase();
-    if (model.includes('gemini')) return 'Gemini 模型';
+    if (model.includes('gemini')) {
+        if (isGcliManagerType(managerType)) {
+            if (model.includes('flash')) return 'Gemini Flash';
+            if (model.includes('pro')) return 'Gemini Pro';
+        }
+        return 'Gemini 模型';
+    }
     if (model.includes('claude')) return 'Claude 模型';
     return null;
 }
 
-function getGroupedCooldowns(modelCooldowns) {
+function getGroupedCooldowns(modelCooldowns, managerType = null) {
     const currentTime = Date.now() / 1000;
     const groups = {};
 
     for (const [modelName, until] of Object.entries(modelCooldowns || {})) {
         if (until <= currentTime) continue;
 
-        const groupName = getCooldownModelGroup(modelName);
+        const groupName = getCooldownModelGroup(modelName, managerType);
         if (!groupName) continue;
 
         const remaining = Math.max(0, Math.floor(until - currentTime));
@@ -665,7 +675,11 @@ function getGroupedCooldowns(modelCooldowns) {
         }
     }
 
-    return ['Gemini 模型', 'Claude 模型']
+    const groupOrder = isGcliManagerType(managerType)
+        ? ['Gemini Flash', 'Gemini Pro', 'Gemini 模型', 'Claude 模型']
+        : ['Gemini 模型', 'Claude 模型'];
+
+    return groupOrder
         .map(groupName => groups[groupName])
         .filter(Boolean)
         .map(item => ({
@@ -674,8 +688,8 @@ function getGroupedCooldowns(modelCooldowns) {
         }));
 }
 
-function renderCooldownBadges(modelCooldowns) {
-    return getGroupedCooldowns(modelCooldowns)
+function renderCooldownBadges(modelCooldowns, managerType = null) {
+    return getGroupedCooldowns(modelCooldowns, managerType)
         .map(item => (
             `<span class="cooldown-badge" data-cooldown-group="${item.group}" style="background-color: #17a2b8;" title="${item.group}冷却中，覆盖 ${item.count} 个模型">⏰ ${item.group}: ${item.time}</span>`
         ))
@@ -735,7 +749,7 @@ function createCredCard(credInfo, manager) {
 
     // 模型级冷却状态
     if (credInfo.model_cooldowns && Object.keys(credInfo.model_cooldowns).length > 0) {
-        statusBadges += renderCooldownBadges(credInfo.model_cooldowns);
+        statusBadges += renderCooldownBadges(credInfo.model_cooldowns, managerType);
     }
 
     // 路径ID
@@ -3584,7 +3598,7 @@ function updateCooldownDisplays() {
             : AppState.creds;
         const credInfo = manager.data[filename];
         const groupName = badge.dataset.cooldownGroup;
-        const cooldownGroup = getGroupedCooldowns(credInfo?.model_cooldowns)
+        const cooldownGroup = getGroupedCooldowns(credInfo?.model_cooldowns, manager.type)
             .find(item => item.group === groupName);
 
         if (!cooldownGroup) {
