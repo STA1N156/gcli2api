@@ -1,4 +1,4 @@
-full_hash=faa5d6cfd790c8f6c9fef136a454a83a81f93810
-short_hash=faa5d6c
-message=Remove unused antigravity credential switch setting
-date=2026-06-23 11:04:20 +0800
+full_hash=8ee5e75c1d902adaece4a8105c203b2997942bf4
+short_hash=8ee5e75
+message=Merge pull request #1 from zarktoawkland-create/codex/fix-gemini-image-v1beta
+date=2026-06-24 15:11:21 +0800
