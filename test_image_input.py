@@ -49,6 +49,19 @@ class ImageInputNormalizationTests(unittest.TestCase):
         self.assertNotIn("inline_data", part)
         self.assertEqual(part["inlineData"]["mimeType"], "image/jpeg")
 
+    def test_leaves_explicit_non_image_inline_data_unchecked(self):
+        part = normalize_inline_image_part(
+            {
+                "inlineData": {
+                    "mimeType": "audio/wav",
+                    "data": "UklGRg==",
+                }
+            }
+        )
+
+        self.assertEqual(part["inlineData"]["mimeType"], "audio/wav")
+        self.assertEqual(part["inlineData"]["data"], "UklGRg==")
+
     def test_rejects_invalid_base64_before_upstream(self):
         with self.assertRaises(ImageInputError):
             normalize_inline_image_data(

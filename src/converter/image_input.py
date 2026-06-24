@@ -139,6 +139,47 @@ def normalize_inline_image_data(inline_data: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+def normalize_non_image_inline_data(inline_data: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(inline_data, dict):
+        raise ImageInputError("inlineData must be an object")
+
+    mime_type = inline_data.get("mimeType") or inline_data.get("mime_type")
+    data = inline_data.get("data")
+    if isinstance(data, str):
+        match = DATA_URL_RE.match(data.strip())
+        if match:
+            params = (match.group("params") or "").lower().split(";")
+            if "base64" in params:
+                mime_type = mime_type or match.group("mime")
+                data = match.group("data")
+
+    normalized = {
+        key: value
+        for key, value in inline_data.items()
+        if key not in {"mimeType", "mime_type", "data"}
+    }
+    normalized["mimeType"] = normalize_mime_type(mime_type)
+    normalized["data"] = data
+    return normalized
+
+
+def should_treat_inline_data_as_image(inline_data: Dict[str, Any]) -> bool:
+    if not isinstance(inline_data, dict):
+        return True
+
+    raw_data = inline_data.get("data")
+    data_url_mime = None
+    if isinstance(raw_data, str):
+        match = DATA_URL_RE.match(raw_data.strip())
+        if match:
+            data_url_mime = match.group("mime")
+
+    mime_type = normalize_mime_type(
+        inline_data.get("mimeType") or inline_data.get("mime_type") or data_url_mime
+    )
+    return not mime_type or mime_type in GENERIC_MIME_TYPES or mime_type.startswith("image/")
+
+
 def normalize_inline_image_part(part: Dict[str, Any]) -> Dict[str, Any]:
     normalized = dict(part)
     inline = normalized.get("inlineData")
@@ -146,7 +187,10 @@ def normalize_inline_image_part(part: Dict[str, Any]) -> Dict[str, Any]:
         inline = normalized.pop("inline_data")
 
     if inline is not None:
-        normalized["inlineData"] = normalize_inline_image_data(inline)
+        if should_treat_inline_data_as_image(inline):
+            normalized["inlineData"] = normalize_inline_image_data(inline)
+        else:
+            normalized["inlineData"] = normalize_non_image_inline_data(inline)
 
     return normalized
 
