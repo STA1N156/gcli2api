@@ -6,10 +6,11 @@ Vertex AI OpenAI-compatible Router - Handles OpenAI format requests via anonymou
 import json
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from log import log
+from src.converter.image_input import ImageInputError
 from src.utils import authenticate_bearer, get_base_model_from_feature_model
 from src.models import OpenAIChatCompletionRequest, model_to_dict
 from src.router.hi_check import is_health_check_request, create_health_check_response
@@ -41,11 +42,17 @@ async def chat_completions(
     normalized_dict["model"] = real_model
 
     from src.converter.openai2gemini import convert_openai_to_gemini_request
-    gemini_dict = await convert_openai_to_gemini_request(normalized_dict)
+    try:
+        gemini_dict = await convert_openai_to_gemini_request(normalized_dict)
+    except ImageInputError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image input: {exc}") from exc
     gemini_dict["model"] = real_model
 
     from src.converter.gemini_fix import normalize_gemini_request
-    gemini_dict = await normalize_gemini_request(gemini_dict, mode="vertex")
+    try:
+        gemini_dict = await normalize_gemini_request(gemini_dict, mode="vertex")
+    except ImageInputError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image input: {exc}") from exc
 
     api_request = {
         "model": gemini_dict.pop("model"),

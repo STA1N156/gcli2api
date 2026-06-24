@@ -1,7 +1,9 @@
+import json
 from typing import Any, AsyncIterator
 
 from fastapi import Response
 from fastapi.responses import StreamingResponse
+from src.converter.image_input import ImageInputError
 
 
 async def prepend_async_item(first_item: Any, iterator: AsyncIterator[Any]):
@@ -28,6 +30,12 @@ async def build_streaming_response_or_error(
         first_item = await read_first_async_item(iterator)
     except StopAsyncIteration:
         return Response(status_code=204)
+    except ImageInputError as exc:
+        return Response(
+            content=json.dumps({"error": {"message": f"Invalid image input: {exc}"}}),
+            status_code=400,
+            media_type="application/json",
+        )
 
     if isinstance(first_item, Response):
         return first_item

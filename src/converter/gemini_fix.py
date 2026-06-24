@@ -8,6 +8,7 @@ from math import e
 from typing import Any, Dict, Optional
 
 from log import log
+from src.converter.image_input import normalize_inline_image_part
 from src.converter.thoughtSignature_fix import SKIP_THOUGHT_SIGNATURE_VALIDATOR
 
 # ==================== Gemini API 配置 ====================
@@ -845,6 +846,7 @@ async def normalize_gemini_request(
                     
                     if has_valid_value:
                         part = _normalize_part_thought_signature(part, model)
+                        part = normalize_inline_image_part(part)
 
                         # 修复 text 字段：确保是字符串而不是列表
                         if "text" in part:

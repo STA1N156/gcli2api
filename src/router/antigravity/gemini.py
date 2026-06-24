@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 # 本地模块 - 配置和日志
 from config import get_anti_truncation_max_attempts
 from log import log
+from src.converter.image_input import ImageInputError
 
 # 本地模块 - 工具和认证
 from src.utils import (
@@ -45,9 +46,9 @@ from src.router.stream_passthrough import (
     prepend_async_item,
     read_first_async_item,
 )
+from src.router.gemini_rest_request import GeminiRestRequestError, normalize_gemini_rest_request
 
 # 本地模块 - 数据模型
-from src.models import GeminiRequest, model_to_dict
 from src.session_affinity import extract_cache_session_key
 
 # 本地模块 - 任务管理
@@ -64,7 +65,6 @@ router = APIRouter()
 @router.post("/antigravity/v1beta/models/{model:path}:generateContent")
 @router.post("/antigravity/v1/models/{model:path}:generateContent")
 async def generate_content(
-    gemini_request: "GeminiRequest",
     request: Request,
     model: str = Path(..., description="Model name"),
     api_key: str = Depends(authenticate_gemini_flexible),
@@ -80,7 +80,12 @@ async def generate_content(
     log.debug(f"[ANTIGRAVITY] Non-streaming request for model: {model}")
 
     # 转换为字典
-    normalized_dict = model_to_dict(gemini_request)
+    try:
+        normalized_dict = normalize_gemini_rest_request(await request.json())
+    except GeminiRestRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
     cache_session_key = extract_cache_session_key(normalized_dict, request.headers)
 
     # 健康检查
@@ -101,7 +106,10 @@ async def generate_content(
 
     # 规范化 Gemini 请求 (使用 antigravity 模式)
     from src.converter.gemini_fix import normalize_gemini_request
-    normalized_dict = await normalize_gemini_request(normalized_dict, mode="antigravity")
+    try:
+        normalized_dict = await normalize_gemini_request(normalized_dict, mode="antigravity")
+    except ImageInputError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image input: {exc}") from exc
 
     # 准备API请求格式 - 提取model并将其他字段放入request中
     api_request = {
@@ -140,7 +148,6 @@ async def generate_content(
 @router.post("/antigravity/v1beta/models/{model:path}:streamGenerateContent")
 @router.post("/antigravity/v1/models/{model:path}:streamGenerateContent")
 async def stream_generate_content(
-    gemini_request: GeminiRequest,
     request: Request,
     model: str = Path(..., description="Model name"),
     api_key: str = Depends(authenticate_gemini_flexible),
@@ -156,7 +163,12 @@ async def stream_generate_content(
     log.debug(f"[ANTIGRAVITY] Streaming request for model: {model}")
 
     # 转换为字典
-    normalized_dict = model_to_dict(gemini_request)
+    try:
+        normalized_dict = normalize_gemini_rest_request(await request.json())
+    except GeminiRestRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
     cache_session_key = extract_cache_session_key(normalized_dict, request.headers)
 
     # 处理模型名称和功能检测

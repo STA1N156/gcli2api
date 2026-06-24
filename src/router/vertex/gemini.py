@@ -7,9 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from fastapi.responses import JSONResponse
 
 from log import log
+from src.converter.image_input import ImageInputError
 from src.utils import authenticate_gemini_flexible
-from src.models import GeminiRequest, model_to_dict
 from src.router.hi_check import is_health_check_request, create_health_check_response
+from src.router.gemini_rest_request import GeminiRestRequestError, normalize_gemini_rest_request
 from src.router.stream_passthrough import build_streaming_response_or_error
 
 
@@ -19,14 +20,19 @@ router = APIRouter()
 @router.post("/vertex/v1beta/models/{model:path}:generateContent")
 @router.post("/vertex/v1/models/{model:path}:generateContent")
 async def generate_content(
-    gemini_request: GeminiRequest,
+    request: Request,
     model: str = Path(..., description="Model name"),
     api_key: str = Depends(authenticate_gemini_flexible),
 ):
     """处理 Vertex 匿名通道的非流式内容生成请求。"""
     log.debug(f"[VERTEX ROUTER] Non-streaming request for model: {model}")
 
-    normalized_dict = model_to_dict(gemini_request)
+    try:
+        normalized_dict = normalize_gemini_rest_request(await request.json())
+    except GeminiRestRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
 
     if is_health_check_request(normalized_dict, format="gemini"):
         return JSONResponse(content=create_health_check_response(format="gemini"))
@@ -34,7 +40,10 @@ async def generate_content(
     normalized_dict["model"] = model
 
     from src.converter.gemini_fix import normalize_gemini_request
-    normalized_dict = await normalize_gemini_request(normalized_dict, mode="vertex")
+    try:
+        normalized_dict = await normalize_gemini_request(normalized_dict, mode="vertex")
+    except ImageInputError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image input: {exc}") from exc
 
     api_request = {
         "model": normalized_dict.pop("model"),
@@ -50,14 +59,19 @@ async def generate_content(
 @router.post("/vertex/v1beta/models/{model:path}:streamGenerateContent")
 @router.post("/vertex/v1/models/{model:path}:streamGenerateContent")
 async def stream_generate_content(
-    gemini_request: GeminiRequest,
+    request: Request,
     model: str = Path(..., description="Model name"),
     api_key: str = Depends(authenticate_gemini_flexible),
 ):
     """处理 Vertex 匿名通道的流式内容生成请求。"""
     log.debug(f"[VERTEX ROUTER] Streaming request for model: {model}")
 
-    normalized_dict = model_to_dict(gemini_request)
+    try:
+        normalized_dict = normalize_gemini_rest_request(await request.json())
+    except GeminiRestRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
     normalized_dict["model"] = model
 
     async def stream_generator():
