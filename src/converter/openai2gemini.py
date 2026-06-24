@@ -16,6 +16,7 @@ from src.converter.thoughtSignature_fix import (
     is_skip_thought_signature_placeholder,
     SKIP_THOUGHT_SIGNATURE_VALIDATOR,
 )
+from src.converter.image_input import image_url_to_inline_data
 from src.converter.utils import merge_system_messages
 
 from log import log
@@ -1353,18 +1354,7 @@ async def convert_openai_to_gemini_request(openai_request: Dict[str, Any]) -> Di
                 elif part.get("type") == "image_url":
                     image_url = part.get("image_url", {}).get("url")
                     if image_url:
-                        try:
-                            mime_type, base64_data = image_url.split(";")
-                            _, mime_type = mime_type.split(":")
-                            _, base64_data = base64_data.split(",")
-                            parts.append({
-                                "inlineData": {
-                                    "mimeType": mime_type,
-                                    "data": base64_data,
-                                }
-                            })
-                        except ValueError:
-                            continue
+                        parts.append({"inlineData": await image_url_to_inline_data(image_url)})
             if parts:
                 contents.append({"role": role, "parts": parts})
         elif content:

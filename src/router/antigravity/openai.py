@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 # 本地模块 - 配置和日志
 from config import get_anti_truncation_max_attempts
 from log import log
+from src.converter.image_input import ImageInputError
 
 # 本地模块 - 工具和认证
 from src.utils import (
@@ -102,14 +103,20 @@ async def chat_completions(
 
     # 转换为 Gemini 格式 (使用 converter)
     from src.converter.openai2gemini import convert_openai_to_gemini_request
-    gemini_dict = await convert_openai_to_gemini_request(normalized_dict)
+    try:
+        gemini_dict = await convert_openai_to_gemini_request(normalized_dict)
+    except ImageInputError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image input: {exc}") from exc
 
     # convert_openai_to_gemini_request 不包含 model 字段，需要手动添加
     gemini_dict["model"] = real_model
 
     # 规范化 Gemini 请求 (使用 antigravity 模式)
     from src.converter.gemini_fix import normalize_gemini_request
-    gemini_dict = await normalize_gemini_request(gemini_dict, mode="antigravity")
+    try:
+        gemini_dict = await normalize_gemini_request(gemini_dict, mode="antigravity")
+    except ImageInputError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image input: {exc}") from exc
 
     # 准备API请求格式 - 提取model并将其他字段放入request中
     api_request = {
