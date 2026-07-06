@@ -33,6 +33,7 @@ from src.task_manager import shutdown_all_tasks
 from src.httpx_client import close_http_clients
 from src.panel import router as panel_router
 from src.keeplive import keepalive_service
+from src.router.request_capture import capture_request_if_needed, should_buffer_request_body
 
 # 全局凭证管理器
 global_credential_manager = None
@@ -122,6 +123,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_capture_middleware(request, call_next):
+    body = None
+    if await should_buffer_request_body(request):
+        body = await request.body()
+
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        request._receive = receive
+
+    response = await call_next(request)
+    if body is not None:
+        await capture_request_if_needed(request, response.status_code, body)
+    return response
 
 # 挂载路由器
 # OpenAI兼容路由 - 处理OpenAI格式请求

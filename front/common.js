@@ -49,7 +49,11 @@ const AppState = {
         total: 0,
         completed: 0,
         failed: 0
-    }
+    },
+
+    // 请求体捕捉
+    requestCapturePollTimer: null,
+    requestCaptureAutoDownloaded: false
 };
 
 const ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD = 0.0002; // 0.02%
@@ -3305,6 +3309,10 @@ function populateConfigForm() {
     setConfigField('retry429MaxRetries', c.retry_429_max_retries || 20);
     setConfigField('retry429Interval', c.retry_429_interval || 0.1);
     document.getElementById('emptyOutputErrorEnabled').checked = Boolean(c.empty_output_error_enabled !== false);
+    updateRequestCaptureStatus(c.request_capture_status);
+    if (c.request_capture_status && c.request_capture_status.active) {
+        startRequestCapturePolling();
+    }
 
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
@@ -3399,6 +3407,167 @@ async function saveConfig() {
         }
     } catch (error) {
         showStatus(`网络错误: ${error.message}`, 'error');
+    }
+}
+
+function getRequestCaptureTypeLabel(captureType) {
+    return captureType === 'success' ? '无报错' : '400';
+}
+
+function updateRequestCaptureStatus(status) {
+    const statusEl = document.getElementById('requestCaptureStatus');
+    const startBtn = document.getElementById('requestCaptureStartBtn');
+    const stopBtn = document.getElementById('requestCaptureStopBtn');
+    const downloadBtn = document.getElementById('requestCaptureDownloadBtn');
+    const typeField = document.getElementById('requestCaptureType');
+    const countField = document.getElementById('requestCaptureCount');
+
+    const active = Boolean(status && status.active);
+    const completed = Boolean(status && status.completed);
+    const downloadAvailable = Boolean(status && status.download_available);
+    const captured = Number(status?.captured_count || 0);
+    const target = Number(status?.target_count || countField?.value || 3);
+    const typeLabel = getRequestCaptureTypeLabel(status?.capture_type || typeField?.value || '400');
+
+    if (startBtn) startBtn.disabled = active;
+    if (stopBtn) stopBtn.disabled = !active;
+    if (downloadBtn) downloadBtn.disabled = !downloadAvailable;
+    if (typeField) typeField.disabled = active;
+    if (countField) countField.disabled = active;
+    if (!statusEl) return;
+
+    if (active) {
+        statusEl.textContent = `正在捕捉 ${typeLabel} 请求：${captured}/${target}`;
+    } else if (completed) {
+        statusEl.textContent = `已完成 ${typeLabel} 请求捕捉：${captured}/${target}`;
+    } else if (downloadAvailable) {
+        statusEl.textContent = `已有 ${captured} 个请求体，可下载`;
+    } else {
+        statusEl.textContent = '未开始捕捉';
+    }
+}
+
+function startRequestCapturePolling() {
+    if (AppState.requestCapturePollTimer) return;
+    AppState.requestCapturePollTimer = setInterval(() => {
+        refreshRequestCaptureStatus({ autoDownload: true, silent: true });
+    }, 1000);
+}
+
+function stopRequestCapturePolling() {
+    if (!AppState.requestCapturePollTimer) return;
+    clearInterval(AppState.requestCapturePollTimer);
+    AppState.requestCapturePollTimer = null;
+}
+
+async function refreshRequestCaptureStatus(options = {}) {
+    try {
+        const response = await fetch('./config/request-capture/status', { headers: getAuthHeaders() });
+        const data = await response.json();
+        if (!response.ok) {
+            if (!options.silent) showStatus(data.detail || data.error || '获取捕捉状态失败', 'error');
+            return null;
+        }
+
+        const status = data.status || {};
+        updateRequestCaptureStatus(status);
+        if (!status.active) stopRequestCapturePolling();
+
+        if (
+            options.autoDownload &&
+            status.completed &&
+            status.download_available &&
+            !AppState.requestCaptureAutoDownloaded
+        ) {
+            AppState.requestCaptureAutoDownloaded = true;
+            await downloadRequestCapture({ auto: true });
+        }
+        return status;
+    } catch (error) {
+        if (!options.silent) showStatus(`获取捕捉状态失败: ${error.message}`, 'error');
+        return null;
+    }
+}
+
+async function startRequestCapture() {
+    const typeField = document.getElementById('requestCaptureType');
+    const countField = document.getElementById('requestCaptureCount');
+    const targetCount = Math.max(1, Math.min(20, parseInt(countField?.value) || 3));
+
+    try {
+        const response = await fetch('./config/request-capture/start', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+                capture_type: typeField?.value || '400',
+                target_count: targetCount
+            })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            showStatus(data.detail || data.error || '启动捕捉失败', 'error');
+            return;
+        }
+
+        AppState.requestCaptureAutoDownloaded = false;
+        updateRequestCaptureStatus(data.status);
+        startRequestCapturePolling();
+        showStatus('请求体捕捉已开始', 'success');
+    } catch (error) {
+        showStatus(`启动捕捉失败: ${error.message}`, 'error');
+    }
+}
+
+async function stopRequestCapture() {
+    try {
+        const response = await fetch('./config/request-capture/stop', {
+            method: 'POST',
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            showStatus(data.detail || data.error || '停止捕捉失败', 'error');
+            return;
+        }
+
+        stopRequestCapturePolling();
+        updateRequestCaptureStatus(data.status);
+        showStatus('请求体捕捉已停止', 'info');
+    } catch (error) {
+        showStatus(`停止捕捉失败: ${error.message}`, 'error');
+    }
+}
+
+async function downloadRequestCapture(options = {}) {
+    try {
+        const response = await fetch('./config/request-capture/download', {
+            headers: getAuthHeaders()
+        });
+
+        if (!response.ok) {
+            let message = '下载失败';
+            try {
+                const data = await response.json();
+                message = data.detail || data.error || message;
+            } catch (_) {}
+            showStatus(message, 'error');
+            return;
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const disposition = response.headers.get('content-disposition') || '';
+        const match = disposition.match(/filename="?([^"]+)"?/);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = match ? match[1] : `request_capture_${Date.now()}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        showStatus(options.auto ? '捕捉完成，已自动下载压缩包' : '请求体压缩包已下载', 'success');
+    } catch (error) {
+        showStatus(`下载请求体压缩包失败: ${error.message}`, 'error');
     }
 }
 

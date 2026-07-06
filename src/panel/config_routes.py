@@ -2,8 +2,10 @@
 配置路由模块 - 处理 /config/* 相关的HTTP请求
 """
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 import config
 from log import log
@@ -11,6 +13,12 @@ from src.keeplive import keepalive_service
 from src.models import ConfigSaveRequest
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token
+from src.router.request_capture import (
+    build_request_capture_zip,
+    get_request_capture_status,
+    start_request_capture,
+    stop_request_capture,
+)
 from .utils import get_env_locked_keys
 
 
@@ -51,6 +59,7 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["retry_429_enabled"] = await config.get_retry_429_enabled()
         current_config["retry_429_interval"] = await config.get_retry_429_interval()
         current_config["empty_output_error_enabled"] = await config.get_empty_output_error_enabled()
+        current_config["request_capture_status"] = await get_request_capture_status()
         # 抗截断配置
         current_config["anti_truncation_max_attempts"] = await config.get_anti_truncation_max_attempts()
 
@@ -89,6 +98,7 @@ async def get_config(token: str = Depends(verify_panel_token)):
                 current_config[key] = value
 
         current_config["empty_output_error_enabled"] = await config.get_empty_output_error_enabled()
+        current_config["request_capture_status"] = await get_request_capture_status()
 
         return JSONResponse(content={"config": current_config, "env_locked": list(env_locked_keys)})
 
@@ -239,3 +249,42 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
     except Exception as e:
         log.error(f"保存配置失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/request-capture/status")
+async def get_request_capture_task_status(token: str = Depends(verify_panel_token)):
+    """获取请求体捕捉任务状态。"""
+    return JSONResponse(content={"status": await get_request_capture_status()})
+
+
+@router.post("/request-capture/start")
+async def start_request_capture_task(payload: dict[str, Any], token: str = Depends(verify_panel_token)):
+    """开始一次请求体捕捉任务。"""
+    try:
+        capture_type = str(payload.get("capture_type", "400"))
+        target_count = int(payload.get("target_count", 3))
+        state = await start_request_capture(capture_type, target_count)
+        return JSONResponse(content={"status": state})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/request-capture/stop")
+async def stop_request_capture_task(token: str = Depends(verify_panel_token)):
+    """停止当前请求体捕捉任务。"""
+    return JSONResponse(content={"status": await stop_request_capture()})
+
+
+@router.get("/request-capture/download")
+async def download_request_capture_task(token: str = Depends(verify_panel_token)):
+    """下载当前请求体捕捉任务的 zip。"""
+    try:
+        content, filename = await build_request_capture_zip()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
