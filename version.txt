@@ -1,4 +1,4 @@
-full_hash=08ebfa73dbd6c519b86f607a648573ca3dc79172
-short_hash=08ebfa7
-message=fix antigravity credit summary progress
-date=2026-07-06 21:03:25 +0800
+full_hash=6ba8283ce03e1e444002cd9a0acf82882639e9c0
+short_hash=6ba8283
+message=add realtime request capture downloads
+date=2026-07-06 21:30:21 +0800
