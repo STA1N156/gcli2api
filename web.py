@@ -7,7 +7,7 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -125,21 +125,55 @@ app.add_middleware(
 )
 
 
-@app.middleware("http")
-async def request_capture_middleware(request, call_next):
-    body = None
-    if await should_buffer_request_body(request):
-        body = await request.body()
+class RequestCaptureMiddleware:
+    def __init__(self, app):
+        self.app = app
 
-        async def receive():
-            return {"type": "http.request", "body": body, "more_body": False}
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        request._receive = receive
+        request = Request(scope, receive)
+        if not await should_buffer_request_body(request):
+            await self.app(scope, receive, send)
+            return
 
-    response = await call_next(request)
-    if body is not None:
-        await capture_request_if_needed(request, response.status_code, body)
-    return response
+        body_parts = []
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                return
+            body_parts.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+
+        body = b"".join(body_parts)
+        body_sent = False
+        captured = False
+
+        async def replay_receive():
+            nonlocal body_sent
+            if not body_sent:
+                body_sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        async def capture_send(message):
+            nonlocal captured
+            if message["type"] == "http.response.start" and not captured:
+                captured = True
+                await capture_request_if_needed(
+                    Request(scope),
+                    int(message.get("status", 500)),
+                    body,
+                )
+            await send(message)
+
+        await self.app(scope, replay_receive, capture_send)
+
+
+app.add_middleware(RequestCaptureMiddleware)
 
 # 挂载路由器
 # OpenAI兼容路由 - 处理OpenAI格式请求
