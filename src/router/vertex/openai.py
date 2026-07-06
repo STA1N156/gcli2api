@@ -6,13 +6,13 @@ Vertex AI OpenAI-compatible Router - Handles OpenAI format requests via anonymou
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from log import log
 from src.converter.image_input import ImageInputError
 from src.utils import authenticate_bearer, get_base_model_from_feature_model
-from src.models import OpenAIChatCompletionRequest, model_to_dict
+from src.router.openai_request import parse_openai_chat_request
 from src.router.hi_check import is_health_check_request, create_health_check_response
 from src.router.stream_passthrough import (
     build_streaming_response_or_error,
@@ -25,19 +25,20 @@ router = APIRouter()
 
 @router.post("/vertex/v1/chat/completions")
 async def chat_completions(
-    openai_request: OpenAIChatCompletionRequest,
+    request: Request,
     token: str = Depends(authenticate_bearer),
 ):
     """处理 OpenAI 格式的聊天完成请求（流式和非流式），底层通过匿名 Vertex AI 端点。"""
-    log.debug(f"[VERTEX-OPENAI] Request for model: {openai_request.model}")
+    normalized_dict = await parse_openai_chat_request(request)
+    model_name = normalized_dict["model"]
 
-    normalized_dict = model_to_dict(openai_request)
+    log.debug(f"[VERTEX-OPENAI] Request for model: {model_name}")
 
     if is_health_check_request(normalized_dict, format="openai"):
         return JSONResponse(content=create_health_check_response(format="openai"))
 
-    real_model = get_base_model_from_feature_model(openai_request.model)
-    is_streaming = openai_request.stream
+    real_model = get_base_model_from_feature_model(model_name)
+    is_streaming = bool(normalized_dict.get("stream", False))
 
     normalized_dict["model"] = real_model
 

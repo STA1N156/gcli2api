@@ -3265,19 +3265,7 @@ function populateConfigForm() {
     document.getElementById('retry429Enabled').checked = Boolean(c.retry_429_enabled);
     setConfigField('retry429MaxRetries', c.retry_429_max_retries || 20);
     setConfigField('retry429Interval', c.retry_429_interval || 0.1);
-    const normalizeRetryCount = (value, fallback) => {
-        const parsed = parseInt(value, 10);
-        return Number.isNaN(parsed) || parsed < 0 ? fallback : parsed;
-    };
-    const emptyRetryFallback = normalizeRetryCount(c.empty_output_max_retries, 4);
-    setConfigField(
-        'geminicliEmptyOutputMaxRetries',
-        normalizeRetryCount(c.geminicli_empty_output_max_retries, emptyRetryFallback)
-    );
-    setConfigField(
-        'antigravityEmptyOutputMaxRetries',
-        normalizeRetryCount(c.antigravity_empty_output_max_retries, emptyRetryFallback)
-    );
+    document.getElementById('emptyOutputErrorEnabled').checked = Boolean(c.empty_output_error_enabled !== false);
 
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
@@ -3308,12 +3296,11 @@ async function saveConfig() {
     try {
         const getValue = (id, def = '') => document.getElementById(id)?.value.trim() || def;
         const getInt = (id, def = 0) => parseInt(document.getElementById(id)?.value) || def;
-        const getIntAllowZero = (id, def = 0) => {
-            const value = parseInt(document.getElementById(id)?.value, 10);
-            return Number.isNaN(value) ? def : value;
-        };
         const getFloat = (id, def = 0.0) => parseFloat(document.getElementById(id)?.value) || def;
-        const getChecked = (id, def = false) => document.getElementById(id)?.checked || def;
+        const getChecked = (id, def = false) => {
+            const field = document.getElementById(id);
+            return field ? field.checked : def;
+        };
 
         const config = {
             host: getValue('host', '0.0.0.0'),
@@ -3336,8 +3323,7 @@ async function saveConfig() {
             retry_429_enabled: getChecked('retry429Enabled'),
             retry_429_max_retries: getInt('retry429MaxRetries', 20),
             retry_429_interval: getFloat('retry429Interval', 0.1),
-            geminicli_empty_output_max_retries: getIntAllowZero('geminicliEmptyOutputMaxRetries', 4),
-            antigravity_empty_output_max_retries: getIntAllowZero('antigravityEmptyOutputMaxRetries', 4),
+            empty_output_error_enabled: getChecked('emptyOutputErrorEnabled', true),
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),

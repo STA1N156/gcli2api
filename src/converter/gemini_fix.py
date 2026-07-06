@@ -4,7 +4,6 @@ Gemini Format Utilities - 统一的 Gemini 格式处理和转换工具
 ────────────────────────────────────────────────────────────────
 """
 import json
-from math import e
 from typing import Any, Dict, Optional
 
 from log import log
@@ -300,7 +299,7 @@ def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str) -> Any:
 
         normalized_tool = tool.copy()
         custom_tool = normalized_tool.get("custom")
-        if isinstance(custom_tool, dict) and "input_schema" not in custom_tool:
+        if isinstance(custom_tool, dict) and not custom_tool.get("input_schema"):
             normalized_custom = custom_tool.copy()
             normalized_custom["input_schema"] = {"type": "object", "properties": {}}
             normalized_tool["custom"] = normalized_custom
@@ -309,26 +308,25 @@ def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str) -> Any:
         if declarations is None:
             declarations = normalized_tool.get("function_declarations")
         if isinstance(declarations, list):
-            normalized_declarations = []
             for declaration in declarations:
                 if not isinstance(declaration, dict):
-                    normalized_declarations.append(declaration)
+                    normalized_tools.append({"custom": declaration})
                     continue
-                normalized_declaration = declaration.copy()
-                if (
-                    "parametersJsonSchema" not in normalized_declaration
-                    and "parameters_json_schema" in normalized_declaration
-                ):
-                    normalized_declaration["parametersJsonSchema"] = normalized_declaration.pop("parameters_json_schema")
 
-                if "parametersJsonSchema" not in normalized_declaration:
-                    normalized_declaration["parametersJsonSchema"] = {
-                        "type": "object",
-                        "properties": {},
+                schema = (
+                    declaration.get("parametersJsonSchema")
+                    or declaration.get("parameters_json_schema")
+                    or declaration.get("parameters")
+                    or {"type": "object", "properties": {}}
+                )
+                normalized_tools.append({
+                    "custom": {
+                        "name": declaration.get("name", ""),
+                        "description": declaration.get("description", ""),
+                        "input_schema": schema,
                     }
-                normalized_declarations.append(normalized_declaration)
-            normalized_tool.pop("function_declarations", None)
-            normalized_tool["functionDeclarations"] = normalized_declarations
+                })
+            continue
 
         normalized_tools.append(normalized_tool)
 
@@ -625,7 +623,8 @@ async def normalize_gemini_request(
     system_instruction = result.get("systemInstruction") or result.get("system_instructions")
     
     # 记录原始请求
-    log.debug(f"[GEMINI_FIX] 原始请求 - 模型: {model}, mode: {mode}, generationConfig: {generation_config}")
+    if log.is_debug_enabled():
+        log.debug(f"[GEMINI_FIX] 原始请求 - 模型: {model}, mode: {mode}, generationConfig: {generation_config}")
 
     # 获取配置值
     return_thoughts = await get_return_thoughts_to_frontend()
@@ -854,7 +853,15 @@ async def normalize_gemini_request(
                             if isinstance(text_value, list):
                                 # 如果是列表，合并为字符串
                                 log.warning(f"[GEMINI_FIX] text 字段是列表，自动合并: {text_value}")
-                                part["text"] = " ".join(str(t) for t in text_value if t)
+                                text_parts = []
+                                for t in text_value:
+                                    if isinstance(t, dict) and "text" in t:
+                                        text_parts.append(str(t["text"]))
+                                    elif isinstance(t, str):
+                                        text_parts.append(t)
+                                    elif t is not None:
+                                        text_parts.append(str(t))
+                                part["text"] = " ".join(text_parts)
                             elif isinstance(text_value, str):
                                 # 清理尾随空格
                                 part["text"] = text_value.rstrip()

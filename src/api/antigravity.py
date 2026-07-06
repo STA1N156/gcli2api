@@ -18,7 +18,7 @@ from config import (
     get_antigravity_api_url,
     get_antigravity_stream2nostream,
     get_auto_ban_error_codes,
-    get_antigravity_empty_output_max_retries,
+    get_empty_output_error_enabled,
 )
 from log import log
 
@@ -357,7 +357,7 @@ async def stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
-    empty_output_max_retries = await get_antigravity_empty_output_max_retries()
+    empty_output_error_enabled = await get_empty_output_error_enabled()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -394,7 +394,6 @@ async def stream_request(
         return True
 
     attempt = 0
-    empty_output_retries = 0
     while True:
         success_recorded = False  # 标记是否已记录成功
         need_retry = False  # 标记是否需要重试
@@ -475,21 +474,18 @@ async def stream_request(
                 else:
                     # 不是Response，说明是真流，直接yield返回
                     # 记录原始chunk内容（用于调试）
-                    if isinstance(chunk, bytes):
-                        log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(bytes): {chunk}")
-                    else:
-                        log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(str): {chunk}")
+                    if log.is_debug_enabled():
+                        if isinstance(chunk, bytes):
+                            log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(bytes): {chunk}")
+                        else:
+                            log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(str): {chunk}")
 
                     # 只在第一个chunk时记录成功
                     if not success_recorded:
-                        buffered_chunks.append(chunk)
-                        if not stream_chunk_has_visible_output(chunk):
-                            continue
-
-                        if empty_output_retries > 0:
-                            log.empty_retry(
-                                f"[ANTIGRAVITY STREAM] 重试成功{empty_output_retries}/{empty_output_max_retries}"
-                            )
+                        if empty_output_error_enabled:
+                            buffered_chunks.append(chunk)
+                            if not stream_chunk_has_visible_output(chunk):
+                                continue
 
                         await record_api_call_success(
                             credential_manager, current_file, mode="antigravity", model_name=model_name
@@ -497,9 +493,12 @@ async def stream_request(
                         success_recorded = True
                         log.debug(f"[ANTIGRAVITY STREAM] 开始接收流式响应，模型: {model_name}")
 
-                        for buffered_chunk in buffered_chunks:
-                            yield buffered_chunk
-                        buffered_chunks = []
+                        if empty_output_error_enabled:
+                            for buffered_chunk in buffered_chunks:
+                                yield buffered_chunk
+                            buffered_chunks = []
+                        else:
+                            yield chunk
                     else:
                         yield chunk
 
@@ -508,22 +507,14 @@ async def stream_request(
                 log.debug(f"[ANTIGRAVITY STREAM] 流式响应完成，模型: {model_name}")
                 return
             elif not need_retry:
-                if empty_output_retries < empty_output_max_retries:
-                    empty_output_retries += 1
-                    continue
-
-                if empty_output_retries > 0:
-                    log.empty_retry(
-                        f"[ANTIGRAVITY STREAM] 失败{empty_output_retries}/{empty_output_max_retries}"
+                if empty_output_error_enabled:
+                    log.warning(f"[ANTIGRAVITY STREAM] Model returned empty output, credential: {current_file}")
+                    await record_api_call_error(
+                        credential_manager, current_file, 461,
+                        None, mode="antigravity", model_name=model_name,
+                        error_message="模型输出为空，请检查是否含有敏感内容"
                     )
-
-                log.warning(f"[ANTIGRAVITY STREAM] Model returned empty output, credential: {current_file}")
-                await record_api_call_error(
-                    credential_manager, current_file, 461,
-                    None, mode="antigravity", model_name=model_name,
-                    error_message="模型输出为空，请检查是否含有敏感内容"
-                )
-                yield build_empty_model_output_response()
+                    yield build_empty_model_output_response()
                 return
             
             # 统一处理重试
@@ -657,7 +648,7 @@ async def non_stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
-    empty_output_max_retries = await get_antigravity_empty_output_max_retries()
+    empty_output_error_enabled = await get_empty_output_error_enabled()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -694,7 +685,6 @@ async def non_stream_request(
         return True
 
     attempt = 0
-    empty_output_retries = 0
     while True:
         need_retry = False  # 标记是否需要重试
         
@@ -710,16 +700,7 @@ async def non_stream_request(
 
             # 成功
             if status_code == 200:
-                if is_empty_model_output(response.content):
-                    if empty_output_retries < empty_output_max_retries:
-                        empty_output_retries += 1
-                        continue
-
-                    if empty_output_retries > 0:
-                        log.empty_retry(
-                            f"[ANTIGRAVITY] 失败{empty_output_retries}/{empty_output_max_retries}"
-                        )
-
+                if empty_output_error_enabled and is_empty_model_output(response.content):
                     log.warning(f"[ANTIGRAVITY] Model returned empty output, credential: {current_file}")
                     await record_api_call_error(
                         credential_manager, current_file, 461,
@@ -727,11 +708,6 @@ async def non_stream_request(
                         error_message="模型输出为空，请检查是否含有敏感内容"
                     )
                     return build_empty_model_output_response()
-
-                if empty_output_retries > 0:
-                    log.empty_retry(
-                        f"[ANTIGRAVITY] 重试成功{empty_output_retries}/{empty_output_max_retries}"
-                    )
 
                 await record_api_call_success(
                     credential_manager, current_file, mode="antigravity", model_name=model_name
@@ -900,7 +876,8 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
 
         if response.status_code == 200:
             data = response.json()
-            log.debug(f"[ANTIGRAVITY] Raw models response: {json.dumps(data, ensure_ascii=False)[:500]}")
+            if log.is_debug_enabled():
+                log.debug(f"[ANTIGRAVITY] Raw models response: {json.dumps(data, ensure_ascii=False)[:500]}")
 
             # 转换为 OpenAI 格式的模型列表，使用 Model 类
             model_list = []
@@ -984,7 +961,8 @@ async def fetch_quota_info(access_token: str) -> Dict[str, Any]:
 
         if response.status_code == 200:
             data = response.json()
-            log.debug(f"[ANTIGRAVITY QUOTA] Raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
+            if log.is_debug_enabled():
+                log.debug(f"[ANTIGRAVITY QUOTA] Raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
 
             quota_info = {}
 

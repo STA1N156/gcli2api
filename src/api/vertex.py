@@ -13,7 +13,9 @@ import string
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi import Response
+from config import get_empty_output_error_enabled
 from log import log
+from src.api.empty_output import build_empty_model_output_response, is_empty_model_output_payload
 from src.converter.thoughtSignature_fix import decode_tool_id_and_signature
 
 try:
@@ -376,7 +378,8 @@ def _build_variables(model: str, gemini_payload: Dict[str, Any]) -> Dict[str, An
         gemini_payload["contents"] = _drop_invalid_tool_turns(gemini_payload["contents"])
         gemini_payload["contents"] = _fix_thought_signatures(gemini_payload["contents"])
         gemini_payload["contents"] = _fix_function_response_names(gemini_payload["contents"])
-    log.debug(f"[VERTEX] contents to upstream: {json.dumps(gemini_payload.get('contents', []), ensure_ascii=False)}")
+    if log.is_debug_enabled():
+        log.debug(f"[VERTEX] contents to upstream: {json.dumps(gemini_payload.get('contents', []), ensure_ascii=False)}")
     vars_: Dict[str, Any] = {"model": model}
     for field in _SUPPORTED_VAR_FIELDS:
         if field in gemini_payload:
@@ -614,6 +617,7 @@ async def stream_request(
 
     model = body.get("model", "")
     gemini_payload = body.get("request", {})
+    empty_output_error_enabled = await get_empty_output_error_enabled()
 
     max_retries = 3
     recaptcha_token: Optional[str] = None
@@ -771,11 +775,9 @@ async def stream_request(
             continue
 
         if not content_yielded and not need_retry:
-            # 流结束但没内容，换 token 重试
-            if attempt < max_retries:
-                recaptcha_token = None
-                await asyncio.sleep(1)
-                continue
+            if empty_output_error_enabled:
+                yield build_empty_model_output_response()
+            return
 
         break
 
@@ -804,6 +806,7 @@ async def non_stream_request(
 
     model = body.get("model", "")
     gemini_payload = body.get("request", {})
+    empty_output_error_enabled = await get_empty_output_error_enabled()
 
     max_retries = 3
 
@@ -869,6 +872,11 @@ async def non_stream_request(
         # 解析响应
         result = _build_non_stream_response(raw_text)
         if result is None:
+            if not raw_text.strip():
+                if empty_output_error_enabled:
+                    return build_empty_model_output_response()
+                return Response(content=b"", status_code=200, media_type="application/json")
+
             log.error(f"[VERTEX NON-STREAM] parse failed: {raw_text[:300]}")
             if attempt < max_retries:
                 await asyncio.sleep(1)
@@ -898,6 +906,9 @@ async def non_stream_request(
                 status_code=429,
                 media_type="application/json",
             )
+
+        if empty_output_error_enabled and is_empty_model_output_payload(result):
+            return build_empty_model_output_response()
 
         return Response(
             content=json.dumps(result, ensure_ascii=False).encode("utf-8"),

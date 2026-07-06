@@ -1303,7 +1303,20 @@ async def convert_openai_to_gemini_request(openai_request: Dict[str, Any]) -> Di
 
             # 如果有文本内容,先添加文本
             if content:
-                parts.append({"text": content})
+                if isinstance(content, list):
+                    for content_part in content:
+                        if isinstance(content_part, dict):
+                            text = content_part.get("text", "")
+                            if text:
+                                parts.append({"text": text})
+                        elif isinstance(content_part, str):
+                            parts.append({"text": content_part})
+                elif isinstance(content, dict):
+                    text = content.get("text", "")
+                    if text:
+                        parts.append({"text": text})
+                else:
+                    parts.append({"text": str(content)})
 
             # 添加每个工具调用
             for tool_call in tool_calls:

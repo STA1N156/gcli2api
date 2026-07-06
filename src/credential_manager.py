@@ -193,11 +193,12 @@ class CredentialManager:
             if mode == "antigravity":
                 credential_data["enable_credit"] = bool(state.get("enable_credit", False))
 
-            log.info(
-                "Session route selected: "
-                f"session={self._session_log_id(binding_key)}, "
-                f"credential={filename}, mode={mode}, model={model_name}"
-            )
+            if log.is_debug_enabled():
+                log.debug(
+                    "Session route selected: "
+                    f"session={self._session_log_id(binding_key)}, "
+                    f"credential={filename}, mode={mode}, model={model_name}"
+                )
             return filename, credential_data
 
         return None
@@ -228,12 +229,13 @@ class CredentialManager:
 
         if bypass_session_routing:
             await self._forget_session_binding(binding_key)
-            log.info(
-                "Session route bypassed for retry: "
-                f"session={self._session_log_id(binding_key)}, "
-                f"excluded={os.path.basename(exclude_credential)}, "
-                f"mode={mode}, model={model_name}"
-            )
+            if log.is_debug_enabled():
+                log.debug(
+                    "Session route bypassed for retry: "
+                    f"session={self._session_log_id(binding_key)}, "
+                    f"excluded={os.path.basename(exclude_credential)}, "
+                    f"mode={mode}, model={model_name}"
+                )
 
         if binding_key and not bypass_session_routing:
             bound_filename = await self._get_session_binding(binding_key)
@@ -249,20 +251,22 @@ class CredentialManager:
                     if await self._should_refresh_token(credential_data):
                         refreshed_data = await self._refresh_token(credential_data, filename, mode=mode)
                         if refreshed_data:
-                            log.info(
-                                "Session route hit after refresh: "
-                                f"session={self._session_log_id(binding_key)}, "
-                                f"credential={filename}, mode={mode}, model={model_name}"
-                            )
+                            if log.is_debug_enabled():
+                                log.debug(
+                                    "Session route hit after refresh: "
+                                    f"session={self._session_log_id(binding_key)}, "
+                                    f"credential={filename}, mode={mode}, model={model_name}"
+                                )
                             await self._remember_session_binding(binding_key, filename)
                             return filename, refreshed_data
                         await self._forget_session_binding(binding_key)
                     else:
-                        log.info(
-                            "Session route hit: "
-                            f"session={self._session_log_id(binding_key)}, "
-                            f"credential={filename}, mode={mode}, model={model_name}"
-                        )
+                        if log.is_debug_enabled():
+                            log.debug(
+                                "Session route hit: "
+                                f"session={self._session_log_id(binding_key)}, "
+                                f"credential={filename}, mode={mode}, model={model_name}"
+                            )
                         await self._remember_session_binding(binding_key, filename)
                         return filename, credential_data
                 else:

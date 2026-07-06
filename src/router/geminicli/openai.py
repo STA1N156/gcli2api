@@ -48,7 +48,7 @@ from src.router.stream_passthrough import (
 )
 
 # 本地模块 - 数据模型
-from src.models import OpenAIChatCompletionRequest, model_to_dict
+from src.router.openai_request import parse_openai_chat_request
 from src.session_affinity import extract_cache_session_key
 
 # 本地模块 - 任务管理
@@ -64,7 +64,6 @@ router = APIRouter()
 
 @router.post("/v1/chat/completions")
 async def chat_completions(
-    openai_request: OpenAIChatCompletionRequest,
     request: Request,
     token: str = Depends(authenticate_bearer)
 ):
@@ -75,10 +74,10 @@ async def chat_completions(
         openai_request: OpenAI格式的请求体
         token: Bearer认证令牌
     """
-    log.debug(f"[GEMINICLI-OPENAI] Request for model: {openai_request.model}")
+    normalized_dict = await parse_openai_chat_request(request)
+    model_name = normalized_dict["model"]
 
-    # 转换为字典
-    normalized_dict = model_to_dict(openai_request)
+    log.debug(f"[GEMINICLI-OPENAI] Request for model: {model_name}")
     cache_session_key = extract_cache_session_key(normalized_dict, request.headers)
 
     # 健康检查
@@ -87,12 +86,12 @@ async def chat_completions(
         return JSONResponse(content=response)
 
     # 处理模型名称和功能检测
-    use_fake_streaming = is_fake_streaming_model(openai_request.model)
-    use_anti_truncation = is_anti_truncation_model(openai_request.model)
-    real_model = get_base_model_from_feature_model(openai_request.model)
+    use_fake_streaming = is_fake_streaming_model(model_name)
+    use_anti_truncation = is_anti_truncation_model(model_name)
+    real_model = get_base_model_from_feature_model(model_name)
 
     # 获取流式标志
-    is_streaming = openai_request.stream
+    is_streaming = bool(normalized_dict.get("stream", False))
 
     # 对于抗截断模型的非流式请求，后端会使用流式抗截断并收集为非流式响应
     if use_anti_truncation and not is_streaming:
@@ -189,7 +188,8 @@ async def chat_completions(
 
         try:
             gemini_response = json.loads(response_body)
-            log.debug(f"OpenAI fake stream Gemini response: {gemini_response}")
+            if log.is_debug_enabled():
+                log.debug(f"OpenAI fake stream Gemini response: {gemini_response}")
 
             # 检查是否是错误响应（有些错误可能status_code是200但包含error字段）
             if "error" in gemini_response:
@@ -208,15 +208,17 @@ async def chat_completions(
             # 使用统一的解析函数
             content, reasoning_content, finish_reason, images = parse_response_for_fake_stream(gemini_response)
 
-            log.debug(f"OpenAI extracted content: {content}")
-            log.debug(f"OpenAI extracted reasoning: {reasoning_content[:100] if reasoning_content else 'None'}...")
-            log.debug(f"OpenAI extracted images count: {len(images)}")
+            if log.is_debug_enabled():
+                log.debug(f"OpenAI extracted content: {content}")
+                log.debug(f"OpenAI extracted reasoning: {reasoning_content[:100] if reasoning_content else 'None'}...")
+                log.debug(f"OpenAI extracted images count: {len(images)}")
 
             # 构建响应块
             chunks = build_openai_fake_stream_chunks(content, reasoning_content, finish_reason, real_model, images)
             for idx, chunk in enumerate(chunks):
-                chunk_json = json.dumps(chunk)
-                log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
+                chunk_json = json.dumps(chunk, ensure_ascii=False, separators=(",", ":"))
+                if log.is_debug_enabled():
+                    log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
                 yield f"data: {chunk_json}\n\n".encode()
 
         except Exception as e:

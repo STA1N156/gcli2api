@@ -29,7 +29,6 @@ VERTEX_MODELS = [
 
 # 本地模块 - 基础路由工具
 from src.router.base_router import create_gemini_model_list, create_openai_model_list
-from src.models import model_to_dict
 from log import log
 
 
@@ -52,8 +51,4 @@ async def list_gemini_models(token: str = Depends(authenticate_flexible)):
 @router.get("/vertex/v1/models")
 async def list_openai_models(token: str = Depends(authenticate_flexible)):
     log.info("[VERTEX MODEL LIST] 返回 OpenAI 格式")
-    model_list = create_openai_model_list(VERTEX_MODELS, owned_by="google")
-    return JSONResponse(content={
-        "object": "list",
-        "data": [model_to_dict(model) for model in model_list.data]
-    })
+    return JSONResponse(content=create_openai_model_list(VERTEX_MODELS, owned_by="google"))

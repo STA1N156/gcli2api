@@ -2369,17 +2369,11 @@
                             </div>
 
                             <div class="form-group">
-                                <label for="geminicliEmptyOutputMaxRetries">GCLI 空回重试次数:</label>
-                                <input type="number" id="geminicliEmptyOutputMaxRetries" class="config-input" min="0"
-                                    max="20" />
-                                <small class="config-note">GCLI 模型返回空内容或空格时立刻重试的次数，默认4；设为0则空回直接返回461</small>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="antigravityEmptyOutputMaxRetries">Antigravity 空回重试次数:</label>
-                                <input type="number" id="antigravityEmptyOutputMaxRetries" class="config-input" min="0"
-                                    max="20" />
-                                <small class="config-note">Antigravity 模型返回空内容或空格时立刻重试的次数，默认4；设为0则空回直接返回461</small>
+                                <label>
+                                    <input type="checkbox" id="emptyOutputErrorEnabled" class="config-checkbox" />
+                                    空回报错 461
+                                </label>
+                                <small class="config-note">开启后模型空回会返回 461；关闭后按正常流式/非流式空响应返回，不再自动重试</small>
                             </div>
                         </div>
 
@@ -2525,7 +2519,6 @@
                         <option value="all">全部</option>
                         <option value="ERROR">错误</option>
                         <option value="WARNING">警告</option>
-                        <option value="EMPTY_RETRY">空回重试</option>
                         <option value="INFO">信息</option>
                         <option value="DEBUG">调试</option>
                     </select>

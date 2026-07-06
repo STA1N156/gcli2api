@@ -10,7 +10,7 @@ from collections import deque
 import atexit
 
 # 日志级别定义
-LOG_LEVELS = {"debug": 0, "info": 1, "warning": 2, "empty_retry": 2, "error": 3, "critical": 4}
+LOG_LEVELS = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
 
 # 文件写入状态标志（仅由 writer 线程修改，无需锁保护）
 _file_writing_disabled = False
@@ -36,15 +36,17 @@ _cached_log_level: int = LOG_LEVELS["info"]
 _cached_log_file: str = "log.txt"
 # ENABLE_LOG=0/false/no/off 时彻底关闭日志
 _log_enabled: bool = True
+_log_console_enabled: bool = True
 
 
 def _refresh_config():
     """从环境变量刷新缓存配置（模块加载时及需要时调用）"""
-    global _cached_log_level, _cached_log_file, _log_enabled
+    global _cached_log_level, _cached_log_file, _log_enabled, _log_console_enabled
     level = os.getenv("LOG_LEVEL", "info").lower()
     _cached_log_level = LOG_LEVELS.get(level, LOG_LEVELS["info"])
     _cached_log_file = os.getenv("LOG_FILE", "log.txt")
     _log_enabled = os.getenv("ENABLE_LOG", "1").strip().lower() not in ("0", "false", "no", "off")
+    _log_console_enabled = os.getenv("LOG_CONSOLE", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _get_current_log_level() -> int:
@@ -243,10 +245,11 @@ def _log(level: str, message: str):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = f"[{timestamp}] [{level.upper()}] {message}"
 
-    if level in ("error", "critical"):
-        print(entry, file=sys.stderr)
-    else:
-        print(entry)
+    if _log_console_enabled:
+        if level in ("error", "critical"):
+            print(entry, file=sys.stderr)
+        else:
+            print(entry)
 
     _write_to_file(entry)
 
@@ -271,11 +274,11 @@ class Logger:
     def debug(self, message: str):
         _log("debug", message)
 
+    def is_debug_enabled(self) -> bool:
+        return _log_enabled and LOG_LEVELS["debug"] >= _cached_log_level
+
     def info(self, message: str):
         _log("info", message)
-
-    def empty_retry(self, message: str):
-        _log("empty_retry", message)
 
     def warning(self, message: str):
         _log("warning", message)

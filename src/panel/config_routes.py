@@ -17,18 +17,8 @@ from .utils import get_env_locked_keys
 # 创建路由器
 router = APIRouter(prefix="/config", tags=["config"])
 
-EMPTY_OUTPUT_RETRY_KEYS = (
-    "empty_output_max_retries",
-    "geminicli_empty_output_max_retries",
-    "antigravity_empty_output_max_retries",
-)
-
-
-def _normalize_nonnegative_int(value, default: int) -> int:
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return default
+def _is_removed_empty_output_retry_key(key: str) -> bool:
+    return "empty_output" in key and key.endswith("_max_retries")
 
 
 @router.get("/get")
@@ -60,9 +50,7 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["retry_429_max_retries"] = await config.get_retry_429_max_retries()
         current_config["retry_429_enabled"] = await config.get_retry_429_enabled()
         current_config["retry_429_interval"] = await config.get_retry_429_interval()
-        current_config["empty_output_max_retries"] = await config.get_empty_output_max_retries()
-        current_config["geminicli_empty_output_max_retries"] = await config.get_geminicli_empty_output_max_retries()
-        current_config["antigravity_empty_output_max_retries"] = await config.get_antigravity_empty_output_max_retries()
+        current_config["empty_output_error_enabled"] = await config.get_empty_output_error_enabled()
         # 抗截断配置
         current_config["anti_truncation_max_attempts"] = await config.get_anti_truncation_max_attempts()
 
@@ -95,13 +83,12 @@ async def get_config(token: str = Depends(verify_panel_token)):
 
         # 合并存储系统配置（不覆盖环境变量）
         for key, value in storage_config.items():
+            if _is_removed_empty_output_retry_key(key):
+                continue
             if key not in env_locked_keys:
                 current_config[key] = value
 
-        # Return normalized retry values so stale empty config does not blank the inputs.
-        current_config["empty_output_max_retries"] = await config.get_empty_output_max_retries()
-        current_config["geminicli_empty_output_max_retries"] = await config.get_geminicli_empty_output_max_retries()
-        current_config["antigravity_empty_output_max_retries"] = await config.get_antigravity_empty_output_max_retries()
+        current_config["empty_output_error_enabled"] = await config.get_empty_output_error_enabled()
 
         return JSONResponse(content={"config": current_config, "env_locked": list(env_locked_keys)})
 
@@ -121,17 +108,9 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         log.debug(f"收到的password值: {new_config.get('password', 'NOT_FOUND')}")
 
         # 验证配置项
-        empty_retry_defaults = {
-            "empty_output_max_retries": await config.get_empty_output_max_retries(),
-            "geminicli_empty_output_max_retries": await config.get_geminicli_empty_output_max_retries(),
-            "antigravity_empty_output_max_retries": await config.get_antigravity_empty_output_max_retries(),
-        }
-        for retry_key in EMPTY_OUTPUT_RETRY_KEYS:
-            if retry_key in new_config:
-                new_config[retry_key] = _normalize_nonnegative_int(
-                    new_config[retry_key],
-                    empty_retry_defaults[retry_key],
-                )
+        for key in list(new_config):
+            if _is_removed_empty_output_retry_key(key):
+                new_config.pop(key, None)
 
         if "retry_429_max_retries" in new_config:
             if (
@@ -153,17 +132,9 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             except (ValueError, TypeError):
                 raise HTTPException(status_code=400, detail="429重试间隔必须是有效的数字")
 
-        if "empty_output_max_retries" in new_config:
-            if (
-                not isinstance(new_config["empty_output_max_retries"], int)
-                or new_config["empty_output_max_retries"] < 0
-            ):
-                raise HTTPException(status_code=400, detail="空回自动重试次数必须是大于等于0的整数")
-
-        for retry_key in ("geminicli_empty_output_max_retries", "antigravity_empty_output_max_retries"):
-            if retry_key in new_config:
-                if not isinstance(new_config[retry_key], int) or new_config[retry_key] < 0:
-                    raise HTTPException(status_code=400, detail="空回自动重试次数必须是大于等于0的整数")
+        if "empty_output_error_enabled" in new_config:
+            if not isinstance(new_config["empty_output_error_enabled"], bool):
+                raise HTTPException(status_code=400, detail="空回报错开关必须是布尔值")
 
         if "anti_truncation_max_attempts" in new_config:
             if (

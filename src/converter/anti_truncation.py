@@ -276,7 +276,8 @@ class AntiTruncationStreamProcessor:
                         # 检查是否是 [DONE] 标记
                         if payload_str.strip() == "[DONE]":
                             if found_done_marker:
-                                log.info("Anti-truncation: Found [done] marker, output complete")
+                                if log.is_debug_enabled():
+                                    log.debug("Anti-truncation: Found [done] marker, output complete")
                                 yield line
                                 # 清理内存
                                 chunk_buffer.close()
@@ -335,7 +336,8 @@ class AntiTruncationStreamProcessor:
                 if not found_done_marker:
                     accumulated_text = self._get_collected_text()
                     if self._check_done_marker_in_text(accumulated_text):
-                        log.info("Anti-truncation: Found [done] marker in accumulated content")
+                        if log.is_debug_enabled():
+                            log.debug("Anti-truncation: Found [done] marker in accumulated content")
                         # 立即清理内容释放内存
                         self._clear_content()
                         yield b"data: [DONE]\n\n"
@@ -345,9 +347,10 @@ class AntiTruncationStreamProcessor:
                 if self.current_attempt < self.max_attempts:
                     accumulated_text = self._get_collected_text()
                     total_length = len(accumulated_text)
-                    log.info(
-                        f"Anti-truncation: No [done] marker found in output (length: {total_length}), preparing continuation (attempt {self.current_attempt + 1})"
-                    )
+                    if log.is_debug_enabled():
+                        log.debug(
+                            f"Anti-truncation: No [done] marker found in output (length: {total_length}), preparing continuation (attempt {self.current_attempt + 1})"
+                        )
                     if total_length > 100:
                         log.debug(
                             f"Anti-truncation: Current collected content ends with: ...{accumulated_text[-100:]}"
@@ -584,8 +587,9 @@ class AntiTruncationStreamProcessor:
             if "[done]" not in line_str.lower():
                 return line  # 没有[done]标记，直接返回原始行
 
-            log.info(f"Anti-truncation: Attempting to remove [done] marker from line")
-            log.debug(f"Anti-truncation: Original line (first 200 chars): {line_str[:200]}")
+            if log.is_debug_enabled():
+                log.debug("Anti-truncation: Attempting to remove [done] marker from line")
+                log.debug(f"Anti-truncation: Original line (first 200 chars): {line_str[:200]}")
 
             # 编译正则表达式，匹配[done]标记（忽略大小写，包括可能的空白字符）
             done_pattern = re.compile(r"\s*\[done\]\s*", re.IGNORECASE)
@@ -605,7 +609,8 @@ class AntiTruncationStreamProcessor:
 
             # 处理Gemini格式
             if "candidates" in inner_data:
-                log.info(f"Anti-truncation: Processing Gemini format to remove [done] marker")
+                if log.is_debug_enabled():
+                    log.debug("Anti-truncation: Processing Gemini format to remove [done] marker")
                 modified_inner = inner_data.copy()
                 modified_inner["candidates"] = []
 

@@ -43,6 +43,7 @@ from src.router.stream_passthrough import (
     build_streaming_response_or_error,
     prepend_async_item,
     read_first_async_item,
+    unwrap_gemini_response_sse_chunk,
 )
 from src.router.gemini_rest_request import GeminiRestRequestError, normalize_gemini_rest_request
 
@@ -208,7 +209,8 @@ async def stream_generate_content(
 
         try:
             response_data = json.loads(response_body)
-            log.debug(f"Gemini fake stream response data: {response_data}")
+            if log.is_debug_enabled():
+                log.debug(f"Gemini fake stream response data: {response_data}")
 
             # 检查是否是错误响应（有些错误可能status_code是200但包含error字段）
             if "error" in response_data:
@@ -220,15 +222,17 @@ async def stream_generate_content(
             # 使用统一的解析函数
             content, reasoning_content, finish_reason, images = parse_response_for_fake_stream(response_data)
 
-            log.debug(f"Gemini extracted content: {content}")
-            log.debug(f"Gemini extracted reasoning: {reasoning_content[:100] if reasoning_content else 'None'}...")
-            log.debug(f"Gemini extracted images count: {len(images)}")
+            if log.is_debug_enabled():
+                log.debug(f"Gemini extracted content: {content}")
+                log.debug(f"Gemini extracted reasoning: {reasoning_content[:100] if reasoning_content else 'None'}...")
+                log.debug(f"Gemini extracted images count: {len(images)}")
 
             # 构建响应块
             chunks = build_gemini_fake_stream_chunks(content, reasoning_content, finish_reason, images)
             for idx, chunk in enumerate(chunks):
-                chunk_json = json.dumps(chunk)
-                log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
+                chunk_json = json.dumps(chunk, ensure_ascii=False, separators=(",", ":"))
+                if log.is_debug_enabled():
+                    log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
                 yield f"data: {chunk_json}\n\n".encode()
 
         except Exception as e:
@@ -291,42 +295,9 @@ async def stream_generate_content(
             enable_prefill_mode=True,
         )
 
-        # 迭代 process_stream() 生成器，并展开 response 包装
+        # 迭代 process_stream() 生成器，仅在确实有 response 包装时才拆 JSON
         async for chunk in processor.process_stream():
-            if isinstance(chunk, (str, bytes)):
-                chunk_str = chunk.decode('utf-8') if isinstance(chunk, bytes) else chunk
-
-                # 解析并展开 response 包装
-                if chunk_str.startswith("data: "):
-                    json_str = chunk_str[6:].strip()
-
-                    # 跳过 [DONE] 标记
-                    if json_str == "[DONE]":
-                        yield chunk
-                        continue
-
-                    try:
-                        # 解析JSON
-                        data = json.loads(json_str)
-
-                        # 展开 response 包装
-                        if "response" in data and "candidates" not in data:
-                            log.debug(f"[GEMINICLI-ANTI-TRUNCATION] 展开response包装")
-                            unwrapped_data = data["response"]
-                            # 重新构建SSE格式
-                            yield f"data: {json.dumps(unwrapped_data, ensure_ascii=False)}\n\n".encode('utf-8')
-                        else:
-                            # 已经是展开的格式，直接返回
-                            yield chunk
-                    except json.JSONDecodeError:
-                        # JSON解析失败，直接返回原始chunk
-                        yield chunk
-                else:
-                    # 不是SSE格式，直接返回
-                    yield chunk
-            else:
-                # 其他类型，直接返回
-                yield chunk
+            yield unwrap_gemini_response_sse_chunk(chunk)
 
     # ========== 普通流式生成器 ==========
     async def normal_stream_generator():
@@ -343,8 +314,7 @@ async def stream_generate_content(
             "cache_session_key": cache_session_key
         }
 
-        # 所有流式请求都使用非 native 模式（SSE格式）并展开 response 包装
-        log.debug(f"[GEMINICLI] 使用非native模式，将展开response包装")
+        # 普通流式请求只在确实有 response 包装时才拆 JSON
         stream_gen = stream_request(body=api_request, native=False)
         try:
             first_chunk = await read_first_async_item(stream_gen)
@@ -355,7 +325,7 @@ async def stream_generate_content(
             yield first_chunk
             return
 
-        # 展开 response 包装
+        # 只在确实有 response 包装时才拆 JSON
         async for chunk in prepend_async_item(first_chunk, stream_gen):
             # 检查是否是Response对象（错误情况）
             if isinstance(chunk, Response):
@@ -371,38 +341,7 @@ async def stream_generate_content(
                 yield b"data: [DONE]\n\n"
                 return
 
-            # 处理SSE格式的chunk
-            if isinstance(chunk, (str, bytes)):
-                chunk_str = chunk.decode('utf-8') if isinstance(chunk, bytes) else chunk
-
-                # 解析并展开 response 包装
-                if chunk_str.startswith("data: "):
-                    json_str = chunk_str[6:].strip()
-
-                    # 跳过 [DONE] 标记
-                    if json_str == "[DONE]":
-                        yield chunk
-                        continue
-
-                    try:
-                        # 解析JSON
-                        data = json.loads(json_str)
-
-                        # 展开 response 包装
-                        if "response" in data and "candidates" not in data:
-                            log.debug(f"[GEMINICLI] 展开response包装")
-                            unwrapped_data = data["response"]
-                            # 重新构建SSE格式
-                            yield f"data: {json.dumps(unwrapped_data, ensure_ascii=False)}\n\n".encode('utf-8')
-                        else:
-                            # 已经是展开的格式，直接返回
-                            yield chunk
-                    except json.JSONDecodeError:
-                        # JSON解析失败，直接返回原始chunk
-                        yield chunk
-                else:
-                    # 不是SSE格式，直接返回
-                    yield chunk
+            yield unwrap_gemini_response_sse_chunk(chunk)
 
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:

@@ -13,6 +13,7 @@ from fastapi import Response
 from config import (
     get_auto_ban_enabled,
     get_auto_ban_error_codes,
+    get_empty_output_error_enabled,
     get_retry_429_enabled,
     get_retry_429_interval,
     get_retry_429_max_retries,
@@ -271,8 +272,11 @@ async def collect_streaming_response(stream_generator) -> Response:
     collected_tool_parts_count = 0  # 记录工具调用相关part数量
     has_data = False
     line_count = 0
+    debug_enabled = log.is_debug_enabled()
+    empty_output_error_enabled = await get_empty_output_error_enabled()
 
-    log.debug("[STREAM COLLECTOR] Starting to collect streaming response")
+    if debug_enabled:
+        log.debug("[STREAM COLLECTOR] Starting to collect streaming response")
 
     try:
         async for line in stream_generator:
@@ -280,46 +284,57 @@ async def collect_streaming_response(stream_generator) -> Response:
 
             # 如果收到的是Response对象（错误），直接返回
             if isinstance(line, Response):
-                log.debug(f"[STREAM COLLECTOR] 收到错误Response，状态码: {line.status_code}")
+                if debug_enabled:
+                    log.debug(f"[STREAM COLLECTOR] 收到错误Response，状态码: {line.status_code}")
                 return line
 
             # 处理 bytes 类型
             if isinstance(line, bytes):
                 line_str = line.decode('utf-8', errors='ignore')
-                log.debug(f"[STREAM COLLECTOR] Processing bytes line {line_count}: {line_str[:200] if line_str else 'empty'}")
+                if debug_enabled:
+                    log.debug(f"[STREAM COLLECTOR] Processing bytes line {line_count}: {line_str[:200] if line_str else 'empty'}")
             elif isinstance(line, str):
                 line_str = line
-                log.debug(f"[STREAM COLLECTOR] Processing line {line_count}: {line_str[:200] if line_str else 'empty'}")
+                if debug_enabled:
+                    log.debug(f"[STREAM COLLECTOR] Processing line {line_count}: {line_str[:200] if line_str else 'empty'}")
             else:
-                log.debug(f"[STREAM COLLECTOR] Skipping non-string/bytes line: {type(line)}")
+                if debug_enabled:
+                    log.debug(f"[STREAM COLLECTOR] Skipping non-string/bytes line: {type(line)}")
                 continue
 
             # 解析流式数据行
             if not line_str.startswith("data: "):
-                log.debug(f"[STREAM COLLECTOR] Skipping line without 'data: ' prefix: {line_str[:100]}")
+                if debug_enabled:
+                    log.debug(f"[STREAM COLLECTOR] Skipping line without 'data: ' prefix: {line_str[:100]}")
                 continue
 
             raw = line_str[6:].strip()
             if raw == "[DONE]":
-                log.debug("[STREAM COLLECTOR] Received [DONE] marker")
+                if debug_enabled:
+                    log.debug("[STREAM COLLECTOR] Received [DONE] marker")
                 break
 
             try:
-                log.debug(f"[STREAM COLLECTOR] Parsing JSON: {raw[:200]}")
+                if debug_enabled:
+                    log.debug(f"[STREAM COLLECTOR] Parsing JSON: {raw[:200]}")
                 chunk = json.loads(raw)
                 has_data = True
-                log.debug(f"[STREAM COLLECTOR] Chunk keys: {chunk.keys() if isinstance(chunk, dict) else type(chunk)}")
+                if debug_enabled:
+                    log.debug(f"[STREAM COLLECTOR] Chunk keys: {chunk.keys() if isinstance(chunk, dict) else type(chunk)}")
 
                 # 提取响应对象
                 response_obj = chunk.get("response", {})
                 if not response_obj:
-                    log.debug("[STREAM COLLECTOR] No 'response' key in chunk, trying direct access")
+                    if debug_enabled:
+                        log.debug("[STREAM COLLECTOR] No 'response' key in chunk, trying direct access")
                     response_obj = chunk  # 尝试直接使用chunk
 
                 candidates = response_obj.get("candidates", [])
-                log.debug(f"[STREAM COLLECTOR] Found {len(candidates)} candidates")
+                if debug_enabled:
+                    log.debug(f"[STREAM COLLECTOR] Found {len(candidates)} candidates")
                 if not candidates:
-                    log.debug(f"[STREAM COLLECTOR] No candidates in chunk, chunk structure: {list(chunk.keys()) if isinstance(chunk, dict) else type(chunk)}")
+                    if debug_enabled:
+                        log.debug(f"[STREAM COLLECTOR] No candidates in chunk, chunk structure: {list(chunk.keys()) if isinstance(chunk, dict) else type(chunk)}")
                     continue
 
                 candidate = candidates[0]
@@ -327,7 +342,8 @@ async def collect_streaming_response(stream_generator) -> Response:
                 # 收集文本内容
                 content = candidate.get("content", {})
                 parts = content.get("parts", [])
-                log.debug(f"[STREAM COLLECTOR] Processing {len(parts)} parts from candidate")
+                if debug_enabled:
+                    log.debug(f"[STREAM COLLECTOR] Processing {len(parts)} parts from candidate")
 
                 for part in parts:
                     if not isinstance(part, dict):
@@ -338,7 +354,8 @@ async def collect_streaming_response(stream_generator) -> Response:
                     if "functionCall" in part or "functionResponse" in part or "function_call" in part:
                         collected_other_parts.append(part)
                         collected_tool_parts_count += 1
-                        log.debug(f"[STREAM COLLECTOR] Collected tool part: {list(part.keys())}")
+                        if debug_enabled:
+                            log.debug(f"[STREAM COLLECTOR] Collected tool part: {list(part.keys())}")
                         continue
 
                     # 处理文本内容
@@ -347,14 +364,17 @@ async def collect_streaming_response(stream_generator) -> Response:
                         # 区分普通文本和思维链
                         if part.get("thought", False):
                             collected_thought_text.append(text)
-                            log.debug(f"[STREAM COLLECTOR] Collected thought text: {text[:100]}")
+                            if debug_enabled:
+                                log.debug(f"[STREAM COLLECTOR] Collected thought text: {text[:100]}")
                         else:
                             collected_text.append(text)
-                            log.debug(f"[STREAM COLLECTOR] Collected regular text: {text[:100]}")
+                            if debug_enabled:
+                                log.debug(f"[STREAM COLLECTOR] Collected regular text: {text[:100]}")
                     # 处理非文本内容（图片、文件等）
                     elif "inlineData" in part or "fileData" in part or "executableCode" in part or "codeExecutionResult" in part:
                         collected_other_parts.append(part)
-                        log.debug(f"[STREAM COLLECTOR] Collected non-text part: {list(part.keys())}")
+                        if debug_enabled:
+                            log.debug(f"[STREAM COLLECTOR] Collected non-text part: {list(part.keys())}")
 
                 # 收集其他信息（使用最后一个块的值）
                 if candidate.get("finishReason"):
@@ -372,10 +392,12 @@ async def collect_streaming_response(stream_generator) -> Response:
                     merged_response["response"]["usageMetadata"].update(usage)
 
             except json.JSONDecodeError as e:
-                log.debug(f"[STREAM COLLECTOR] Failed to parse JSON chunk: {e}")
+                if debug_enabled:
+                    log.debug(f"[STREAM COLLECTOR] Failed to parse JSON chunk: {e}")
                 continue
             except Exception as e:
-                log.debug(f"[STREAM COLLECTOR] Error processing chunk: {e}")
+                if debug_enabled:
+                    log.debug(f"[STREAM COLLECTOR] Error processing chunk: {e}")
                 continue
 
     except Exception as e:
@@ -386,12 +408,14 @@ async def collect_streaming_response(stream_generator) -> Response:
             media_type="application/json"
         )
 
-    log.debug(f"[STREAM COLLECTOR] Finished iteration, has_data={has_data}, line_count={line_count}")
+    if debug_enabled:
+        log.debug(f"[STREAM COLLECTOR] Finished iteration, has_data={has_data}, line_count={line_count}")
 
     # 如果没有收集到任何数据，返回错误
     if not has_data:
-        log.error(f"[STREAM COLLECTOR] No data collected from stream after {line_count} lines")
-        return build_empty_model_output_response()
+        if empty_output_error_enabled:
+            log.error(f"[STREAM COLLECTOR] No data collected from stream after {line_count} lines")
+            return build_empty_model_output_response()
 
     # 组装最终的parts
     final_parts = []
@@ -418,21 +442,24 @@ async def collect_streaming_response(stream_generator) -> Response:
 
     merged_response["response"]["candidates"][0]["content"]["parts"] = final_parts
 
-    log.info(
-        f"[STREAM COLLECTOR] Collected {len(collected_text)} text chunks, "
-        f"{len(collected_thought_text)} thought chunks, {len(collected_other_parts)} other parts "
-        f"(tool parts: {collected_tool_parts_count})"
-    )
+    if debug_enabled:
+        log.debug(
+            f"[STREAM COLLECTOR] Collected {len(collected_text)} text chunks, "
+            f"{len(collected_thought_text)} thought chunks, {len(collected_other_parts)} other parts "
+            f"(tool parts: {collected_tool_parts_count})"
+        )
 
     # 去掉嵌套的 "response" 包装（Antigravity格式 -> 标准Gemini格式）
     if "response" in merged_response and "candidates" not in merged_response:
-        log.debug(f"[STREAM COLLECTOR] 展开response包装")
+        if debug_enabled:
+            log.debug(f"[STREAM COLLECTOR] 展开response包装")
         merged_response = merged_response["response"]
 
     # 返回纯JSON格式
     if is_empty_model_output_payload(merged_response):
-        log.warning("[STREAM COLLECTOR] Collected stream contains empty model output")
-        return build_empty_model_output_response()
+        if empty_output_error_enabled:
+            log.warning("[STREAM COLLECTOR] Collected stream contains empty model output")
+            return build_empty_model_output_response()
 
     return Response(
         content=json.dumps(merged_response, ensure_ascii=False).encode('utf-8'),

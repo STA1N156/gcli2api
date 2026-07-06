@@ -18,7 +18,7 @@ import json
 from typing import Any, Dict, Optional, Callable, Tuple
 
 from fastapi import Response
-from config import get_code_assist_endpoint, get_auto_ban_error_codes, get_geminicli_empty_output_max_retries
+from config import get_code_assist_endpoint, get_auto_ban_error_codes, get_empty_output_error_enabled
 from log import log
 
 from src.credential_manager import credential_manager
@@ -182,7 +182,7 @@ async def stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
-    empty_output_max_retries = await get_geminicli_empty_output_max_retries()
+    empty_output_error_enabled = await get_empty_output_error_enabled()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -224,7 +224,6 @@ async def stream_request(
         return True
 
     attempt = 0
-    empty_output_retries = 0
     while True:
         success_recorded = False  # 标记是否已记录成功
         need_retry = False  # 标记是否需要重试
@@ -343,14 +342,10 @@ async def stream_request(
                     # 不是Response，说明是真流，直接yield返回
                     # 只在第一个chunk时记录成功
                     if not success_recorded:
-                        buffered_chunks.append(chunk)
-                        if not stream_chunk_has_visible_output(chunk):
-                            continue
-
-                        if empty_output_retries > 0:
-                            log.empty_retry(
-                                f"[GEMINICLI STREAM] 重试成功{empty_output_retries}/{empty_output_max_retries}"
-                            )
+                        if empty_output_error_enabled:
+                            buffered_chunks.append(chunk)
+                            if not stream_chunk_has_visible_output(chunk):
+                                continue
 
                         await record_api_call_success(
                             credential_manager, current_file, mode="geminicli", model_name=model_name
@@ -358,9 +353,12 @@ async def stream_request(
                         success_recorded = True
                         log.debug(f"[GEMINICLI STREAM] 开始接收流式响应，模型: {model_name}")
 
-                        for buffered_chunk in buffered_chunks:
-                            yield buffered_chunk
-                        buffered_chunks = []
+                        if empty_output_error_enabled:
+                            for buffered_chunk in buffered_chunks:
+                                yield buffered_chunk
+                            buffered_chunks = []
+                        else:
+                            yield chunk
                     else:
                         yield chunk
 
@@ -370,22 +368,14 @@ async def stream_request(
                 return
 
             if not need_retry:
-                if empty_output_retries < empty_output_max_retries:
-                    empty_output_retries += 1
-                    continue
-
-                if empty_output_retries > 0:
-                    log.empty_retry(
-                        f"[GEMINICLI STREAM] 失败{empty_output_retries}/{empty_output_max_retries}"
+                if empty_output_error_enabled:
+                    log.warning(f"[GEMINICLI STREAM] Model returned empty output, credential: {current_file}")
+                    await record_api_call_error(
+                        credential_manager, current_file, 461,
+                        None, mode="geminicli", model_name=model_name,
+                        error_message="模型输出为空，请检查是否含有敏感内容"
                     )
-
-                log.warning(f"[GEMINICLI STREAM] Model returned empty output, credential: {current_file}")
-                await record_api_call_error(
-                    credential_manager, current_file, 461,
-                    None, mode="geminicli", model_name=model_name,
-                    error_message="模型输出为空，请检查是否含有敏感内容"
-                )
-                yield build_empty_model_output_response()
+                    yield build_empty_model_output_response()
                 return
 
             # 统一处理重试
@@ -513,7 +503,7 @@ async def non_stream_request(
     retry_config = await get_retry_config()
     max_retries = retry_config["max_retries"]
     retry_interval = retry_config["retry_interval"]
-    empty_output_max_retries = await get_geminicli_empty_output_max_retries()
+    empty_output_error_enabled = await get_empty_output_error_enabled()
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
@@ -555,7 +545,6 @@ async def non_stream_request(
         return True
 
     attempt = 0
-    empty_output_retries = 0
     while True:
         try:
             response = await post_async(
@@ -569,16 +558,7 @@ async def non_stream_request(
 
             # 成功
             if status_code == 200:
-                if is_empty_model_output(response.content):
-                    if empty_output_retries < empty_output_max_retries:
-                        empty_output_retries += 1
-                        continue
-
-                    if empty_output_retries > 0:
-                        log.empty_retry(
-                            f"[GEMINICLI] 失败{empty_output_retries}/{empty_output_max_retries}"
-                        )
-
+                if empty_output_error_enabled and is_empty_model_output(response.content):
                     log.warning(f"[NON-STREAM] Model returned empty output, credential: {current_file}")
                     await record_api_call_error(
                         credential_manager, current_file, 461,
@@ -586,11 +566,6 @@ async def non_stream_request(
                         error_message="模型输出为空，请检查是否含有敏感内容"
                     )
                     return build_empty_model_output_response()
-
-                if empty_output_retries > 0:
-                    log.empty_retry(
-                        f"[GEMINICLI] 重试成功{empty_output_retries}/{empty_output_max_retries}"
-                    )
 
                 await record_api_call_success(
                     credential_manager, current_file, mode="geminicli", model_name=model_name

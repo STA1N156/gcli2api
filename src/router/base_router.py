@@ -5,12 +5,10 @@ Base Router - 共用的路由基础功能
 
 from typing import List
 
-from src.models import Model, ModelList
-
 def create_openai_model_list(
     model_ids: List[str],
     owned_by: str = "google"
-) -> ModelList:
+) -> dict:
     """
     创建OpenAI格式的模型列表
     
@@ -19,22 +17,23 @@ def create_openai_model_list(
         owned_by: 模型所有者
         
     Returns:
-        ModelList对象
+        dict对象
     """
-    from datetime import datetime, timezone
-    current_timestamp = int(datetime.now(timezone.utc).timestamp())
-    
-    models = [
-        Model(
-            id=model_id,
-            object='model',
-            created=current_timestamp,
-            owned_by=owned_by
-        )
-        for model_id in model_ids
-    ]
-    
-    return ModelList(data=models)
+    import time
+    current_timestamp = int(time.time())
+
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": model_id,
+                "object": "model",
+                "created": current_timestamp,
+                "owned_by": owned_by,
+            }
+            for model_id in model_ids
+        ],
+    }
 
 
 def create_gemini_model_list(

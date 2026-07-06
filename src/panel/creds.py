@@ -38,7 +38,7 @@ from .utils import validate_mode
 # 创建路由器
 router = APIRouter(prefix="/creds", tags=["credentials"])
 
-ANTIGRAVITY_CREDIT_SUMMARY_CONCURRENCY = 30
+ANTIGRAVITY_CREDIT_SUMMARY_CONCURRENCY = 70
 ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD = 0.0002  # 0.02%
 _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS: Dict[str, Any] = {
     "running": False,

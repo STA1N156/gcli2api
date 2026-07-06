@@ -697,8 +697,8 @@ async def _try_load_code_assist(
     log.debug(f"[loadCodeAssist] Response status: {response.status_code}")
 
     if response.status_code == 200:
-        response_text = response.text
-        log.debug(f"[loadCodeAssist] Response body: {response_text}")
+        if log.is_debug_enabled():
+            log.debug(f"[loadCodeAssist] Response body: {response.text}")
 
         data = response.json()
         log.debug(f"[loadCodeAssist] Response JSON keys: {list(data.keys())}")

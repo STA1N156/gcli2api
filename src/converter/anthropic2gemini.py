@@ -680,13 +680,15 @@ def build_generation_config(payload: Dict[str, Any]) -> Dict[str, Any]:
             thinking_config["includeThoughts"] = True
             
             config["thinkingConfig"] = thinking_config
-            log.info(f"[ANTHROPIC2GEMINI] Extended thinking enabled with budget: {thinking_config['thinkingBudget']}")
+            if log.is_debug_enabled():
+                log.debug(f"[ANTHROPIC2GEMINI] Extended thinking enabled with budget: {thinking_config['thinkingBudget']}")
         elif thinking_type == "disabled":
             # 明确禁用思考模式
             config["thinkingConfig"] = {
                 "includeThoughts": False
             }
-            log.info("[ANTHROPIC2GEMINI] Extended thinking explicitly disabled")
+            if log.is_debug_enabled():
+                log.debug("[ANTHROPIC2GEMINI] Extended thinking explicitly disabled")
 
     stop_sequences = payload.get("stop_sequences")
     if isinstance(stop_sequences, list) and stop_sequences:
@@ -695,7 +697,8 @@ def build_generation_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Plan mode 时清空默认 stop sequences，避免过早停止
         # 默认的 stop sequences 可能会导致模型在生成计划时过早停止
         config["stopSequences"] = []
-        log.info("[ANTHROPIC2GEMINI] Plan mode: cleared default stop sequences to prevent premature stopping")
+        if log.is_debug_enabled():
+            log.debug("[ANTHROPIC2GEMINI] Plan mode: cleared default stop sequences to prevent premature stopping")
     
     # 如果不是 plan mode 且没有自定义 stop_sequences，保持默认值
     # (默认值已经在 config 初始化时设置)
@@ -981,6 +984,8 @@ async def gemini_stream_to_anthropic_stream(
         return usage
 
     # 处理流式数据
+    debug_enabled = log.is_debug_enabled()
+
     try:
         async for chunk in gemini_stream:
             # 检查是否是 Response 对象（错误情况）
@@ -992,23 +997,28 @@ async def gemini_stream_to_anthropic_stream(
                 return
 
             # 记录接收到的原始chunk
-            log.debug(f"[GEMINI_TO_ANTHROPIC] Raw chunk: {chunk[:200] if chunk else b''}")
+            if debug_enabled:
+                log.debug(f"[GEMINI_TO_ANTHROPIC] Raw chunk: {chunk[:200] if chunk else b''}")
 
             # 解析 Gemini 流式块
             if not chunk or not chunk.startswith(b"data: "):
-                log.debug(f"[GEMINI_TO_ANTHROPIC] Skipping chunk (not SSE format or empty)")
+                if debug_enabled:
+                    log.debug(f"[GEMINI_TO_ANTHROPIC] Skipping chunk (not SSE format or empty)")
                 continue
 
             raw = chunk[6:].strip()
             if raw == b"[DONE]":
-                log.debug(f"[GEMINI_TO_ANTHROPIC] Received [DONE] marker")
+                if debug_enabled:
+                    log.debug(f"[GEMINI_TO_ANTHROPIC] Received [DONE] marker")
                 break
 
-            log.debug(f"[GEMINI_TO_ANTHROPIC] Parsing JSON: {raw[:200]}")
+            if debug_enabled:
+                log.debug(f"[GEMINI_TO_ANTHROPIC] Parsing JSON: {raw[:200]}")
 
             try:
                 data = json.loads(raw.decode('utf-8', errors='ignore'))
-                log.debug(f"[GEMINI_TO_ANTHROPIC] Parsed data: {json.dumps(data, ensure_ascii=False)[:300]}")
+                if debug_enabled:
+                    log.debug(f"[GEMINI_TO_ANTHROPIC] Parsed data: {json.dumps(data, ensure_ascii=False)[:300]}")
             except Exception as e:
                 log.warning(f"[GEMINI_TO_ANTHROPIC] JSON parse error: {e}")
                 continue

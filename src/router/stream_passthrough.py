@@ -44,3 +44,34 @@ async def build_streaming_response_or_error(
         prepend_async_item(first_item, iterator),
         media_type=media_type,
     )
+
+
+def unwrap_gemini_response_sse_chunk(chunk: Any) -> Any:
+    if not isinstance(chunk, (str, bytes)):
+        return chunk
+
+    is_bytes = isinstance(chunk, bytes)
+    prefix = b"data: " if is_bytes else "data: "
+    response_marker = b'"response"' if is_bytes else '"response"'
+
+    if not chunk.startswith(prefix):
+        return chunk
+
+    payload = chunk[len(prefix):].strip()
+    if payload == (b"[DONE]" if is_bytes else "[DONE]") or response_marker not in payload:
+        return chunk
+
+    try:
+        data = json.loads(payload.decode("utf-8") if is_bytes else payload)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return chunk
+
+    if "response" not in data or "candidates" in data:
+        return chunk
+
+    unwrapped_chunk = (
+        "data: "
+        + json.dumps(data["response"], ensure_ascii=False, separators=(",", ":"))
+        + "\n\n"
+    )
+    return unwrapped_chunk.encode("utf-8") if is_bytes else unwrapped_chunk
