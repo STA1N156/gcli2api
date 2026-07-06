@@ -31,6 +31,7 @@ GENERIC_MIME_TYPES = {
 }
 
 MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
+FULL_BASE64_VALIDATE_MAX_CHARS = 1024 * 1024
 
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;,]+)?(?P<params>(?:;[^,]*)*),(?P<data>.*)$", re.DOTALL)
 BASE64_RE = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
@@ -65,7 +66,8 @@ def normalize_base64_image_text(value: Any) -> str:
     if padding:
         cleaned += "=" * padding
 
-    if not BASE64_RE.fullmatch(cleaned):
+    sample = cleaned if len(cleaned) <= FULL_BASE64_VALIDATE_MAX_CHARS else cleaned[:4096]
+    if not BASE64_RE.fullmatch(sample):
         raise ImageInputError("Image data is not valid base64")
 
     return cleaned

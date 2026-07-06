@@ -82,7 +82,7 @@ class CredentialManager:
 
         overflow = len(self._session_bindings) - SESSION_BINDING_MAX_ENTRIES
         if overflow > 0:
-            for key in sorted(self._session_bindings, key=lambda k: self._session_bindings[k][1])[:overflow]:
+            for key in list(self._session_bindings)[:overflow]:
                 self._session_bindings.pop(key, None)
 
     async def _get_session_binding(self, binding_key: str) -> Optional[str]:
