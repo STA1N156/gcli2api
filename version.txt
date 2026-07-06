@@ -1,4 +1,4 @@
-full_hash=efacdd277d57b1e270c87f98765fe459e1579d4a
-short_hash=efacdd2
-message=reduce cpu in memory safeguards
-date=2026-07-06 23:39:53 +0800
+full_hash=7d914c18718a11651e85405ece88e1c38dc53281
+short_hash=7d914c1
+message=fix streaming generator close errors
+date=2026-07-06 23:41:18 +0800
