@@ -1,4 +1,4 @@
-full_hash=5c968965000ea398116546c47b1b4e3b584108f3
-short_hash=5c96896
-message=fix request capture streaming middleware
-date=2026-07-06 22:01:34 +0800
+full_hash=f660f1191d5bb47cd99354b399fb705fbf3c9366
+short_hash=f660f11
+message=fix invalid credentials and urlsafe image input
+date=2026-07-06 22:12:33 +0800
