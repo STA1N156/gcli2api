@@ -1,4 +1,4 @@
-full_hash=6ba8283ce03e1e444002cd9a0acf82882639e9c0
-short_hash=6ba8283
-message=add realtime request capture downloads
-date=2026-07-06 21:30:21 +0800
+full_hash=5c968965000ea398116546c47b1b4e3b584108f3
+short_hash=5c96896
+message=fix request capture streaming middleware
+date=2026-07-06 22:01:34 +0800
