@@ -35,6 +35,17 @@ class ImageInputNormalizationTests(unittest.TestCase):
         self.assertEqual(inline["mimeType"], "image/png")
         self.assertEqual(inline["data"], PNG_B64)
 
+    def test_accepts_urlsafe_base64_image_data(self):
+        inline = normalize_inline_image_data(
+            {
+                "mimeType": "image/jpeg",
+                "data": JPEG_B64.replace("+", "-").replace("/", "_"),
+            }
+        )
+
+        self.assertEqual(inline["mimeType"], "image/jpeg")
+        self.assertEqual(inline["data"], JPEG_B64)
+
     def test_normalizes_snake_case_inline_data_part(self):
         part = normalize_inline_image_part(
             {

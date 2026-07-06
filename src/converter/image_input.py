@@ -64,7 +64,13 @@ def clean_base64_image_data(value: Any) -> Tuple[str, bytes]:
     try:
         decoded = base64.b64decode(cleaned, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise ImageInputError("Image data is not valid base64") from exc
+        if "-" not in cleaned and "_" not in cleaned:
+            raise ImageInputError("Image data is not valid base64") from exc
+        cleaned = cleaned.translate(str.maketrans("-_", "+/"))
+        try:
+            decoded = base64.b64decode(cleaned, validate=True)
+        except (binascii.Error, ValueError) as urlsafe_exc:
+            raise ImageInputError("Image data is not valid base64") from urlsafe_exc
 
     if not decoded:
         raise ImageInputError("Image data decoded to empty bytes")

@@ -47,6 +47,19 @@ from src.utils import get_geminicli_user_agent
 
 # ==================== 请求准备 ====================
 
+class InvalidCredentialError(Exception):
+    """凭证缺少请求必需字段。"""
+
+
+def _get_invalid_credential_reason(credential_data: Dict[str, Any]) -> Optional[str]:
+    token = credential_data.get("token") or credential_data.get("access_token", "")
+    if not token:
+        return "凭证中没有找到有效的访问令牌（token或access_token字段）"
+    if not credential_data.get("project_id", ""):
+        return "项目ID不存在于凭证数据中"
+    return None
+
+
 async def prepare_request_headers_and_payload(
     payload: dict, credential_data: dict, target_url: str
 ):
@@ -64,9 +77,11 @@ async def prepare_request_headers_and_payload(
     Raises:
         Exception: 如果凭证中缺少必要字段
     """
+    invalid_reason = _get_invalid_credential_reason(credential_data)
+    if invalid_reason:
+        raise InvalidCredentialError(invalid_reason)
+
     token = credential_data.get("token") or credential_data.get("access_token", "")
-    if not token:
-        raise Exception("凭证中没有找到有效的访问令牌（token或access_token字段）")
 
     source_request = payload.get("request", {})
 
@@ -77,8 +92,6 @@ async def prepare_request_headers_and_payload(
         "User-Agent": get_geminicli_user_agent(payload.get("model", "")),
     }
     project_id = credential_data.get("project_id", "")
-    if not project_id:
-        raise Exception("项目ID不存在于凭证数据中")
     final_payload = {
         "model": payload.get("model"),
         "project": project_id,
@@ -93,12 +106,62 @@ def _is_retryable_status(status_code: int, disable_error_codes: list[int]) -> bo
     return status_code in (429, 500, 503) or status_code in disable_error_codes
 
 
+async def _disable_invalid_credential(credential_name: str, reason: str) -> None:
+    log.warning(f"[GEMINICLI] 禁用无效凭证 {credential_name}: {reason}")
+    await credential_manager.set_cred_disabled(credential_name, True, mode="geminicli")
+
+
+async def _prepare_with_valid_credential(
+    body: Dict[str, Any],
+    headers: Optional[Dict[str, str]],
+    model_name: str,
+    session_key: Optional[str],
+    target_url: str,
+    exclude_credential: Optional[str] = None,
+) -> Optional[Tuple[str, Dict[str, Any], Dict[str, str], Dict[str, Any], str]]:
+    """跳过并禁用缺少必需字段的凭证，直到找到可用凭证。"""
+    skipped_credential = exclude_credential
+    blocked_credentials = {Path(exclude_credential).name} if exclude_credential else set()
+    seen_invalid = set()
+
+    while True:
+        cred_result = await credential_manager.get_valid_credential(
+            mode="geminicli",
+            model_name=model_name,
+            session_key=session_key,
+            exclude_credential=skipped_credential,
+        )
+        if not cred_result:
+            return None
+
+        current_file, credential_data = cred_result
+        if current_file in blocked_credentials:
+            skipped_credential = current_file
+            continue
+        if current_file in seen_invalid:
+            return None
+
+        try:
+            auth_headers, final_payload, prepared_url = await prepare_request_headers_and_payload(
+                body, credential_data, target_url
+            )
+        except InvalidCredentialError as e:
+            seen_invalid.add(current_file)
+            skipped_credential = current_file
+            await _disable_invalid_credential(current_file, str(e))
+            continue
+
+        if headers:
+            auth_headers.update(headers)
+        return current_file, credential_data, auth_headers, final_payload, prepared_url
+
+
 async def _switch_credential_for_retry(
     *,
     next_cred_task: Optional[asyncio.Task],
     retry_interval: float,
     refresh_credential_fast: Callable[[], Any],
-    apply_cred_result: Callable[[Tuple[str, Dict[str, Any]]], bool],
+    apply_cred_result: Callable[[Tuple[str, Dict[str, Any]]], Any],
     log_prefix: str,
 ) -> Tuple[bool, Optional[asyncio.Task]]:
     """优先使用预热凭证，失败后退回同步刷新。"""
@@ -106,7 +169,10 @@ async def _switch_credential_for_retry(
         try:
             cred_result = await next_cred_task
             next_cred_task = None
-            if cred_result and apply_cred_result(cred_result):
+            applied = apply_cred_result(cred_result) if cred_result else False
+            if asyncio.iscoroutine(applied):
+                applied = await applied
+            if applied:
                 await asyncio.sleep(retry_interval)
                 return True, next_cred_task
         except Exception as e:
@@ -142,33 +208,14 @@ async def stream_request(
     model_name = body.get("model", "")
     session_key = extract_cache_session_key(body, headers)
 
-    # 1. 获取有效凭证
-    cred_result = await credential_manager.get_valid_credential(
-        mode="geminicli", model_name=model_name, session_key=session_key
-    )
-
-    if not cred_result:
-        # 如果返回值是None，直接返回错误500
-        yield Response(
-            content=json.dumps({"error": "当前无可用凭证"}),
-            status_code=500,
-            media_type="application/json"
-        )
-        return
-
-    current_file, credential_data = cred_result
-
-    # 2. 构建URL和请求头
     try:
-        auth_headers, final_payload, target_url = await prepare_request_headers_and_payload(
-            body, credential_data,
-            f"{await get_code_assist_endpoint()}/v1internal:streamGenerateContent?alt=sse"
+        prepared_request = await _prepare_with_valid_credential(
+            body,
+            headers,
+            model_name,
+            session_key,
+            f"{await get_code_assist_endpoint()}/v1internal:streamGenerateContent?alt=sse",
         )
-
-        # 合并自定义headers
-        if headers:
-            auth_headers.update(headers)
-
     except Exception as e:
         log.error(f"准备请求失败: {e}")
         yield Response(
@@ -177,6 +224,16 @@ async def stream_request(
             media_type="application/json"
         )
         return
+
+    if not prepared_request:
+        yield Response(
+            content=json.dumps({"error": "当前无可用凭证"}),
+            status_code=500,
+            media_type="application/json"
+        )
+        return
+
+    current_file, credential_data, auth_headers, final_payload, target_url = prepared_request
 
     # 3. 调用stream_post_async进行请求
     retry_config = await get_retry_config()
@@ -188,37 +245,32 @@ async def stream_request(
     last_error_response = None  # 记录最后一次的错误响应
     next_cred_task = None  # 预热的下一个凭证任务
 
-    # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
+    # 内部函数：切换到下一份可用凭证
     async def refresh_credential_fast():
-        nonlocal current_file, credential_data, auth_headers, final_payload
-        cred_result = await credential_manager.get_valid_credential(
-            mode="geminicli", model_name=model_name, session_key=session_key,
+        nonlocal current_file, credential_data, auth_headers, final_payload, target_url
+        prepared_request = await _prepare_with_valid_credential(
+            body,
+            headers,
+            model_name,
+            session_key,
+            target_url,
             exclude_credential=current_file
         )
-        if not cred_result:
+        if not prepared_request:
             return None
-        current_file, credential_data = cred_result
-        try:
-            # 只更新token和project_id,不重建整个headers和payload
-            token = credential_data.get("token") or credential_data.get("access_token", "")
-            project_id = credential_data.get("project_id", "")
-            if not token or not project_id:
-                return None
+        current_file, credential_data, auth_headers, final_payload, target_url = prepared_request
+        return True
 
-            # 直接更新现有的headers和payload
-            auth_headers["Authorization"] = f"Bearer {token}"
-            final_payload["project"] = project_id
-            return True
-        except Exception:
-            return None
-
-    def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
+    async def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
         nonlocal current_file, credential_data, auth_headers, final_payload
         current_file, credential_data = cred_result
+        invalid_reason = _get_invalid_credential_reason(credential_data)
+        if invalid_reason:
+            await _disable_invalid_credential(current_file, invalid_reason)
+            return False
+
         token = credential_data.get("token") or credential_data.get("access_token", "")
         project_id = credential_data.get("project_id", "")
-        if not token or not project_id:
-            return False
         auth_headers["Authorization"] = f"Bearer {token}"
         final_payload["project"] = project_id
         return True
@@ -465,32 +517,14 @@ async def non_stream_request(
     model_name = body.get("model", "")
     session_key = extract_cache_session_key(body, headers)
 
-    # 1. 获取有效凭证
-    cred_result = await credential_manager.get_valid_credential(
-        mode="geminicli", model_name=model_name, session_key=session_key
-    )
-
-    if not cred_result:
-        # 如果返回值是None，直接返回错误500
-        return Response(
-            content=json.dumps({"error": "当前无可用凭证"}),
-            status_code=500,
-            media_type="application/json"
-        )
-
-    current_file, credential_data = cred_result
-
-    # 2. 构建URL和请求头
     try:
-        auth_headers, final_payload, target_url = await prepare_request_headers_and_payload(
-            body, credential_data,
-            f"{await get_code_assist_endpoint()}/v1internal:generateContent"
+        prepared_request = await _prepare_with_valid_credential(
+            body,
+            headers,
+            model_name,
+            session_key,
+            f"{await get_code_assist_endpoint()}/v1internal:generateContent",
         )
-
-        # 合并自定义headers
-        if headers:
-            auth_headers.update(headers)
-
     except Exception as e:
         log.error(f"准备请求失败: {e}")
         return Response(
@@ -498,6 +532,15 @@ async def non_stream_request(
             status_code=500,
             media_type="application/json"
         )
+
+    if not prepared_request:
+        return Response(
+            content=json.dumps({"error": "当前无可用凭证"}),
+            status_code=500,
+            media_type="application/json"
+        )
+
+    current_file, credential_data, auth_headers, final_payload, target_url = prepared_request
 
     # 3. 调用post_async进行请求
     retry_config = await get_retry_config()
@@ -509,37 +552,32 @@ async def non_stream_request(
     last_error_response = None  # 记录最后一次的错误响应
     next_cred_task = None  # 预热的下一个凭证任务
 
-    # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
+    # 内部函数：切换到下一份可用凭证
     async def refresh_credential_fast():
-        nonlocal current_file, credential_data, auth_headers, final_payload
-        cred_result = await credential_manager.get_valid_credential(
-            mode="geminicli", model_name=model_name, session_key=session_key,
+        nonlocal current_file, credential_data, auth_headers, final_payload, target_url
+        prepared_request = await _prepare_with_valid_credential(
+            body,
+            headers,
+            model_name,
+            session_key,
+            target_url,
             exclude_credential=current_file
         )
-        if not cred_result:
+        if not prepared_request:
             return None
-        current_file, credential_data = cred_result
-        try:
-            # 只更新token和project_id,不重建整个headers和payload
-            token = credential_data.get("token") or credential_data.get("access_token", "")
-            project_id = credential_data.get("project_id", "")
-            if not token or not project_id:
-                return None
+        current_file, credential_data, auth_headers, final_payload, target_url = prepared_request
+        return True
 
-            # 直接更新现有的headers和payload
-            auth_headers["Authorization"] = f"Bearer {token}"
-            final_payload["project"] = project_id
-            return True
-        except Exception:
-            return None
-
-    def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
+    async def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
         nonlocal current_file, credential_data, auth_headers, final_payload
         current_file, credential_data = cred_result
+        invalid_reason = _get_invalid_credential_reason(credential_data)
+        if invalid_reason:
+            await _disable_invalid_credential(current_file, invalid_reason)
+            return False
+
         token = credential_data.get("token") or credential_data.get("access_token", "")
         project_id = credential_data.get("project_id", "")
-        if not token or not project_id:
-            return False
         auth_headers["Authorization"] = f"Bearer {token}"
         final_payload["project"] = project_id
         return True
