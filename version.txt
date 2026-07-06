@@ -1,4 +1,4 @@
-full_hash=f660f1191d5bb47cd99354b399fb705fbf3c9366
-short_hash=f660f11
-message=fix invalid credentials and urlsafe image input
-date=2026-07-06 22:12:33 +0800
+full_hash=e3bd0f5257cc1c21d20ea633475fed0664655190
+short_hash=e3bd0f5
+message=fix thinking config and reduce worker memory growth
+date=2026-07-06 23:35:32 +0800
