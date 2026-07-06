@@ -1,4 +1,4 @@
-full_hash=8d7a6e4bb24962fe65dce44f9afdbde36a28dc43
-short_hash=8d7a6e4
-message=reduce memory growth without worker recycle
-date=2026-07-06 23:59:46 +0800
+full_hash=9b05b35a442a70583897958214244f5872ad7701
+short_hash=9b05b35
+message=remove automatic memory trimming
+date=2026-07-07 00:10:11 +0800
