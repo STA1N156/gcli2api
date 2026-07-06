@@ -33,7 +33,6 @@ from src.task_manager import shutdown_all_tasks
 from src.httpx_client import close_http_clients
 from src.panel import router as panel_router
 from src.keeplive import keepalive_service
-from src.memory_trim import maybe_trim_memory
 from src.router.request_capture import capture_request_if_needed, should_buffer_request_body
 
 # 全局凭证管理器
@@ -126,48 +125,6 @@ app.add_middleware(
 )
 
 
-def _scope_content_length(scope):
-    for key, value in scope.get("headers") or []:
-        if key == b"content-length":
-            try:
-                return int(value.decode("ascii"))
-            except (TypeError, ValueError):
-                return None
-    return None
-
-
-class MemoryTrimMiddleware:
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        content_length = _scope_content_length(scope)
-        trim_done = False
-
-        async def trim_once():
-            nonlocal trim_done
-            if trim_done:
-                return
-            trim_done = True
-            await maybe_trim_memory(content_length)
-
-        async def trim_send(message):
-            try:
-                await send(message)
-            finally:
-                if message["type"] == "http.response.body" and not message.get("more_body", False):
-                    await trim_once()
-
-        try:
-            await self.app(scope, receive, trim_send)
-        finally:
-            await trim_once()
-
-
 class RequestCaptureMiddleware:
     def __init__(self, app):
         self.app = app
@@ -192,6 +149,7 @@ class RequestCaptureMiddleware:
                 break
 
         body = b"".join(body_parts)
+        body_parts.clear()
         body_sent = False
         captured = False
 
@@ -203,20 +161,22 @@ class RequestCaptureMiddleware:
             return await receive()
 
         async def capture_send(message):
-            nonlocal captured
+            nonlocal body, captured
             if message["type"] == "http.response.start" and not captured:
                 captured = True
-                await capture_request_if_needed(
-                    Request(scope),
-                    int(message.get("status", 500)),
-                    body,
-                )
+                try:
+                    await capture_request_if_needed(
+                        Request(scope),
+                        int(message.get("status", 500)),
+                        body,
+                    )
+                finally:
+                    body = b""
             await send(message)
 
         await self.app(scope, replay_receive, capture_send)
 
 
-app.add_middleware(MemoryTrimMiddleware)
 app.add_middleware(RequestCaptureMiddleware)
 
 # 挂载路由器
