@@ -17,6 +17,8 @@ from src.storage_adapter import get_storage_adapter
 
 
 SESSION_BINDING_TTL_SECONDS = 3 * 60 * 60
+SESSION_BINDING_MAX_ENTRIES = int(os.getenv("SESSION_BINDING_MAX_ENTRIES", "50000"))
+SESSION_BINDING_PRUNE_INTERVAL_SECONDS = 60
 
 
 class CredentialManager:
@@ -31,6 +33,7 @@ class CredentialManager:
         self._storage_adapter = None
         self._session_bindings: Dict[str, Tuple[str, float]] = {}
         self._session_lock = asyncio.Lock()
+        self._last_session_prune = 0.0
 
         # 并发控制（简化）
         # 后端数据库自行处理并发，credential_manager 不再使用本地锁
@@ -65,6 +68,23 @@ class CredentialManager:
     def _session_log_id(self, binding_key: str) -> str:
         return hashlib.sha256(binding_key.encode("utf-8")).hexdigest()[:12]
 
+    def _prune_session_bindings_locked(self, now: float) -> None:
+        if (
+            now - self._last_session_prune < SESSION_BINDING_PRUNE_INTERVAL_SECONDS
+            and len(self._session_bindings) <= SESSION_BINDING_MAX_ENTRIES
+        ):
+            return
+
+        self._last_session_prune = now
+        for key, (_, expires_at) in list(self._session_bindings.items()):
+            if expires_at <= now:
+                self._session_bindings.pop(key, None)
+
+        overflow = len(self._session_bindings) - SESSION_BINDING_MAX_ENTRIES
+        if overflow > 0:
+            for key in sorted(self._session_bindings, key=lambda k: self._session_bindings[k][1])[:overflow]:
+                self._session_bindings.pop(key, None)
+
     async def _get_session_binding(self, binding_key: str) -> Optional[str]:
         async with self._session_lock:
             binding = self._session_bindings.get(binding_key)
@@ -79,10 +99,14 @@ class CredentialManager:
     async def _remember_session_binding(self, binding_key: Optional[str], filename: str) -> None:
         if not binding_key or not filename:
             return
+        if SESSION_BINDING_MAX_ENTRIES <= 0:
+            return
+        now = time.time()
         async with self._session_lock:
+            self._prune_session_bindings_locked(now)
             self._session_bindings[binding_key] = (
                 os.path.basename(filename),
-                time.time() + SESSION_BINDING_TTL_SECONDS,
+                now + SESSION_BINDING_TTL_SECONDS,
             )
 
     async def _forget_session_binding(self, binding_key: Optional[str]) -> None:

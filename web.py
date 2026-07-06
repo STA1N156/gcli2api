@@ -224,6 +224,19 @@ app.mount("/front", StaticFiles(directory="front"), name="front")
 async def keepalive() -> Response:
     return Response(status_code=200)
 
+
+def _apply_hypercorn_config(config) -> None:
+    config.backlog = int(os.environ.get("SERVER_BACKLOG", "4096"))
+    config.accesslog = "-" if os.environ.get("ACCESS_LOG") == "1" else None
+    config.errorlog = "-" if os.environ.get("SERVER_LOG") == "1" else None
+    config.loglevel = os.environ.get("SERVER_LOG_LEVEL", "WARNING")
+
+    max_requests = int(os.environ.get("MAX_REQUESTS", "0"))
+    if max_requests > 0:
+        config.max_requests = max_requests
+        config.max_requests_jitter = int(os.environ.get("MAX_REQUESTS_JITTER", "0"))
+
+
 def main():
     """主启动函数"""
     from hypercorn.asyncio import serve
@@ -246,10 +259,7 @@ def main():
 
         config = Config()
         config.bind = [f"{host}:{port}"]
-        config.backlog = int(os.environ.get("SERVER_BACKLOG", "4096"))
-        config.accesslog = "-" if os.environ.get("ACCESS_LOG") == "1" else None
-        config.errorlog = "-" if os.environ.get("SERVER_LOG") == "1" else None
-        config.loglevel = os.environ.get("SERVER_LOG_LEVEL", "WARNING")
+        _apply_hypercorn_config(config)
 
         await serve(app, config)
 
@@ -269,10 +279,7 @@ def main():
 
         config = Config()
         config.bind = [f"{host}:{port}"]
-        config.backlog = int(os.environ.get("SERVER_BACKLOG", "4096"))
-        config.accesslog = "-" if os.environ.get("ACCESS_LOG") == "1" else None
-        config.errorlog = "-" if os.environ.get("SERVER_LOG") == "1" else None
-        config.loglevel = os.environ.get("SERVER_LOG_LEVEL", "WARNING")
+        _apply_hypercorn_config(config)
         config.workers = workers
         config.application_path = "web:app"
 

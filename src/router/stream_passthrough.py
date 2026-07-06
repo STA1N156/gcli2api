@@ -8,9 +8,14 @@ from src.converter.image_input import ImageInputError
 
 async def prepend_async_item(first_item: Any, iterator: AsyncIterator[Any]):
     """Yield a prefetched item before continuing the original iterator."""
-    yield first_item
-    async for item in iterator:
-        yield item
+    try:
+        yield first_item
+        async for item in iterator:
+            yield item
+    finally:
+        aclose = getattr(iterator, "aclose", None)
+        if callable(aclose):
+            await aclose()
 
 
 async def read_first_async_item(iterator: AsyncIterator[Any]) -> Any:

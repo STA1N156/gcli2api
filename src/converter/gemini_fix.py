@@ -506,6 +506,38 @@ def clamp_generation_config(generation_config: Dict[str, Any]) -> None:
             generation_config.pop("temperature", None)
 
 
+def _thinking_config_enabled(thinking_config: Any) -> bool:
+    if not isinstance(thinking_config, dict):
+        return False
+
+    if thinking_config.get("thinkingLevel"):
+        return True
+
+    budget = thinking_config.get("thinkingBudget")
+    if budget is None:
+        return False
+    try:
+        return int(budget) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _sanitize_thinking_config(generation_config: Dict[str, Any]) -> None:
+    thinking_config = generation_config.get("thinkingConfig")
+    if not isinstance(thinking_config, dict):
+        return
+
+    if (
+        (thinking_config.get("includeThoughts") is True or thinking_config.get("include_thoughts") is True)
+        and not _thinking_config_enabled(thinking_config)
+    ):
+        thinking_config.pop("includeThoughts", None)
+        thinking_config.pop("include_thoughts", None)
+
+    if not thinking_config:
+        generation_config.pop("thinkingConfig", None)
+
+
 def get_thinking_settings(model_name: str) -> tuple[Optional[int], Optional[str]]:
     """
     根据模型名称获取思考配置
@@ -824,6 +856,7 @@ async def normalize_gemini_request(
         generation_config["maxOutputTokens"] = 64000
         # 强制设置 topK 为 64
         generation_config["topK"] = 64
+        _sanitize_thinking_config(generation_config)
 
     if "contents" in result:
         cleaned_contents = []

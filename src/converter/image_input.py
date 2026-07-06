@@ -33,6 +33,7 @@ GENERIC_MIME_TYPES = {
 MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
 
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;,]+)?(?P<params>(?:;[^,]*)*),(?P<data>.*)$", re.DOTALL)
+BASE64_RE = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
 
 
 def normalize_mime_type(mime_type: Optional[str]) -> str:
@@ -52,30 +53,47 @@ def split_data_url(value: str) -> Tuple[Optional[str], str]:
     return match.group("mime"), match.group("data")
 
 
-def clean_base64_image_data(value: Any) -> Tuple[str, bytes]:
+def normalize_base64_image_text(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ImageInputError("Image data must be a non-empty base64 string")
 
     cleaned = re.sub(r"\s+", "", value)
+    if "-" in cleaned or "_" in cleaned:
+        cleaned = cleaned.translate(str.maketrans("-_", "+/"))
+
     padding = (-len(cleaned)) % 4
     if padding:
         cleaned += "=" * padding
 
+    if not BASE64_RE.fullmatch(cleaned):
+        raise ImageInputError("Image data is not valid base64")
+
+    return cleaned
+
+
+def clean_base64_image_data(value: Any) -> Tuple[str, bytes]:
+    cleaned = normalize_base64_image_text(value)
+
     try:
         decoded = base64.b64decode(cleaned, validate=True)
     except (binascii.Error, ValueError) as exc:
-        if "-" not in cleaned and "_" not in cleaned:
-            raise ImageInputError("Image data is not valid base64") from exc
-        cleaned = cleaned.translate(str.maketrans("-_", "+/"))
-        try:
-            decoded = base64.b64decode(cleaned, validate=True)
-        except (binascii.Error, ValueError) as urlsafe_exc:
-            raise ImageInputError("Image data is not valid base64") from urlsafe_exc
+        raise ImageInputError("Image data is not valid base64") from exc
 
     if not decoded:
         raise ImageInputError("Image data decoded to empty bytes")
 
     return cleaned, decoded
+
+
+def decode_base64_prefix(cleaned: str, min_bytes: int = 64) -> bytes:
+    chars = min(len(cleaned), ((min_bytes + 2) // 3) * 4)
+    chars -= chars % 4
+    if chars <= 0:
+        return b""
+    try:
+        return base64.b64decode(cleaned[:chars], validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ImageInputError("Image data is not valid base64") from exc
 
 
 def detect_image_mime(data: bytes) -> Optional[str]:
@@ -131,8 +149,14 @@ def normalize_inline_image_data(inline_data: Dict[str, Any]) -> Dict[str, Any]:
     ):
         explicit_mime = data_url_mime
 
-    cleaned_data, decoded = clean_base64_image_data(raw_data)
-    detected_mime = detect_image_mime(decoded)
+    cleaned_data = normalize_base64_image_text(raw_data)
+    normalized_explicit_mime = normalize_mime_type(explicit_mime)
+    should_detect_mime = (
+        not normalized_explicit_mime
+        or normalized_explicit_mime in GENERIC_MIME_TYPES
+        or normalized_explicit_mime not in SUPPORTED_IMAGE_MIME_TYPES
+    )
+    detected_mime = detect_image_mime(decode_base64_prefix(cleaned_data)) if should_detect_mime else None
     mime_type = choose_image_mime(explicit_mime, detected_mime)
 
     normalized = {
