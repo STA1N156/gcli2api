@@ -7,6 +7,7 @@ import io
 import json
 import os
 import time
+import uuid
 import zipfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -41,6 +42,7 @@ router = APIRouter(prefix="/creds", tags=["credentials"])
 ANTIGRAVITY_CREDIT_SUMMARY_CONCURRENCY = 70
 ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD = 0.0002  # 0.02%
 _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS: Dict[str, Any] = {
+    "run_id": None,
     "running": False,
     "total": 0,
     "completed": 0,
@@ -48,6 +50,8 @@ _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS: Dict[str, Any] = {
     "started_at": None,
     "updated_at": None,
 }
+_ANTIGRAVITY_CREDIT_SUMMARY_LAST_WRITE_AT = 0.0
+_ANTIGRAVITY_CREDIT_SUMMARY_WRITE_INTERVAL = 0.25
 
 
 # =============================================================================
@@ -369,9 +373,71 @@ def _group_antigravity_quota_models(models: Dict[str, Any]) -> Dict[str, Any]:
     return grouped_models
 
 
-def _reset_antigravity_credit_summary_progress(total: int) -> None:
+def _antigravity_credit_summary_progress_path() -> str:
+    credentials_dir = os.getenv("CREDENTIALS_DIR") or "./creds"
+    return os.path.join(credentials_dir, ".antigravity_credit_summary_progress.json")
+
+
+def _write_antigravity_credit_summary_progress(*, force: bool = False) -> None:
+    global _ANTIGRAVITY_CREDIT_SUMMARY_LAST_WRITE_AT
+
     now = time.time()
+    if (
+        not force
+        and now - _ANTIGRAVITY_CREDIT_SUMMARY_LAST_WRITE_AT
+        < _ANTIGRAVITY_CREDIT_SUMMARY_WRITE_INTERVAL
+    ):
+        return
+
+    path = _antigravity_credit_summary_progress_path()
+    try:
+        dir_name = os.path.dirname(path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                current = json.load(f)
+            current_started_at = float(current.get("started_at") or 0)
+            local_started_at = float(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("started_at") or 0)
+            if (
+                current.get("run_id") != _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("run_id")
+                and current_started_at > local_started_at
+            ):
+                return
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+        temp_path = f"{path}.{os.getpid()}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS, f, ensure_ascii=False)
+        os.replace(temp_path, path)
+        _ANTIGRAVITY_CREDIT_SUMMARY_LAST_WRITE_AT = now
+    except Exception as e:
+        log.debug(f"[ANTIGRAVITY SUMMARY] Failed to persist progress: {e}")
+
+
+def _read_antigravity_credit_summary_progress() -> Dict[str, Any]:
+    path = _antigravity_credit_summary_progress_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log.debug(f"[ANTIGRAVITY SUMMARY] Failed to read progress: {e}")
+    return dict(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS)
+
+
+def _reset_antigravity_credit_summary_progress(total: int) -> str:
+    now = time.time()
+    run_id = uuid.uuid4().hex
     _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.update({
+        "run_id": run_id,
         "running": total > 0,
         "total": total,
         "completed": 0,
@@ -379,9 +445,14 @@ def _reset_antigravity_credit_summary_progress(total: int) -> None:
         "started_at": now,
         "updated_at": now,
     })
+    _write_antigravity_credit_summary_progress(force=True)
+    return run_id
 
 
-def _update_antigravity_credit_summary_progress(*, failed: bool = False) -> None:
+def _update_antigravity_credit_summary_progress(run_id: str, *, failed: bool = False) -> None:
+    if _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("run_id") != run_id:
+        return
+
     _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["completed"] = min(
         int(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("completed") or 0) + 1,
         int(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("total") or 0),
@@ -391,11 +462,16 @@ def _update_antigravity_credit_summary_progress(*, failed: bool = False) -> None
             int(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("failed") or 0) + 1
         )
     _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["updated_at"] = time.time()
+    _write_antigravity_credit_summary_progress()
 
 
-def _finish_antigravity_credit_summary_progress() -> None:
+def _finish_antigravity_credit_summary_progress(run_id: str) -> None:
+    if _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("run_id") != run_id:
+        return
+
     _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["running"] = False
     _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["updated_at"] = time.time()
+    _write_antigravity_credit_summary_progress(force=True)
 
 
 async def upload_credentials_common(
@@ -1539,6 +1615,7 @@ async def get_antigravity_credit_summary(
     """
     Return aggregate Antigravity quota and credit data for enabled credentials.
     """
+    progress_run_id = None
     try:
         storage_adapter = await get_storage_adapter()
         all_states = await storage_adapter.get_all_credential_states(mode="antigravity")
@@ -1547,10 +1624,10 @@ async def get_antigravity_credit_summary(
             for filename, state in all_states.items()
             if not state.get("disabled", False)
         ]
-        _reset_antigravity_credit_summary_progress(len(enabled_filenames))
+        progress_run_id = _reset_antigravity_credit_summary_progress(len(enabled_filenames))
 
         if not enabled_filenames:
-            _finish_antigravity_credit_summary_progress()
+            _finish_antigravity_credit_summary_progress(progress_run_id)
             return JSONResponse(content={
                 "success": True,
                 "enabled_accounts": 0,
@@ -1653,6 +1730,7 @@ async def get_antigravity_credit_summary(
         async def fetch_one_with_progress(filename: str) -> Dict[str, Any]:
             result = await fetch_one(filename)
             _update_antigravity_credit_summary_progress(
+                progress_run_id,
                 failed=not result.get("success")
             )
             return result
@@ -1660,7 +1738,7 @@ async def get_antigravity_credit_summary(
         results = await asyncio.gather(
             *(fetch_one_with_progress(filename) for filename in enabled_filenames)
         )
-        _finish_antigravity_credit_summary_progress()
+        _finish_antigravity_credit_summary_progress(progress_run_id)
 
         quota_fractions = [
             item["quota_remaining_fraction"]
@@ -1747,7 +1825,8 @@ async def get_antigravity_credit_summary(
         })
 
     except Exception as e:
-        _finish_antigravity_credit_summary_progress()
+        if progress_run_id:
+            _finish_antigravity_credit_summary_progress(progress_run_id)
         log.error(f"[ANTIGRAVITY SUMMARY] Failed to build summary: {e}")
         raise HTTPException(status_code=500, detail=f"获取总额度失败: {str(e)}")
 
@@ -1759,7 +1838,7 @@ async def get_antigravity_credit_summary_progress(
     """Return current aggregate Antigravity quota refresh progress."""
     return JSONResponse(content={
         "success": True,
-        **_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS,
+        **_read_antigravity_credit_summary_progress(),
     })
 
 

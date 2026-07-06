@@ -42,7 +42,14 @@ const AppState = {
     // Antigravity total quota UI
     antigravityCreditSummaryProgressTimer: null,
     antigravityCreditSummaryLoaded: false,
-    antigravityCreditSummaryLoading: false
+    antigravityCreditSummaryLoading: false,
+    antigravityCreditSummaryProgress: {
+        requestStartedAt: 0,
+        backendStartedAt: 0,
+        total: 0,
+        completed: 0,
+        failed: 0
+    }
 };
 
 const ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD = 0.0002; // 0.02%
@@ -1705,6 +1712,16 @@ function updateAntigravityCreditSummaryUI(data) {
 
 function setAntigravityCreditSummaryLoading(isLoading) {
     AppState.antigravityCreditSummaryLoading = isLoading;
+    if (isLoading) {
+        AppState.antigravityCreditSummaryProgress = {
+            requestStartedAt: Date.now() / 1000 - 3,
+            backendStartedAt: 0,
+            total: 0,
+            completed: 0,
+            failed: 0
+        };
+    }
+
     const refreshBtn = getAntigravityCreditSummaryElement('antigravityCreditSummaryRefreshBtn');
     if (refreshBtn) {
         refreshBtn.disabled = isLoading;
@@ -1720,15 +1737,37 @@ function setAntigravityCreditSummaryLoading(isLoading) {
 function updateAntigravityCreditSummaryProgress(progress) {
     if (!progress || !progress.running) return;
 
+    const state = AppState.antigravityCreditSummaryProgress;
+    const backendStartedAt = Number(progress.started_at) || 0;
+    if (backendStartedAt && state.requestStartedAt && backendStartedAt < state.requestStartedAt) {
+        return;
+    }
+
+    if (backendStartedAt && backendStartedAt > state.backendStartedAt) {
+        state.backendStartedAt = backendStartedAt;
+        state.total = 0;
+        state.completed = 0;
+        state.failed = 0;
+    } else if (backendStartedAt && backendStartedAt < state.backendStartedAt) {
+        return;
+    }
+
     const total = Number(progress.total) || 0;
     const completed = Number(progress.completed) || 0;
     const failed = Number(progress.failed) || 0;
-    const progressText = total > 0
-        ? `正在获取 ${completed}/${total}`
-        : '正在获取...';
-    const metaParts = [total > 0 ? `正在获取启用凭证额度 ${completed}/${total}` : '正在获取启用凭证额度'];
+    if (total > 0) state.total = Math.max(state.total, total);
+    state.completed = Math.max(state.completed, Math.min(completed, state.total || completed));
+    state.failed = Math.max(state.failed, failed);
 
-    if (failed > 0) metaParts.push(`失败 ${failed} 个`);
+    const displayTotal = state.total;
+    const displayCompleted = state.completed;
+    const displayFailed = state.failed;
+    const progressText = displayTotal > 0
+        ? `正在获取 ${displayCompleted}/${displayTotal}`
+        : '正在获取...';
+    const metaParts = [displayTotal > 0 ? `正在获取启用凭证额度 ${displayCompleted}/${displayTotal}` : '正在获取启用凭证额度'];
+
+    if (displayFailed > 0) metaParts.push(`失败 ${displayFailed} 个`);
 
     setAntigravityCreditSummaryText('antigravityCreditSummaryCompact', progressText);
     setAntigravityCreditSummaryText('antigravityCreditSummaryMeta', metaParts.join(' · '));
