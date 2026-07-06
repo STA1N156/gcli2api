@@ -1,4 +1,4 @@
-full_hash=7d914c18718a11651e85405ece88e1c38dc53281
-short_hash=7d914c1
-message=fix streaming generator close errors
-date=2026-07-06 23:41:18 +0800
+full_hash=8d7a6e4bb24962fe65dce44f9afdbde36a28dc43
+short_hash=8d7a6e4
+message=reduce memory growth without worker recycle
+date=2026-07-06 23:59:46 +0800
