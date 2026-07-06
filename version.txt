@@ -1,4 +1,4 @@
-full_hash=9763b136e63ba46ef7e27814d41244d985763db3
-short_hash=9763b13
-message=optimize high rpm paths and empty output handling
-date=2026-07-06 20:50:05 +0800
+full_hash=08ebfa73dbd6c519b86f607a648573ca3dc79172
+short_hash=08ebfa7
+message=fix antigravity credit summary progress
+date=2026-07-06 21:03:25 +0800
