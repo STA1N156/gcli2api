@@ -1,4 +1,4 @@
-full_hash=2b50391477e5efc42b48d297caa0ddb7fde0f1d5
-short_hash=2b50391
-message=Enable HTTP/2 for upstream HTTP client
-date=2026-07-08 19:03:41 +0800
+full_hash=adfec521e41c6e2528838a3e9f7186597fa6d922
+short_hash=adfec52
+message=Use HTTP/1.1 for streaming upstream requests
+date=2026-07-08 20:28:31 +0800
