@@ -43,6 +43,10 @@ class HttpxClientManager:
     async def get_client_kwargs(self, timeout: float = 30.0, **kwargs) -> Dict[str, Any]:
         client_kwargs = {"timeout": timeout, **kwargs}
         client_kwargs.setdefault(
+            "http2",
+            os.getenv("HTTPX_HTTP2", "1").lower() not in {"0", "false", "no", "off"},
+        )
+        client_kwargs.setdefault(
             "limits",
             httpx.Limits(
                 max_connections=int(os.getenv("HTTPX_MAX_CONNECTIONS", "128")),

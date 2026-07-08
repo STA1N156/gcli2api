@@ -1,5 +1,5 @@
 fastapi
-httpx[socks]
+httpx[http2,socks]
 pydantic==1.10.22
 python-dotenv
 hypercorn
