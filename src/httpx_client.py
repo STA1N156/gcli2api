@@ -157,6 +157,10 @@ async def stream_post_async(
         return
 
     client_kwargs, request_kwargs = _split_httpx_kwargs(kwargs)
+    client_kwargs.setdefault(
+        "http2",
+        os.getenv("HTTPX_STREAM_HTTP2", "0").lower() in {"1", "true", "yes", "on"},
+    )
     async with http_client.get_streaming_client(**client_kwargs) as client:
         async with client.stream("POST", url, json=body, headers=headers, **request_kwargs) as r:
             if r.status_code != 200:
