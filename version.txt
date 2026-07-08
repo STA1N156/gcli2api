@@ -1,4 +1,4 @@
-full_hash=9b05b35a442a70583897958214244f5872ad7701
-short_hash=9b05b35
-message=remove automatic memory trimming
-date=2026-07-07 00:10:11 +0800
+full_hash=2b50391477e5efc42b48d297caa0ddb7fde0f1d5
+short_hash=2b50391
+message=Enable HTTP/2 for upstream HTTP client
+date=2026-07-08 19:03:41 +0800
