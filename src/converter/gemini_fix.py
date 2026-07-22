@@ -21,6 +21,11 @@ DEFAULT_SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_IMAGE_HATE", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_IMAGE_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_JAILBREAK", "threshold": "BLOCK_NONE"},
 ]
 
 LITE_SAFETY_SETTINGS = [
@@ -287,9 +292,51 @@ def _normalize_tools_for_internal_api(tools: Any) -> Any:
     return normalized_tools
 
 
-def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str) -> Any:
-    if "claude" not in (model_name or "").lower() or not isinstance(tools, list):
+def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str, mode: str = "geminicli") -> Any:
+    if not isinstance(tools, list):
         return tools
+
+    is_claude = "claude" in (model_name or "").lower()
+
+    if is_claude:
+        normalized_tools = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                normalized_tools.append(tool)
+                continue
+
+            normalized_tool = tool.copy()
+            schema = {"type": "object", "properties": {}}
+            name = ""
+            description = ""
+
+            custom_tool = normalized_tool.get("custom")
+            if isinstance(custom_tool, dict):
+                schema = custom_tool.get("input_schema") or custom_tool.get("inputSchema") or schema
+                name = custom_tool.get("name", "")
+                description = custom_tool.get("description", "")
+            else:
+                declarations = normalized_tool.get("functionDeclarations") or normalized_tool.get("function_declarations")
+                if isinstance(declarations, list) and declarations and isinstance(declarations[0], dict):
+                    declaration = declarations[0]
+                    schema = (
+                        declaration.get("parametersJsonSchema")
+                        or declaration.get("parameters_json_schema")
+                        or declaration.get("parameters")
+                        or schema
+                    )
+                    name = declaration.get("name", "")
+                    description = declaration.get("description", "")
+
+            normalized_tools.append({
+                "functionDeclarations": [{
+                    "name": name,
+                    "description": description,
+                    "parameters": schema,
+                }]
+            })
+
+        return normalized_tools
 
     normalized_tools = []
     for tool in tools:
@@ -299,34 +346,43 @@ def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str) -> Any:
 
         normalized_tool = tool.copy()
         custom_tool = normalized_tool.get("custom")
-        if isinstance(custom_tool, dict) and not custom_tool.get("input_schema"):
-            normalized_custom = custom_tool.copy()
-            normalized_custom["input_schema"] = {"type": "object", "properties": {}}
-            normalized_tool["custom"] = normalized_custom
+        if isinstance(custom_tool, dict):
+            schema = custom_tool.get("input_schema") or custom_tool.get("inputSchema")
+            if schema in (None, {}, []):
+                schema = {"type": "object", "properties": {}}
+            normalized_tools.append({
+                "functionDeclarations": [{
+                    "name": custom_tool.get("name", ""),
+                    "description": custom_tool.get("description", ""),
+                    "parameters": schema,
+                }]
+            })
+            continue
 
-        declarations = normalized_tool.get("functionDeclarations")
-        if declarations is None:
-            declarations = normalized_tool.get("function_declarations")
+        declarations = normalized_tool.get("functionDeclarations") or normalized_tool.get("function_declarations")
         if isinstance(declarations, list):
+            normalized_declarations = []
             for declaration in declarations:
                 if not isinstance(declaration, dict):
-                    normalized_tools.append({"custom": declaration})
+                    normalized_declarations.append(declaration)
                     continue
 
+                normalized_declaration = declaration.copy()
                 schema = (
-                    declaration.get("parametersJsonSchema")
-                    or declaration.get("parameters_json_schema")
-                    or declaration.get("parameters")
-                    or {"type": "object", "properties": {}}
+                    normalized_declaration.get("parameters")
+                    or normalized_declaration.get("parametersJsonSchema")
+                    or normalized_declaration.get("parameters_json_schema")
                 )
-                normalized_tools.append({
-                    "custom": {
-                        "name": declaration.get("name", ""),
-                        "description": declaration.get("description", ""),
-                        "input_schema": schema,
-                    }
-                })
-            continue
+                if schema in (None, {}, []):
+                    schema = {"type": "object", "properties": {}}
+
+                normalized_declaration["parameters"] = schema
+                normalized_declaration.pop("parametersJsonSchema", None)
+                normalized_declaration.pop("parameters_json_schema", None)
+                normalized_declarations.append(normalized_declaration)
+
+            normalized_tool.pop("function_declarations", None)
+            normalized_tool["functionDeclarations"] = normalized_declarations
 
         normalized_tools.append(normalized_tool)
 
@@ -842,9 +898,9 @@ async def normalize_gemini_request(
     # 1. 安全设置覆盖
     if "tools" in result:
         result["tools"] = _normalize_tools_for_internal_api(result.get("tools"))
-        result["tools"] = _ensure_empty_tool_schema_for_claude(result.get("tools"), model)
+        result["tools"] = _ensure_empty_tool_schema_for_claude(result.get("tools"), model, mode)
 
-    if "lite" in model.lower():
+    if "gemini-2.5-flash-lite" in model.lower():
         result["safetySettings"] = LITE_SAFETY_SETTINGS
     else:
         result["safetySettings"] = DEFAULT_SAFETY_SETTINGS

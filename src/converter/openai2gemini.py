@@ -1302,15 +1302,19 @@ async def convert_openai_to_gemini_request(openai_request: Dict[str, Any]) -> Di
             parts = []
 
             # 如果有文本内容,先添加文本
+            # content 可能是 OpenAI 文本块列表，必须解包成字符串，避免多轮调用后嵌套扩散。
             if content:
                 if isinstance(content, list):
-                    for content_part in content:
-                        if isinstance(content_part, dict):
-                            text = content_part.get("text", "")
-                            if text:
-                                parts.append({"text": text})
-                        elif isinstance(content_part, str):
-                            parts.append({"text": content_part})
+                    for part in content:
+                        if isinstance(part, dict):
+                            if part.get("type") == "text" or "text" in part:
+                                text = part.get("text", "")
+                                if text:
+                                    parts.append({"text": text})
+                        elif isinstance(part, str) and part:
+                            parts.append({"text": part})
+                elif isinstance(content, str):
+                    parts.append({"text": content})
                 elif isinstance(content, dict):
                     text = content.get("text", "")
                     if text:
