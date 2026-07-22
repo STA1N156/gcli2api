@@ -1,4 +1,4 @@
-full_hash=adfec521e41c6e2528838a3e9f7186597fa6d922
-short_hash=adfec52
-message=Use HTTP/1.1 for streaming upstream requests
-date=2026-07-08 20:28:31 +0800
+full_hash=2fb78701928c0ae17b6169e0c205b8e2041ba712
+short_hash=2fb7870
+message=merge upstream converter fixes
+date=2026-07-22 15:20:04 +0800
