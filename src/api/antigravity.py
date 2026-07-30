@@ -168,9 +168,8 @@ async def _get_session_state(
     return state
 
 
-def _generate_request_id(conversation_id: str, trajectory_id: str, step: int) -> str:
-    unix_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    return f"agent/{conversation_id}/{unix_ms}/{trajectory_id}/{step}"
+def _generate_request_id() -> str:
+    return f"agent-{uuid.uuid4()}"
 
 
 def _build_labels(model: str, trajectory_id: str, step: int) -> Dict[str, str]:
@@ -203,9 +202,7 @@ async def wrap_cli_request(
     tool_config["functionCallingConfig"] = function_config
     inner["toolConfig"] = tool_config
 
-    request_id = _generate_request_id(
-        state.conversation_id, state.trajectory_id, state.step_index
-    )
+    request_id = _generate_request_id()
     return (
         {
             "project": project_id,
@@ -358,6 +355,7 @@ async def stream_request(
                                     f"Bearer {refreshed_token}"
                                 )
                                 final_payload["project"] = refreshed_project
+                                final_payload["requestId"] = _generate_request_id()
                                 retry_same = True
                                 break
                     await _record_response_error(
@@ -434,6 +432,7 @@ async def stream_request(
         current_file, token, project_id = selected
         auth_headers["Authorization"] = f"Bearer {token}"
         final_payload["project"] = project_id
+        final_payload["requestId"] = _generate_request_id()
 
 
 async def non_stream_request(
@@ -520,6 +519,7 @@ async def non_stream_request(
                     if refreshed_token and refreshed_project:
                         auth_headers["Authorization"] = f"Bearer {refreshed_token}"
                         final_payload["project"] = refreshed_project
+                        final_payload["requestId"] = _generate_request_id()
                         continue
 
             error_text = getattr(response, "text", "") or ""
@@ -554,6 +554,7 @@ async def non_stream_request(
         current_file, token, project_id = selected
         auth_headers["Authorization"] = f"Bearer {token}"
         final_payload["project"] = project_id
+        final_payload["requestId"] = _generate_request_id()
 
 
 async def fetch_available_models() -> List[Dict[str, Any]]:

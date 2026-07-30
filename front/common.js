@@ -85,7 +85,7 @@ function createCredsManager(type) {
                 status: `./creds/status`,
                 action: `./creds/action`,
                 batchAction: `./creds/batch-action`,
-                clearAllCooldowns: `./creds/clear-all-cooldowns`,
+                clearAllAbnormalStatus: `./creds/clear-all-abnormal-status`,
                 download: `./creds/download`,
                 downloadAll: `./creds/download-all`,
                 detail: `./creds/detail`,
@@ -379,27 +379,27 @@ function createCredsManager(type) {
             }
         },
 
-        async clearAllCooldowns() {
+        async clearAllAbnormalStatus() {
             const label = this.type === 'antigravity' ? 'Antigravity' : 'GCLI';
-            if (!confirm(`确定要清除全部 ${label} 凭证的所有冷却状态吗？`)) return;
+            if (!confirm(`确定要刷新全部 ${label} 凭证的异常状态吗？`)) return;
 
             try {
-                showStatus(`正在刷新全部 ${label} 凭证的冷却状态...`, 'info');
+                showStatus(`正在刷新全部 ${label} 凭证的异常状态...`, 'info');
                 const response = await fetch(
-                    `${this.getEndpoint('clearAllCooldowns')}?${this.getModeParam()}`,
+                    `${this.getEndpoint('clearAllAbnormalStatus')}?${this.getModeParam()}`,
                     { method: 'POST', headers: getAuthHeaders() }
                 );
                 const data = await response.json();
 
                 if (!response.ok) {
-                    showStatus(`刷新冷却状态失败: ${data.detail || data.error || '未知错误'}`, 'error');
+                    showStatus(`刷新异常状态失败: ${data.detail || data.error || '未知错误'}`, 'error');
                     return;
                 }
 
                 showStatus(data.message, 'success');
                 await this.refresh();
             } catch (error) {
-                showStatus(`刷新冷却状态网络错误: ${error.message}`, 'error');
+                showStatus(`刷新异常状态网络错误: ${error.message}`, 'error');
             }
         }
     };
@@ -1502,7 +1502,7 @@ function toggleSelectAll() {
     AppState.creds.updateBatchControls();
 }
 function batchAction(action) { AppState.creds.batchAction(action); }
-function clearAllCooldowns() { AppState.creds.clearAllCooldowns(); }
+function clearAllAbnormalStatus() { AppState.creds.clearAllAbnormalStatus(); }
 function downloadCred(filename) {
     fetch(`./creds/download/${filename}`, { headers: { 'Authorization': `Bearer ${AppState.authToken}` } })
         .then(r => r.ok ? r.blob() : Promise.reject())
@@ -1913,7 +1913,7 @@ function toggleSelectAllAntigravity() {
     AppState.antigravityCreds.updateBatchControls();
 }
 function batchAntigravityAction(action) { AppState.antigravityCreds.batchAction(action); }
-function clearAllAntigravityCooldowns() { AppState.antigravityCreds.clearAllCooldowns(); }
+function clearAllAntigravityAbnormalStatus() { AppState.antigravityCreds.clearAllAbnormalStatus(); }
 function downloadAntigravityCred(filename) {
     fetch(`./creds/download/${filename}?mode=antigravity`, { headers: getAuthHeaders() })
         .then(r => r.ok ? r.blob() : Promise.reject())

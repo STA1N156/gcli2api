@@ -1,10 +1,13 @@
 import unittest
+from copy import deepcopy
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
+from fastapi import Response
 from src.api.antigravity import non_stream_request as antigravity_request
+from src.api.antigravity import stream_request as antigravity_stream_request
 from src.api.geminicli import non_stream_request as geminicli_request
-from src.api.utils import get_retry_config
+from src.api.utils import get_retry_config, is_retryable_status
 from src.credential_manager import CredentialManager
 
 
@@ -182,6 +185,16 @@ class CredentialRetryTests(unittest.IsolatedAsyncioTestCase):
             ("b.json", {"access_token": "b", "project_id": "b-project"}),
             ("c.json", {"access_token": "c", "project_id": "c-project"}),
         ])
+        sent_payloads = []
+        responses = iter([
+            http_response(429),
+            http_response(429),
+            http_response(200),
+        ])
+
+        async def post(**kwargs):
+            sent_payloads.append(deepcopy(kwargs["json"]))
+            return next(responses)
 
         with patch.multiple(
             "src.api.antigravity",
@@ -191,17 +204,18 @@ class CredentialRetryTests(unittest.IsolatedAsyncioTestCase):
             ),
             get_antigravity_stream2nostream=AsyncMock(return_value=False),
             get_antigravity_api_url=AsyncMock(return_value="https://example.test"),
-            wrap_cli_request=AsyncMock(return_value=({"project": "a-project"}, "id")),
+            wrap_cli_request=AsyncMock(return_value=({
+                "project": "a-project",
+                "requestId": "id-a",
+                "request": {"sessionId": "stable-session"},
+            }, "id-a")),
+            _generate_request_id=Mock(side_effect=["id-b", "id-c"]),
             get_retry_config=AsyncMock(return_value={
                 "max_credentials": 0,
                 "retry_interval": 0,
             }),
             get_empty_output_error_enabled=AsyncMock(return_value=False),
-            post_async=AsyncMock(side_effect=[
-                http_response(429),
-                http_response(429),
-                http_response(200),
-            ]),
+            post_async=post,
             record_api_call_error=AsyncMock(),
             record_api_call_success=AsyncMock(),
         ):
@@ -232,6 +246,71 @@ class CredentialRetryTests(unittest.IsolatedAsyncioTestCase):
                     exclude_credentials={"a.json", "b.json"},
                 ),
             ],
+        )
+        self.assertEqual(
+            [payload["requestId"] for payload in sent_payloads],
+            ["id-a", "id-b", "id-c"],
+        )
+        self.assertEqual(
+            [payload["request"]["sessionId"] for payload in sent_payloads],
+            ["stable-session"] * 3,
+        )
+
+    async def test_antigravity_stream_retry_renews_request_id(self):
+        get_credential = AsyncMock(side_effect=[
+            ("a.json", {"access_token": "a", "project_id": "a-project"}),
+            ("b.json", {"access_token": "b", "project_id": "b-project"}),
+        ])
+        sent_payloads = []
+
+        def stream_post(**kwargs):
+            sent_payloads.append(deepcopy(kwargs["body"]))
+
+            async def chunks():
+                if len(sent_payloads) == 1:
+                    yield Response(content="quota", status_code=429)
+                else:
+                    yield b'data: {"response": {"candidates": []}}\n\n'
+
+            return chunks()
+
+        with patch.multiple(
+            "src.api.antigravity",
+            credential_manager=SimpleNamespace(
+                get_valid_credential=get_credential,
+                set_cred_disabled=AsyncMock(),
+            ),
+            get_antigravity_api_url=AsyncMock(return_value="https://example.test"),
+            wrap_cli_request=AsyncMock(return_value=({
+                "project": "a-project",
+                "requestId": "id-a",
+                "request": {"sessionId": "stable-session"},
+            }, "id-a")),
+            _generate_request_id=Mock(return_value="id-b"),
+            get_retry_config=AsyncMock(return_value={
+                "max_credentials": 0,
+                "retry_interval": 0,
+            }),
+            get_empty_output_error_enabled=AsyncMock(return_value=False),
+            stream_post_async=stream_post,
+            record_api_call_error=AsyncMock(),
+            record_api_call_success=AsyncMock(),
+        ):
+            chunks = [
+                chunk
+                async for chunk in antigravity_stream_request(
+                    {"model": "gemini-3.1-pro-preview"}
+                )
+            ]
+
+        self.assertTrue(chunks)
+        self.assertEqual(
+            [payload["requestId"] for payload in sent_payloads],
+            ["id-a", "id-b"],
+        )
+        self.assertEqual(
+            [payload["request"]["sessionId"] for payload in sent_payloads],
+            ["stable-session", "stable-session"],
         )
 
     async def test_enabled_limit_counts_total_credentials(self):
@@ -359,6 +438,10 @@ class CredentialRetryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RetryConfigTests(unittest.IsolatedAsyncioTestCase):
+    def test_400_and_empty_output_error_are_not_retryable(self):
+        self.assertFalse(is_retryable_status(400))
+        self.assertFalse(is_retryable_status(461))
+
     async def test_disabled_limit_means_no_numeric_cap(self):
         with patch.multiple(
             "src.api.utils",

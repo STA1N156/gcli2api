@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 from src.api.utils import parse_quota_reset_timestamp, record_api_call_error
 from src.model_cooldown import has_active_model_cooldown
-from src.panel.creds import clear_all_credential_cooldowns
+from src.panel.creds import clear_all_credential_abnormal_status
 
 
 class ModelCooldownTests(unittest.TestCase):
@@ -57,7 +57,7 @@ class ModelCooldownTests(unittest.TestCase):
         )
 
 
-class BatchCooldownTests(unittest.IsolatedAsyncioTestCase):
+class BatchAbnormalStatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_ordinary_403_sets_model_cooldown_without_disabling(self):
         manager = SimpleNamespace(record_api_call_result=AsyncMock())
 
@@ -81,16 +81,17 @@ class BatchCooldownTests(unittest.IsolatedAsyncioTestCase):
             error_message="permission denied",
         )
 
-    async def test_clear_all_cooldowns_applies_to_every_cooled_credential(self):
+    async def test_refresh_abnormal_status_applies_to_every_abnormal_credential(self):
         backend = SimpleNamespace(
             clear_all_model_cooldowns=AsyncMock(return_value=True)
         )
         storage_adapter = SimpleNamespace(
             _backend=backend,
+            update_credential_state=AsyncMock(return_value=True),
             get_all_credential_states=AsyncMock(return_value={
-                "first.json": {"model_cooldowns": {"gemini-3-flash": 2000}},
+                "first.json": {"model_cooldowns": {"gemini-3-flash": 4102444800}},
                 "second.json": {"model_cooldowns": {}},
-                "third.json": {"model_cooldowns": {"claude-sonnet-4-6": 2000}},
+                "third.json": {"model_cooldowns": {"claude-sonnet-4-6": 4102444800}},
             }),
         )
 
@@ -98,7 +99,7 @@ class BatchCooldownTests(unittest.IsolatedAsyncioTestCase):
             "src.panel.creds.get_storage_adapter",
             AsyncMock(return_value=storage_adapter),
         ):
-            response = await clear_all_credential_cooldowns(
+            response = await clear_all_credential_abnormal_status(
                 token="test",
                 mode="antigravity",
             )

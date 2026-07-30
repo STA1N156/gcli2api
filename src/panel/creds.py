@@ -127,6 +127,27 @@ async def clear_all_model_cooldowns_for_credential(
         return False
 
 
+async def clear_credential_abnormal_status(
+    storage_adapter: Any,
+    filename: str,
+    mode: str,
+) -> bool:
+    """重置凭证的禁用、错误和模型冷却状态。"""
+    state_cleared = await storage_adapter.update_credential_state(
+        filename,
+        {
+            "disabled": False,
+            "error_codes": [],
+            "error_messages": {},
+        },
+        mode=mode,
+    )
+    cooldowns_cleared = await clear_all_model_cooldowns_for_credential(
+        storage_adapter, filename, mode
+    )
+    return bool(state_cleared and cooldowns_cleared)
+
+
 def _quota_remaining_float(quota_data: Any) -> Optional[float]:
     if not isinstance(quota_data, dict):
         return None
@@ -1369,12 +1390,12 @@ async def creds_batch_action(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/clear-all-cooldowns")
-async def clear_all_credential_cooldowns(
+@router.post("/clear-all-abnormal-status")
+async def clear_all_credential_abnormal_status(
     token: str = Depends(verify_panel_token),
     mode: str = "geminicli",
 ):
-    """清空当前凭证类型下的全部模型冷却。"""
+    """让当前凭证类型下的全部异常凭证重新参与使用。"""
     try:
         mode = validate_mode(mode)
         storage_adapter = await get_storage_adapter()
@@ -1382,12 +1403,16 @@ async def clear_all_credential_cooldowns(
         filenames = [
             filename
             for filename, state in all_states.items()
-            if (state or {}).get("model_cooldowns")
+            if (
+                (state or {}).get("disabled")
+                or (state or {}).get("error_codes")
+                or _active_model_cooldowns_from_state(state)
+            )
         ]
 
         success_count = 0
         for filename in filenames:
-            if await clear_all_model_cooldowns_for_credential(
+            if await clear_credential_abnormal_status(
                 storage_adapter, filename, mode
             ):
                 success_count += 1
@@ -1395,10 +1420,10 @@ async def clear_all_credential_cooldowns(
         return JSONResponse(content={
             "success_count": success_count,
             "total_count": len(filenames),
-            "message": f"冷却状态刷新完成：已清除 {success_count} 个凭证",
+            "message": f"异常状态刷新完成：已重置 {success_count} 个凭证",
         })
     except Exception as e:
-        log.error(f"刷新全部凭证冷却状态失败: {e}")
+        log.error(f"刷新全部凭证异常状态失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
