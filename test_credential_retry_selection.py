@@ -212,6 +212,23 @@ class CredentialRetrySelectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result[0], "available.json")
 
+    async def test_session_429_failures_are_shared_between_workers_with_redis(self):
+        manager, _ = self.make_manager({
+            "a.json": {"disabled": False, "model_cooldowns": {}},
+            "b.json": {"disabled": False, "model_cooldowns": {}},
+        })
+        manager._get_session_failure_redis = AsyncMock(return_value=SimpleNamespace(
+            smembers=AsyncMock(return_value={"a.json"}),
+        ))
+
+        result = await manager.get_valid_credential(
+            mode="antigravity",
+            model_name="gemini-3.1-pro-preview",
+            session_key="rp-hub-chat",
+        )
+
+        self.assertEqual(result[0], "b.json")
+
     async def test_claude_request_can_use_credential_with_only_gemini_cooldown(self):
         states = {
             "gemini-cooled.json": {

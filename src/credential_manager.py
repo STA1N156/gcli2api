@@ -21,6 +21,7 @@ SESSION_BINDING_MAX_ENTRIES = int(os.getenv("SESSION_BINDING_MAX_ENTRIES", "5000
 SESSION_FAILURE_TTL_SECONDS = int(os.getenv("SESSION_FAILURE_TTL_SECONDS", "900"))
 SESSION_FAILURE_MAX_ENTRIES = int(os.getenv("SESSION_FAILURE_MAX_ENTRIES", "10000"))
 SESSION_BINDING_PRUNE_INTERVAL_SECONDS = 60
+SESSION_FAILURE_REDIS_PREFIX = "credential:session-failures:"
 
 
 class CredentialManager:
@@ -37,6 +38,8 @@ class CredentialManager:
         self._session_failures: Dict[str, Tuple[Set[str], float]] = {}
         self._session_lock = asyncio.Lock()
         self._last_session_prune = 0.0
+        self._session_redis = None
+        self._session_redis_checked = False
 
         # 并发控制（简化）
         # 后端数据库自行处理并发，credential_manager 不再使用本地锁
@@ -70,6 +73,27 @@ class CredentialManager:
 
     def _session_log_id(self, binding_key: str) -> str:
         return hashlib.sha256(binding_key.encode("utf-8")).hexdigest()[:12]
+
+    def _session_failure_redis_key(self, binding_key: str) -> str:
+        digest = hashlib.sha256(binding_key.encode("utf-8")).hexdigest()
+        return f"{SESSION_FAILURE_REDIS_PREFIX}{digest}"
+
+    async def _get_session_failure_redis(self):
+        if self._session_redis_checked:
+            return self._session_redis
+        self._session_redis_checked = True
+        redis_url = os.getenv("REDIS_URL")
+        if not redis_url:
+            return None
+        try:
+            import redis.asyncio as aioredis  # type: ignore
+
+            client = aioredis.from_url(redis_url, decode_responses=True)
+            await client.ping()
+            self._session_redis = client
+        except Exception as e:
+            log.warning(f"[CredMgr] Redis session failure store unavailable: {e}")
+        return self._session_redis
 
     def _prune_session_bindings_locked(self, now: float) -> None:
         if (
@@ -129,13 +153,21 @@ class CredentialManager:
     async def _get_session_failures(self, binding_key: str) -> Set[str]:
         async with self._session_lock:
             failure = self._session_failures.get(binding_key)
-            if not failure:
-                return set()
-            filenames, expires_at = failure
-            if expires_at <= time.time():
+            filenames = set(failure[0]) if failure else set()
+            if failure and failure[1] <= time.time():
                 self._session_failures.pop(binding_key, None)
-                return set()
-            return set(filenames)
+                filenames.clear()
+
+        redis = await self._get_session_failure_redis()
+        if redis is not None:
+            try:
+                shared = await redis.smembers(
+                    self._session_failure_redis_key(binding_key)
+                )
+                filenames.update(os.path.basename(name) for name in shared)
+            except Exception as e:
+                log.warning(f"[CredMgr] Failed to read session failures from Redis: {e}")
+        return filenames
 
     async def remember_session_failure(
         self,
@@ -163,6 +195,17 @@ class CredentialManager:
                 filenames,
                 now + SESSION_FAILURE_TTL_SECONDS,
             )
+
+        redis = await self._get_session_failure_redis()
+        if redis is not None:
+            try:
+                redis_key = self._session_failure_redis_key(binding_key)
+                pipe = redis.pipeline()
+                pipe.sadd(redis_key, os.path.basename(credential_name))
+                pipe.expire(redis_key, SESSION_FAILURE_TTL_SECONDS)
+                await pipe.execute()
+            except Exception as e:
+                log.warning(f"[CredMgr] Failed to store session failure in Redis: {e}")
 
     async def _get_bound_credential_if_available(
         self,
