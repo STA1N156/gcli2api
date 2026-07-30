@@ -32,7 +32,7 @@ class ModelCooldownTests(unittest.TestCase):
             )
         )
 
-    def test_generic_resource_exhausted_cooldown_is_skipped_only_for_antigravity(self):
+    def test_generic_resource_exhausted_uses_four_hour_cooldown(self):
         error = {
             "error": {
                 "status": "RESOURCE_EXHAUSTED",
@@ -40,8 +40,11 @@ class ModelCooldownTests(unittest.TestCase):
             }
         }
 
-        self.assertIsNone(parse_quota_reset_timestamp(error, mode="antigravity"))
         with patch("time.time", return_value=1000):
+            self.assertEqual(
+                parse_quota_reset_timestamp(error, mode="antigravity"),
+                15400,
+            )
             self.assertEqual(parse_quota_reset_timestamp(error), 15400)
 
     def test_antigravity_claude_group_behavior_is_unchanged(self):

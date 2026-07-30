@@ -481,7 +481,7 @@ def parse_quota_reset_timestamp(
 
     Args:
         error_response: Google API返回的错误响应字典
-        mode: 请求模式；Antigravity 不处理固定文案的通用429冷却
+        mode: 请求模式
 
     Returns:
         Unix时间戳（秒），如果无法解析则返回None
@@ -512,9 +512,6 @@ def parse_quota_reset_timestamp(
             error_obj.get("status") == "RESOURCE_EXHAUSTED"
             and error_obj.get("message") == "Resource has been exhausted (e.g. check quota)."
         )
-
-        if mode == "antigravity" and is_generic_resource_exhausted:
-            return None
 
         for detail in details:
             if detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo":
