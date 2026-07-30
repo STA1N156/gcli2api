@@ -7,11 +7,14 @@ Centralizes all configuration to avoid duplication across modules.
 """
 
 import os
+import time
 from typing import Any, Optional
 
 # 全局配置缓存
 _config_cache: dict[str, Any] = {}
 _config_initialized = False
+_config_loaded_at = 0.0
+_CONFIG_REFRESH_INTERVAL = 5.0
 
 # Client Configuration
 
@@ -54,7 +57,7 @@ ENV_MAPPINGS = {
 
 async def init_config():
     """初始化配置缓存（启动时调用一次）"""
-    global _config_cache, _config_initialized
+    global _config_cache, _config_initialized, _config_loaded_at
 
     if _config_initialized:
         return
@@ -64,15 +67,17 @@ async def init_config():
         storage_adapter = await get_storage_adapter()
         _config_cache = await storage_adapter.get_all_config()
         _config_initialized = True
+        _config_loaded_at = time.monotonic()
     except Exception:
         # 初始化失败时使用空缓存
         _config_cache = {}
         _config_initialized = True
+        _config_loaded_at = time.monotonic()
 
 
 async def reload_config():
     """重新加载配置（修改配置后调用）"""
-    global _config_cache, _config_initialized
+    global _config_cache, _config_initialized, _config_loaded_at
 
     try:
         from src.storage_adapter import get_storage_adapter
@@ -87,6 +92,8 @@ async def reload_config():
         _config_initialized = True
     except Exception:
         pass
+    finally:
+        _config_loaded_at = time.monotonic()
 
 
 def _get_cached_config(key: str, default: Any = None) -> Any:
@@ -96,9 +103,14 @@ def _get_cached_config(key: str, default: Any = None) -> Any:
 
 async def get_config_value(key: str, default: Any = None, env_var: Optional[str] = None) -> Any:
     """Get configuration value with priority: ENV > Storage > default."""
-    # 确保配置已初始化
+    global _config_loaded_at
+
+    # 每个 Worker 定期从共享存储刷新，避免长期读取其他 Worker 保存前的旧值
     if not _config_initialized:
         await init_config()
+    elif time.monotonic() - _config_loaded_at >= _CONFIG_REFRESH_INTERVAL:
+        _config_loaded_at = time.monotonic()
+        await reload_config()
 
     # Priority 1: Environment variable
     if env_var and os.getenv(env_var):

@@ -1586,6 +1586,7 @@
                             disabled>批量禁用</button>
                         <button class="btn btn-small btn-danger" id="batchDeleteBtn" onclick="batchAction('delete')"
                             disabled>批量删除</button>
+                        <button class="btn btn-small" onclick="clearAllCooldowns()">刷新冷却状态</button>
                         <button class="btn btn-small" id="batchVerifyBtn" onclick="batchVerifyProjectIds()"
                             disabled>批量检验</button>
                         <button class="btn btn-small" id="batchMessageVerifyBtn" onclick="batchVerifyMessageCredentials()"
@@ -1811,6 +1812,8 @@
                             onclick="batchAntigravityAction('disable')" disabled>批量禁用</button>
                         <button class="btn btn-small btn-danger" id="antigravityBatchDeleteBtn"
                             onclick="batchAntigravityAction('delete')" disabled>批量删除</button>
+                        <button class="btn btn-small"
+                            onclick="clearAllAntigravityCooldowns()">刷新冷却状态</button>
                         <button class="btn btn-small" id="antigravityBatchEnableCreditBtn"
                             onclick="batchAntigravityAction('enable_credit')" disabled>批量开启积分</button>
                         <button class="btn btn-small" id="antigravityBatchDisableCreditBtn"
@@ -2363,7 +2366,7 @@
     </div>
 
     <!-- 引入公共JavaScript模块 -->
-    <script src="./front/common.js?v=gcli-split-cooldown-20260623"></script>
+    <script src="./front/common.js?v=cooldown-refresh-20260730"></script>
 </body>
 
 </html>

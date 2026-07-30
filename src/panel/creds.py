@@ -115,14 +115,16 @@ async def clear_all_model_cooldowns_for_credential(
     storage_adapter: Any,
     filename: str,
     mode: str,
-) -> None:
+) -> bool:
     """清空指定凭证的所有模型冷却（后端支持时执行）。"""
     try:
         cleared = await storage_adapter._backend.clear_all_model_cooldowns(filename, mode=mode)
         if not cleared:
             log.warning(f"清空模型CD失败或凭证不存在: {filename} (mode={mode})")
+        return bool(cleared)
     except Exception as e:
         log.warning(f"清空模型CD时出错: {filename} (mode={mode}), error={e}")
+        return False
 
 
 def _quota_remaining_float(quota_data: Any) -> Optional[float]:
@@ -1365,6 +1367,39 @@ async def creds_batch_action(
         raise
     except Exception as e:
         log.error(f"批量凭证文件操作失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/clear-all-cooldowns")
+async def clear_all_credential_cooldowns(
+    token: str = Depends(verify_panel_token),
+    mode: str = "geminicli",
+):
+    """清空当前凭证类型下的全部模型冷却。"""
+    try:
+        mode = validate_mode(mode)
+        storage_adapter = await get_storage_adapter()
+        all_states = await storage_adapter.get_all_credential_states(mode=mode)
+        filenames = [
+            filename
+            for filename, state in all_states.items()
+            if (state or {}).get("model_cooldowns")
+        ]
+
+        success_count = 0
+        for filename in filenames:
+            if await clear_all_model_cooldowns_for_credential(
+                storage_adapter, filename, mode
+            ):
+                success_count += 1
+
+        return JSONResponse(content={
+            "success_count": success_count,
+            "total_count": len(filenames),
+            "message": f"冷却状态刷新完成：已清除 {success_count} 个凭证",
+        })
+    except Exception as e:
+        log.error(f"刷新全部凭证冷却状态失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -217,7 +217,7 @@ async def parse_and_log_cooldown(
     """
     try:
         error_data = json.loads(error_text)
-        cooldown_until = parse_quota_reset_timestamp(error_data)
+        cooldown_until = parse_quota_reset_timestamp(error_data, mode=mode)
         if cooldown_until:
             log.info(
                 f"[{mode.upper()}] 检测到quota冷却时间: "
@@ -472,12 +472,16 @@ async def collect_streaming_response(stream_generator) -> Response:
 RESOURCE_EXHAUSTED_COOLDOWN_HOURS = 4  # RESOURCE_EXHAUSTED 错误的默认冷却时间（小时）
 
 
-def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
+def parse_quota_reset_timestamp(
+    error_response: dict,
+    mode: str = "geminicli",
+) -> Optional[float]:
     """
     从Google API错误响应中提取quota重置时间戳
 
     Args:
         error_response: Google API返回的错误响应字典
+        mode: 请求模式；Antigravity 不处理固定文案的通用429冷却
 
     Returns:
         Unix时间戳（秒），如果无法解析则返回None
@@ -504,6 +508,13 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
     try:
         error_obj = error_response.get("error", {})
         details = error_obj.get("details", [])
+        is_generic_resource_exhausted = (
+            error_obj.get("status") == "RESOURCE_EXHAUSTED"
+            and error_obj.get("message") == "Resource has been exhausted (e.g. check quota)."
+        )
+
+        if mode == "antigravity" and is_generic_resource_exhausted:
+            return None
 
         for detail in details:
             if detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo":
@@ -520,10 +531,7 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
                     return reset_dt.astimezone(timezone.utc).timestamp()
 
         # 如果是 RESOURCE_EXHAUSTED 错误且消息完全匹配，设置默认4小时冷却时间
-        if (
-            error_obj.get("status") == "RESOURCE_EXHAUSTED"
-            and error_obj.get("message") == "Resource has been exhausted (e.g. check quota)."
-        ):
+        if is_generic_resource_exhausted:
             import time
             cooldown_until = time.time() + RESOURCE_EXHAUSTED_COOLDOWN_HOURS * 3600
             return cooldown_until
