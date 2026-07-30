@@ -18,6 +18,8 @@ from src.storage_adapter import get_storage_adapter
 
 SESSION_BINDING_TTL_SECONDS = 3 * 60 * 60
 SESSION_BINDING_MAX_ENTRIES = int(os.getenv("SESSION_BINDING_MAX_ENTRIES", "50000"))
+SESSION_FAILURE_TTL_SECONDS = int(os.getenv("SESSION_FAILURE_TTL_SECONDS", "900"))
+SESSION_FAILURE_MAX_ENTRIES = int(os.getenv("SESSION_FAILURE_MAX_ENTRIES", "10000"))
 SESSION_BINDING_PRUNE_INTERVAL_SECONDS = 60
 
 
@@ -32,6 +34,7 @@ class CredentialManager:
         self._initialized = False
         self._storage_adapter = None
         self._session_bindings: Dict[str, Tuple[str, float]] = {}
+        self._session_failures: Dict[str, Tuple[Set[str], float]] = {}
         self._session_lock = asyncio.Lock()
         self._last_session_prune = 0.0
 
@@ -72,6 +75,7 @@ class CredentialManager:
         if (
             now - self._last_session_prune < SESSION_BINDING_PRUNE_INTERVAL_SECONDS
             and len(self._session_bindings) <= SESSION_BINDING_MAX_ENTRIES
+            and len(self._session_failures) <= SESSION_FAILURE_MAX_ENTRIES
         ):
             return
 
@@ -79,11 +83,18 @@ class CredentialManager:
         for key, (_, expires_at) in list(self._session_bindings.items()):
             if expires_at <= now:
                 self._session_bindings.pop(key, None)
+        for key, (_, expires_at) in list(self._session_failures.items()):
+            if expires_at <= now:
+                self._session_failures.pop(key, None)
 
         overflow = len(self._session_bindings) - SESSION_BINDING_MAX_ENTRIES
         if overflow > 0:
             for key in list(self._session_bindings)[:overflow]:
                 self._session_bindings.pop(key, None)
+        overflow = len(self._session_failures) - SESSION_FAILURE_MAX_ENTRIES
+        if overflow > 0:
+            for key in list(self._session_failures)[:overflow]:
+                self._session_failures.pop(key, None)
 
     async def _get_session_binding(self, binding_key: str) -> Optional[str]:
         async with self._session_lock:
@@ -114,6 +125,44 @@ class CredentialManager:
             return
         async with self._session_lock:
             self._session_bindings.pop(binding_key, None)
+
+    async def _get_session_failures(self, binding_key: str) -> Set[str]:
+        async with self._session_lock:
+            failure = self._session_failures.get(binding_key)
+            if not failure:
+                return set()
+            filenames, expires_at = failure
+            if expires_at <= time.time():
+                self._session_failures.pop(binding_key, None)
+                return set()
+            return set(filenames)
+
+    async def remember_session_failure(
+        self,
+        credential_name: str,
+        *,
+        mode: str,
+        model_name: Optional[str],
+        session_key: Optional[str],
+    ) -> None:
+        binding_key = self._session_binding_key(mode, model_name, session_key)
+        if not binding_key or not credential_name or SESSION_FAILURE_MAX_ENTRIES <= 0:
+            return
+
+        now = time.time()
+        async with self._session_lock:
+            self._prune_session_bindings_locked(now)
+            filenames, expires_at = self._session_failures.pop(
+                binding_key,
+                (set(), 0),
+            )
+            if expires_at <= now:
+                filenames = set()
+            filenames.add(os.path.basename(credential_name))
+            self._session_failures[binding_key] = (
+                filenames,
+                now + SESSION_FAILURE_TTL_SECONDS,
+            )
 
     async def _get_bound_credential_if_available(
         self,
@@ -255,9 +304,12 @@ class CredentialManager:
         }
         if exclude_credential:
             excluded_credentials.add(os.path.basename(exclude_credential))
+        retry_excluded_credentials = set(excluded_credentials)
 
         binding_key = self._session_binding_key(mode, model_name, session_key)
-        bypass_session_routing = bool(binding_key and excluded_credentials)
+        if binding_key:
+            excluded_credentials.update(await self._get_session_failures(binding_key))
+        bypass_session_routing = bool(binding_key and retry_excluded_credentials)
 
         if bypass_session_routing:
             await self._forget_session_binding(binding_key)
@@ -271,6 +323,9 @@ class CredentialManager:
 
         if binding_key and not bypass_session_routing:
             bound_filename = await self._get_session_binding(binding_key)
+            if bound_filename and os.path.basename(bound_filename) in excluded_credentials:
+                await self._forget_session_binding(binding_key)
+                bound_filename = None
             if bound_filename:
                 bound_result = await self._get_bound_credential_if_available(
                     bound_filename,

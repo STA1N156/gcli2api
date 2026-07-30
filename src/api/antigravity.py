@@ -425,6 +425,14 @@ async def stream_request(
                     if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
                         log.warning(f"[ANTIGRAVITY STREAM] 流式请求失败 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
 
+                        if status_code == 429 and session_key:
+                            await credential_manager.remember_session_failure(
+                                current_file,
+                                mode="antigravity",
+                                model_name=model_name,
+                                session_key=session_key,
+                            )
+
                         # 解析冷却时间
                         cooldown_until = None
                         if (status_code == 429 or status_code == 503) and error_body:
@@ -743,6 +751,14 @@ async def non_stream_request(
 
                 if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
                     log.warning(f"[ANTIGRAVITY] 非流式请求失败 (status={status_code}), 凭证: {current_file}, 响应: {error_text[:500] if error_text else '无'}")
+
+                    if status_code == 429 and session_key:
+                        await credential_manager.remember_session_failure(
+                            current_file,
+                            mode="antigravity",
+                            model_name=model_name,
+                            session_key=session_key,
+                        )
 
                     # 解析冷却时间
                     cooldown_until = None
