@@ -1,4 +1,4 @@
-full_hash=14f1f37a0567fc9fdd0313f326cf2a807144aa36
-short_hash=14f1f37
-message=Align credential routing and retry behavior
-date=2026-07-30 23:56:57 +0800
+full_hash=e7b5d43a502f3d1d935ef45dc84430085f185391
+short_hash=e7b5d43
+message=Fix Antigravity retry identity and reset abnormal states
+date=2026-07-31 00:12:15 +0800
