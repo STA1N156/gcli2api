@@ -1,4 +1,4 @@
-full_hash=270f40540f593893c3465e5861fe52a19f4c6297
-short_hash=270f405
-message=Merge pull request #6 from STA1N156/agent/antigravity-stability-fixes
-date=2026-07-30 22:40:11 +0800
+full_hash=5a1863bb5b031ac19b1a0493ae8ebb1639a0c890
+short_hash=5a1863b
+message=Use fork image in deployment manifests
+date=2026-07-30 22:45:16 +0800
