@@ -102,6 +102,30 @@ class CredentialRetrySelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[0], "available.json")
         backend.get_next_available_credential.assert_not_awaited()
 
+    async def test_session_retry_uses_a_fresh_route_order(self):
+        manager, _ = self.make_manager({})
+        manager._get_session_routed_credential = AsyncMock(return_value=(
+            "available.json",
+            {
+                "access_token": "token",
+                "expiry": "2099-01-01T00:00:00+00:00",
+            },
+        ))
+
+        with patch("src.credential_manager.time.time_ns", return_value=123):
+            result = await manager.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="rp-hub-chat",
+                exclude_credentials={"attempted.json"},
+            )
+
+        self.assertEqual(result[0], "available.json")
+        self.assertEqual(
+            manager._get_session_routed_credential.await_args.kwargs["binding_key"],
+            "retry:123",
+        )
+
     async def test_claude_request_can_use_credential_with_only_gemini_cooldown(self):
         states = {
             "gemini-cooled.json": {

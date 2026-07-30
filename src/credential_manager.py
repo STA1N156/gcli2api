@@ -305,7 +305,11 @@ class CredentialManager:
                     await self._forget_session_binding(binding_key)
 
         if binding_key or excluded_credentials:
-            route_key = binding_key or f"retry:{time.time_ns()}"
+            route_key = (
+                binding_key
+                if binding_key and not bypass_session_routing
+                else f"retry:{time.time_ns()}"
+            )
             routed_result = await self._get_session_routed_credential(
                 binding_key=route_key,
                 mode=mode,
