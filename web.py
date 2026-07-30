@@ -4,6 +4,8 @@ Main Web Integration - Integrates all routers and modules
 """
 
 import asyncio
+import ctypes
+import gc
 import os
 from contextlib import asynccontextmanager
 
@@ -35,15 +37,61 @@ from src.panel import router as panel_router
 from src.keeplive import keepalive_service
 from src.router.request_capture import capture_request_if_needed, should_buffer_request_body
 
-# 全局凭证管理器
-global_credential_manager = None
+# ==================== 内存管理 ====================
+
+_malloc_trim = None
+try:
+    _libc = ctypes.CDLL("libc.so.6")
+    _malloc_trim = _libc.malloc_trim
+    _malloc_trim.argtypes = [ctypes.c_size_t]
+    _malloc_trim.restype = ctypes.c_int
+except (OSError, AttributeError):
+    pass
+
+
+def _get_rss_mb() -> float:
+    """获取当前进程的 RSS（MB），仅 Linux 可用"""
+    try:
+        with open("/proc/self/status") as status:
+            for line in status:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except Exception:
+        pass
+    return 0.0
+
+
+async def _memory_trim_loop():
+    """每 60 秒执行一次 GC，并在 Linux 上归还空闲内存页。"""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            rss_before = _get_rss_mb()
+            gc.collect()
+            if _malloc_trim is not None:
+                _malloc_trim(0)
+
+            rss_after = _get_rss_mb()
+            freed = rss_before - rss_after
+            if freed > 10:
+                log.info(
+                    f"[MEM] malloc_trim: {rss_before:.0f}MB → "
+                    f"{rss_after:.0f}MB (释放 {freed:.0f}MB)"
+                )
+            elif rss_after > 500:
+                log.debug(f"[MEM] malloc_trim: {rss_before:.0f}MB → {rss_after:.0f}MB")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning(f"[MEM] malloc_trim 异常: {e}")
+
+
+_memory_trim_task = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global global_credential_manager
-
     log.info("启动 GCLI2API 主服务")
 
     # 初始化配置缓存（优先执行）
@@ -62,7 +110,6 @@ async def lifespan(app: FastAPI):
         log.info("凭证管理器初始化成功")
     except Exception as e:
         log.error(f"凭证管理器初始化失败: {e}")
-        global_credential_manager = None
 
     # OAuth回调服务器将在需要时按需启动
 
@@ -71,6 +118,15 @@ async def lifespan(app: FastAPI):
         await keepalive_service.start()
     except Exception as e:
         log.error(f"保活服务启动失败: {e}")
+
+    global _memory_trim_task
+    _memory_trim_task = asyncio.create_task(
+        _memory_trim_loop(), name="memory_trim"
+    )
+    if _malloc_trim is not None:
+        log.info("[MEM] 内存回收任务已启动（每60秒执行 gc.collect + malloc_trim）")
+    else:
+        log.info("[MEM] 内存回收任务已启动（仅 gc.collect，malloc_trim 不可用）")
 
     yield
 
@@ -83,6 +139,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error(f"关闭保活服务时出错: {e}")
 
+    if _memory_trim_task and not _memory_trim_task.done():
+        _memory_trim_task.cancel()
+        try:
+            await _memory_trim_task
+        except asyncio.CancelledError:
+            pass
+
     # 首先关闭所有异步任务
     try:
         await shutdown_all_tasks(timeout=10.0)
@@ -90,19 +153,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error(f"关闭异步任务时出错: {e}")
 
-    # 然后关闭凭证管理器
+    try:
+        await credential_manager.close()
+        log.info("凭证管理器已关闭")
+    except Exception as e:
+        log.error(f"关闭凭证管理器时出错: {e}")
+
     try:
         await close_http_clients()
         log.info("HTTP client pool closed")
     except Exception as e:
         log.error(f"Error closing HTTP client pool: {e}")
-
-    if global_credential_manager:
-        try:
-            await global_credential_manager.close()
-            log.info("凭证管理器已关闭")
-        except Exception as e:
-            log.error(f"关闭凭证管理器时出错: {e}")
 
     log.info("GCLI2API 主服务已停止")
 

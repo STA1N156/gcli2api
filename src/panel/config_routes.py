@@ -33,7 +33,8 @@ def _is_removed_empty_output_retry_key(key: str) -> bool:
 async def get_config(token: str = Depends(verify_panel_token)):
     """获取当前配置"""
     try:
-
+        # 多 Worker 下每次打开设置都从共享存储读取最新配置
+        await config.reload_config()
 
         # 读取当前配置（包括环境变量和TOML文件中的配置）
         current_config = {}
