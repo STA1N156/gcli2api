@@ -1,4 +1,4 @@
-full_hash=5a1863bb5b031ac19b1a0493ae8ebb1639a0c890
-short_hash=5a1863b
-message=Use fork image in deployment manifests
-date=2026-07-30 22:45:16 +0800
+full_hash=c06a95d2d045e80d2c06260090fefdf3e48b767a
+short_hash=c06a95d
+message=Remember Antigravity 429 failures per session
+date=2026-07-30 23:00:10 +0800
