@@ -284,7 +284,7 @@ async def sync_model_cooldowns_from_quota(
                 )
 
 
-async def mark_credential_unavailable(
+async def record_credential_validation_error(
     storage_adapter: Any,
     filename: str,
     mode: str,
@@ -293,12 +293,11 @@ async def mark_credential_unavailable(
 ) -> None:
     error_message = message or f"HTTP {status_code}"
     await storage_adapter.update_credential_state(filename, {
-        "disabled": True,
         "error_codes": [status_code],
         "error_messages": {str(status_code): error_message},
     }, mode=mode)
     log.warning(
-        f"凭证已因检验失败自动禁用: {filename} "
+        f"凭证检验失败但未禁用: {filename} "
         f"(mode={mode}, status={status_code}, error={error_message})"
     )
 
@@ -615,8 +614,8 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="offset 必须大于等于 0")
     if limit not in [20, 50, 100, 200, 500, 1000]:
         raise HTTPException(status_code=400, detail="limit 只能是 20、50、100、200、500 或 1000")
-    if status_filter not in ["all", "enabled", "disabled"]:
-        raise HTTPException(status_code=400, detail="status_filter 只能是 all、enabled 或 disabled")
+    if status_filter not in ["all", "normal", "abnormal"]:
+        raise HTTPException(status_code=400, detail="status_filter 只能是 all、normal 或 abnormal")
     if cooldown_filter and cooldown_filter not in ["all", "in_cooldown", "no_cooldown"]:
         raise HTTPException(status_code=400, detail="cooldown_filter 只能是 all、in_cooldown 或 no_cooldown")
     if preview_filter and preview_filter not in ["all", "preview", "no_preview"]:
@@ -668,7 +667,7 @@ async def get_creds_status_common(
         "offset": offset,
         "limit": limit,
         "has_more": (offset + limit) < result["total"],
-        "stats": result.get("stats", {"total": 0, "normal": 0, "disabled": 0}),
+        "stats": result.get("stats", {"total": 0, "normal": 0, "abnormal": 0}),
     })
 
 
@@ -1007,7 +1006,7 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
         return JSONResponse(content=response_data)
     else:
         message = "检验失败：无法获取Project ID，请检查凭证是否有效"
-        await mark_credential_unavailable(
+        await record_credential_validation_error(
             storage_adapter, filename, mode, 400, message
         )
         return JSONResponse(
@@ -1060,7 +1059,7 @@ async def get_creds_status(
     Args:
         offset: 跳过的记录数（默认0）
         limit: 每页返回的记录数（默认50，可选：20, 50, 100, 200, 500, 1000）
-        status_filter: 状态筛选（all=全部, enabled=仅启用, disabled=仅禁用）
+        status_filter: 状态筛选（all=全部, normal=正常, abnormal=异常）
         error_code_filter: 错误码筛选（all=全部, 或具体错误码如"400", "403"）
         cooldown_filter: 冷却状态筛选（all=全部, in_cooldown=冷却中, no_cooldown=未冷却）
         preview_filter: Preview筛选（all=全部, preview=支持preview, no_preview=不支持preview，仅geminicli模式有效）
@@ -2000,7 +1999,7 @@ async def configure_preview_channel(
             log.info(f"步骤 1/2: Release Channel Setting 创建成功 (setting_id={setting_id})")
         elif setting_status == 409:
             # Setting 已存在，需要 LIST 获取真实的 setting_id，否则 Step 2 的 URL 会用错误的 ID
-            log.info(f"步骤 1/2: Release Channel Setting 已存在，正在获取已有 setting_id...")
+            log.info("步骤 1/2: Release Channel Setting 已存在，正在获取已有 setting_id...")
             list_response = await get_async(
                 url=setting_url,
                 headers=headers,
@@ -2015,7 +2014,7 @@ async def configure_preview_channel(
                         setting_id = existing_name.split("/")[-1]
                         log.info(f"步骤 1/2: 获取到已有 setting_id={setting_id}")
                     else:
-                        log.warning(f"步骤 1/2: LIST 返回空列表，保持随机 setting_id")
+                        log.warning("步骤 1/2: LIST 返回空列表，保持随机 setting_id")
                 except Exception as e:
                     log.warning(f"步骤 1/2: 解析 LIST 响应失败: {e}，保持随机 setting_id")
             else:
@@ -2292,14 +2291,13 @@ async def test_credential(
                 error_codes = [status_code]
                 error_messages = {str(status_code): error_text if error_text else f"HTTP {status_code}"}
 
-                # 更新状态
+                # 只记录测试结果，普通上游错误不能自动禁用凭证
                 await storage_adapter.update_credential_state(filename, {
-                    "disabled": True,
                     "error_codes": error_codes,
                     "error_messages": error_messages
                 }, mode=mode)
 
-                log.info(f"已保存测试错误信息并自动禁用: {filename} - 错误码 {status_code}")
+                log.info(f"已保存测试错误信息，凭证保持原状态: {filename} - 错误码 {status_code}")
             except Exception as e:
                 log.error(f"保存测试错误信息失败: {e}")
 

@@ -456,9 +456,11 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 - `PASSWORD`: 共通パスワード、設定時に上記2つを上書き（デフォルト: pwd）
 
 **パフォーマンスと安定性の設定**
-- `RETRY_429_ENABLED`: 429エラー自動リトライの有効化（デフォルト: true）
-- `RETRY_429_MAX_RETRIES`: 429エラーの最大リトライ回数（デフォルト: 3）
-- `RETRY_429_INTERVAL`: 429エラーのリトライ間隔、秒単位（デフォルト: 1.0）
+- `CREDENTIAL_RETRY_LIMIT_ENABLED`: 1リクエストで試す認証情報数を制限（デフォルト: false。無効時は利用可能な認証情報をすべて順番に試行）
+- `MAX_RETRY_CREDENTIALS`: 制限有効時に試す認証情報の総数、最初の1件を含む（デフォルト: 5）
+- `CREDENTIAL_RETRY_INTERVAL`: 認証情報を切り替える前の待機秒数（デフォルト: 1.0）
+- `SESSION_AFFINITY_ENABLED`: セッションアフィニティを有効化（デフォルト: false）
+- `SESSION_AFFINITY_TTL_SECONDS`: セッションアフィニティの有効期間、秒単位（デフォルト: 3600）
 - `ANTI_TRUNCATION_MAX_ATTEMPTS`: 途切れ防止の最大リトライ回数（デフォルト: 3）
 
 **ネットワークとプロキシ設定**
@@ -468,7 +470,6 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 - `METADATA_SERVICE_URL`: メタデータサービスプロキシエンドポイント
 
 **自動化設定**
-- `AUTO_BAN`: クレデンシャル自動BANの有効化（デフォルト: true）
 - `AUTO_LOAD_ENV_CREDS`: 起動時に環境変数クレデンシャルを自動ロード（デフォルト: false）
 
 **互換性設定**

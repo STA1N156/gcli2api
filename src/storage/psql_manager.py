@@ -6,12 +6,11 @@ import asyncio
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import asyncpg
 
 from log import log
-from src.model_cooldown import has_active_model_cooldown
 
 
 class PSQLManager:
@@ -243,98 +242,6 @@ class PSQLManager:
 
     # ============ 凭证查询方法 ============
 
-    async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
-    ) -> Optional[Tuple[str, Dict[str, Any]]]:
-        """随机获取一个可用凭证（负载均衡）"""
-        self._ensure_initialized()
-
-        try:
-            table_name = self._get_table_name(mode)
-            current_time = time.time()
-
-            async with self._pool.acquire() as conn:
-                if mode == "geminicli":
-                    rows = await conn.fetch(f"""
-                        SELECT filename, credential_data, model_cooldowns, preview
-                        FROM {table_name}
-                        WHERE disabled = 0
-                        ORDER BY RANDOM()
-                    """)
-
-                    if not model_name:
-                        if rows:
-                            return rows[0]["filename"], json.loads(rows[0]["credential_data"])
-                        return None
-
-                    is_preview_model = "preview" in model_name.lower()
-                    non_preview_creds = []
-                    preview_creds = []
-
-                    for row in rows:
-                        model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                        if not has_active_model_cooldown(model_cooldowns, model_name, current_time, mode=mode):
-                            if row["preview"]:
-                                preview_creds.append((row["filename"], row["credential_data"]))
-                            else:
-                                non_preview_creds.append((row["filename"], row["credential_data"]))
-
-                    if is_preview_model:
-                        if preview_creds:
-                            return preview_creds[0][0], json.loads(preview_creds[0][1])
-                    else:
-                        if non_preview_creds:
-                            return non_preview_creds[0][0], json.loads(non_preview_creds[0][1])
-                        elif preview_creds:
-                            return preview_creds[0][0], json.loads(preview_creds[0][1])
-
-                    return None
-                else:
-                    rows = await conn.fetch(f"""
-                        SELECT filename, credential_data, model_cooldowns, enable_credit
-                        FROM {table_name}
-                        WHERE disabled = 0
-                        ORDER BY RANDOM()
-                    """)
-
-                    if not model_name:
-                        if rows:
-                            credential_data = json.loads(rows[0]["credential_data"])
-                            credential_data["enable_credit"] = bool(rows[0]["enable_credit"])
-                            return rows[0]["filename"], credential_data
-                        return None
-
-                    for row in rows:
-                        model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                        if not has_active_model_cooldown(model_cooldowns, model_name, current_time, mode=mode):
-                            credential_data = json.loads(row["credential_data"])
-                            credential_data["enable_credit"] = bool(row["enable_credit"])
-                            return row["filename"], credential_data
-
-                    return None
-
-        except Exception as e:
-            log.error(f"Error getting next available credential (mode={mode}, model_name={model_name}): {e}")
-            return None
-
-    async def get_available_credentials_list(self) -> List[str]:
-        """获取所有可用凭证列表"""
-        self._ensure_initialized()
-
-        try:
-            async with self._pool.acquire() as conn:
-                rows = await conn.fetch("""
-                    SELECT filename FROM credentials
-                    WHERE disabled = 0
-                    ORDER BY rotation_order ASC
-                """)
-                return [r["filename"] for r in rows]
-        except Exception as e:
-            log.error(f"Error getting available credentials list: {e}")
-            return []
-
-    # ============ StorageBackend 协议方法 ============
-
     async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "geminicli") -> bool:
         """存储或更新凭证"""
         self._ensure_initialized()
@@ -464,7 +371,7 @@ class PSQLManager:
             if not set_clauses:
                 return True
 
-            set_clauses.append(f"updated_at = EXTRACT(EPOCH FROM NOW())")
+            set_clauses.append("updated_at = EXTRACT(EPOCH FROM NOW())")
             values.append(filename)
 
             sql = f"""
@@ -627,26 +534,7 @@ class PSQLManager:
             current_time = time.time()
 
             async with self._pool.acquire() as conn:
-                # 全局统计
-                stats_rows = await conn.fetch(
-                    f"SELECT disabled, COUNT(*) AS cnt FROM {table_name} GROUP BY disabled"
-                )
-                global_stats = {"total": 0, "normal": 0, "disabled": 0}
-                for r in stats_rows:
-                    global_stats["total"] += r["cnt"]
-                    if r["disabled"]:
-                        global_stats["disabled"] = r["cnt"]
-                    else:
-                        global_stats["normal"] = r["cnt"]
-
-                # WHERE 子句
-                where_clauses = []
-                if status_filter == "enabled":
-                    where_clauses.append("disabled = 0")
-                elif status_filter == "disabled":
-                    where_clauses.append("disabled = 1")
-
-                where_clause = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+                global_stats = {"total": 0, "normal": 0, "abnormal": 0}
 
                 # 查询
                 if mode == "geminicli":
@@ -654,7 +542,6 @@ class PSQLManager:
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier
                         FROM {table_name}
-                        {where_clause}
                         ORDER BY rotation_order
                     """)
                 else:
@@ -662,7 +549,6 @@ class PSQLManager:
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, tier, enable_credit
                         FROM {table_name}
-                        {where_clause}
                         ORDER BY rotation_order
                     """)
 
@@ -684,8 +570,22 @@ class PSQLManager:
                 for row in all_rows:
                     error_codes_json = row["error_codes"] or "[]"
                     model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                    active_cooldowns = {k: v for k, v in model_cooldowns.items() if v > current_time}
+                    active_cooldowns = {
+                        key: value
+                        for key, value in model_cooldowns.items()
+                        if isinstance(value, (int, float)) and value > current_time
+                    }
                     error_codes = json.loads(error_codes_json)
+                    abnormal = bool(
+                        row["disabled"] or error_codes or active_cooldowns
+                    )
+                    global_stats["total"] += 1
+                    global_stats["abnormal" if abnormal else "normal"] += 1
+
+                    if status_filter == "normal" and abnormal:
+                        continue
+                    if status_filter == "abnormal" and not abnormal:
+                        continue
 
                     # 筛选无错误的凭证
                     if filter_none:
@@ -765,7 +665,7 @@ class PSQLManager:
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "disabled": 0},
+                "stats": {"total": 0, "normal": 0, "abnormal": 0},
             }
 
     async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:

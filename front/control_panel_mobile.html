@@ -1557,8 +1557,8 @@
                         <span class="stat-label">正常</span>
                     </div>
                     <div class="stat-item" style="border-left: 4px solid #6c757d;">
-                        <span class="stat-number" id="statDisabled">0</span>
-                        <span class="stat-label">禁用</span>
+                        <span class="stat-number" id="statAbnormal">0</span>
+                        <span class="stat-label">异常</span>
                     </div>
                 </div>
 
@@ -1605,8 +1605,8 @@
                         <label for="statusFilter">状态筛选：</label>
                         <select id="statusFilter" onchange="applyStatusFilter()">
                             <option value="all">全部凭证</option>
-                            <option value="enabled">仅启用</option>
-                            <option value="disabled">仅禁用</option>
+                            <option value="normal">正常凭证</option>
+                            <option value="abnormal">异常凭证</option>
                         </select>
                     </div>
 
@@ -1779,8 +1779,8 @@
                         <span class="stat-label">正常</span>
                     </div>
                     <div class="stat-item" style="border-left: 4px solid #6c757d;">
-                        <span class="stat-number" id="antigravityStatDisabled">0</span>
-                        <span class="stat-label">禁用</span>
+                        <span class="stat-number" id="antigravityStatAbnormal">0</span>
+                        <span class="stat-label">异常</span>
                     </div>
                 </div>
 
@@ -1834,8 +1834,8 @@
                         <label for="antigravityStatusFilter">状态筛选：</label>
                         <select id="antigravityStatusFilter" onchange="applyAntigravityStatusFilter()">
                             <option value="all">全部凭证</option>
-                            <option value="enabled">仅启用</option>
-                            <option value="disabled">仅禁用</option>
+                            <option value="normal">正常凭证</option>
+                            <option value="abnormal">异常凭证</option>
                         </select>
                     </div>
 
@@ -2038,49 +2038,43 @@
                         </div>
 
                         <div class="card">
-                            <h4 style="margin-top: 0; margin-bottom: 15px;">自动封禁配置</h4>
+                            <h4 style="margin-top: 0; margin-bottom: 15px;">凭证选择配置</h4>
 
                             <div class="form-group">
                                 <label style="display: flex; align-items: center; cursor: pointer;">
-                                    <input type="checkbox" id="autoBanEnabled" style="margin-right: 8px;" />
-                                    启用自动封禁
+                                    <input type="checkbox" id="credentialRetryLimitEnabled" style="margin-right: 8px;" />
+                                    限制单次请求尝试凭证数
                                 </label>
                                 <small
-                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">遇到指定错误码时自动禁用凭证</small>
+                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">关闭时依次尝试全部可用凭证；开启时最多尝试下面设置的数量</small>
                             </div>
 
                             <div class="form-group">
-                                <label for="autoBanErrorCodes">自动封禁错误码:</label>
-                                <input type="text" id="autoBanErrorCodes" placeholder="例如: 400,403" />
+                                <label for="maxRetryCredentials">最多尝试凭证数:</label>
+                                <input type="number" id="maxRetryCredentials" min="1" max="50" />
                                 <small
-                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">用逗号分隔的错误码列表</small>
+                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">包含第一次选择的凭证</small>
                             </div>
-                        </div>
 
-                        <div class="card">
-                            <h4 style="margin-top: 0; margin-bottom: 15px;">错误重试配置</h4>
+                            <div class="form-group">
+                                <label for="credentialRetryInterval">切换凭证间隔(秒):</label>
+                                <input type="number" id="credentialRetryInterval" min="0.01" max="10" step="0.01" />
+                            </div>
 
                             <div class="form-group">
                                 <label style="display: flex; align-items: center; cursor: pointer;">
-                                    <input type="checkbox" id="retry429Enabled" style="margin-right: 8px;" />
-                                    启用错误重试
+                                    <input type="checkbox" id="sessionAffinityEnabled" style="margin-right: 8px;" />
+                                    启用粘性会话
                                 </label>
                                 <small
-                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">遇到错误时自动重试</small>
+                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">绑定凭证冷却或本次已试过时会自动切换</small>
                             </div>
 
                             <div class="form-group">
-                                <label for="retry429MaxRetries">错误重试次数:</label>
-                                <input type="number" id="retry429MaxRetries" min="1" max="50" />
+                                <label for="sessionAffinityTtlSeconds">粘性会话有效期(秒):</label>
+                                <input type="number" id="sessionAffinityTtlSeconds" min="60" max="604800" />
                                 <small
-                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">遇到错误时的最大重试次数</small>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="retry429Interval">错误重试间隔(秒):</label>
-                                <input type="number" id="retry429Interval" min="0.01" max="10" step="0.01" />
-                                <small
-                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">遇到错误时每两次重试间的等待时间</small>
+                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">CLIProxy 默认 3600 秒</small>
                             </div>
 
                             <div class="form-group">

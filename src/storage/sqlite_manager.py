@@ -6,12 +6,11 @@ import asyncio
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import aiosqlite
 
 from log import log
-from src.model_cooldown import has_active_model_cooldown
 
 
 class SQLiteManager:
@@ -373,125 +372,6 @@ class SQLiteManager:
 
     # ============ SQL 方法 ============
 
-    async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
-    ) -> Optional[Tuple[str, Dict[str, Any]]]:
-        """
-        随机获取一个可用凭证（负载均衡）
-        - 未禁用
-        - 如果提供了 model_name，还会检查模型级冷却和preview状态
-        - 随机选择
-
-        Args:
-            mode: 凭证模式 ("geminicli" 或 "antigravity")
-            model_name: 完整模型名（如 "gemini-2.0-flash-exp", "gemini-3-flash-preview"）
-        """
-        self._ensure_initialized()
-
-        try:
-            table_name = self._get_table_name(mode)
-            async with aiosqlite.connect(self._db_path) as db:
-                current_time = time.time()
-
-                if mode == "geminicli":
-                    async with db.execute(f"""
-                        SELECT filename, credential_data, model_cooldowns, preview
-                        FROM {table_name}
-                        WHERE disabled = 0
-                        ORDER BY RANDOM()
-                    """) as cursor:
-                        rows = await cursor.fetchall()
-
-                        if not model_name:
-                            if rows:
-                                filename, credential_json, _, _ = rows[0]
-                                credential_data = json.loads(credential_json)
-                                return filename, credential_data
-                            return None
-
-                        is_preview_model = "preview" in model_name.lower()
-                        non_preview_creds = []
-                        preview_creds = []
-
-                        for filename, credential_json, model_cooldowns_json, preview in rows:
-                            model_cooldowns = json.loads(model_cooldowns_json or '{}')
-                            if not has_active_model_cooldown(model_cooldowns, model_name, current_time, mode=mode):
-                                if preview:
-                                    preview_creds.append((filename, credential_json))
-                                else:
-                                    non_preview_creds.append((filename, credential_json))
-
-                        if is_preview_model:
-                            if preview_creds:
-                                filename, credential_json = preview_creds[0]
-                                credential_data = json.loads(credential_json)
-                                return filename, credential_data
-                        else:
-                            if non_preview_creds:
-                                filename, credential_json = non_preview_creds[0]
-                                credential_data = json.loads(credential_json)
-                                return filename, credential_data
-                            elif preview_creds:
-                                filename, credential_json = preview_creds[0]
-                                credential_data = json.loads(credential_json)
-                                return filename, credential_data
-
-                        return None
-                else:
-                    async with db.execute(f"""
-                        SELECT filename, credential_data, model_cooldowns, enable_credit
-                        FROM {table_name}
-                        WHERE disabled = 0
-                        ORDER BY RANDOM()
-                    """) as cursor:
-                        rows = await cursor.fetchall()
-
-                        if not model_name:
-                            if rows:
-                                filename, credential_json, _, enable_credit = rows[0]
-                                credential_data = json.loads(credential_json)
-                                credential_data["enable_credit"] = bool(enable_credit)
-                                return filename, credential_data
-                            return None
-
-                        for filename, credential_json, model_cooldowns_json, enable_credit in rows:
-                            model_cooldowns = json.loads(model_cooldowns_json or '{}')
-                            if not has_active_model_cooldown(model_cooldowns, model_name, current_time, mode=mode):
-                                credential_data = json.loads(credential_json)
-                                credential_data["enable_credit"] = bool(enable_credit)
-                                return filename, credential_data
-
-                        return None
-
-        except Exception as e:
-            log.error(f"Error getting next available credential (mode={mode}, model_name={model_name}): {e}")
-            return None
-
-    async def get_available_credentials_list(self) -> List[str]:
-        """
-        获取所有可用凭证列表
-        - 未禁用
-        - 按轮换顺序排序
-        """
-        self._ensure_initialized()
-
-        try:
-            async with aiosqlite.connect(self._db_path) as db:
-                async with db.execute("""
-                    SELECT filename
-                    FROM credentials
-                    WHERE disabled = 0
-                    ORDER BY rotation_order ASC
-                """) as cursor:
-                    rows = await cursor.fetchall()
-                    return [row[0] for row in rows]
-
-        except Exception as e:
-            log.error(f"Error getting available credentials list: {e}")
-            return []
-
-    # ============ StorageBackend 协议方法 ============
-
     async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "geminicli") -> bool:
         """存储或更新凭证"""
         self._ensure_initialized()
@@ -638,7 +518,7 @@ class SQLiteManager:
                         values.append(value)
 
             if not set_clauses:
-                log.info(f"[DB] 没有需要更新的状态字段")
+                log.info("[DB] 没有需要更新的状态字段")
                 return True
 
             set_clauses.append("updated_at = unixepoch()")
@@ -663,7 +543,7 @@ class SQLiteManager:
                 # 提交前检查
                 log.debug(f"[DB] 准备commit，总更新行数={updated_count}")
                 await db.commit()
-                log.debug(f"[DB] commit完成")
+                log.debug("[DB] commit完成")
 
                 success = updated_count > 0
                 log.debug(f"[DB] update_credential_state 结束: success={success}, updated_count={updated_count}")
@@ -850,7 +730,7 @@ class SQLiteManager:
         Args:
             offset: 跳过的记录数（默认0）
             limit: 返回的最大记录数（None表示返回所有）
-            status_filter: 状态筛选（all=全部, enabled=仅启用, disabled=仅禁用）
+            status_filter: 状态筛选（all=全部, normal=正常, abnormal=异常）
             mode: 凭证模式 ("geminicli" 或 "antigravity")
             error_code_filter: 错误码筛选（格式如"400"或"403"，筛选包含该错误码的凭证）
             cooldown_filter: 冷却状态筛选（"in_cooldown"=冷却中, "no_cooldown"=未冷却）
@@ -867,27 +747,7 @@ class SQLiteManager:
             table_name = self._get_table_name(mode)
 
             async with aiosqlite.connect(self._db_path) as db:
-                # 先计算全局统计数据（不受筛选条件影响）
-                global_stats = {"total": 0, "normal": 0, "disabled": 0}
-                async with db.execute(f"""
-                    SELECT disabled, COUNT(*) FROM {table_name} GROUP BY disabled
-                """) as stats_cursor:
-                    stats_rows = await stats_cursor.fetchall()
-                    for disabled, count in stats_rows:
-                        global_stats["total"] += count
-                        if disabled:
-                            global_stats["disabled"] = count
-                        else:
-                            global_stats["normal"] = count
-
-                # 构建WHERE子句
-                where_clauses = []
-                count_params = []
-
-                if status_filter == "enabled":
-                    where_clauses.append("disabled = 0")
-                elif status_filter == "disabled":
-                    where_clauses.append("disabled = 1")
+                global_stats = {"total": 0, "normal": 0, "abnormal": 0}
 
                 filter_value = None
                 filter_int = None
@@ -902,18 +762,12 @@ class SQLiteManager:
                         except ValueError:
                             filter_int = None
 
-                # 构建WHERE子句
-                where_clause = ""
-                if where_clauses:
-                    where_clause = "WHERE " + " AND ".join(where_clauses)
-
                 # 先获取所有数据（用于冷却筛选，因为需要在Python中判断）
                 if mode == "geminicli":
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier
                         FROM {table_name}
-                        {where_clause}
                         ORDER BY rotation_order
                     """
                 else:
@@ -921,11 +775,10 @@ class SQLiteManager:
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, tier, enable_credit
                         FROM {table_name}
-                        {where_clause}
                         ORDER BY rotation_order
                     """
 
-                async with db.execute(all_query, count_params) as cursor:
+                async with db.execute(all_query) as cursor:
                     all_rows = await cursor.fetchall()
 
                     current_time = time.time()
@@ -942,10 +795,18 @@ class SQLiteManager:
                         if model_cooldowns:
                             active_cooldowns = {
                                 k: v for k, v in model_cooldowns.items()
-                                if v > current_time
+                                if isinstance(v, (int, float)) and v > current_time
                             }
 
                         error_codes = json.loads(error_codes_json)
+                        abnormal = bool(row[1] or error_codes or active_cooldowns)
+                        global_stats["total"] += 1
+                        global_stats["abnormal" if abnormal else "normal"] += 1
+
+                        if status_filter == "normal" and abnormal:
+                            continue
+                        if status_filter == "abnormal" and not abnormal:
+                            continue
 
                         # 筛选无错误的凭证
                         if filter_none:
@@ -1034,7 +895,7 @@ class SQLiteManager:
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "disabled": 0},
+                "stats": {"total": 0, "normal": 0, "abnormal": 0},
             }
 
     async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:

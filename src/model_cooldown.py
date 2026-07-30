@@ -2,18 +2,9 @@ import time
 from typing import Any, Dict, Optional
 
 
-def model_cooldown_group(model_name: Optional[str], mode: Optional[str] = None) -> Optional[str]:
-    model = str(model_name or "").lower()
-    if "gemini" in model:
-        if mode == "geminicli":
-            if "flash" in model:
-                return "gemini-flash"
-            if "pro" in model:
-                return "gemini-pro"
-        return "gemini"
-    if "claude" in model:
-        return "claude"
-    return None
+def normalize_model_key(model_name: Optional[str]) -> Optional[str]:
+    model = str(model_name or "").strip().lower()
+    return model or None
 
 
 def has_active_model_cooldown(
@@ -26,12 +17,10 @@ def has_active_model_cooldown(
         return False
 
     now = time.time() if current_time is None else current_time
-    target_group = model_cooldown_group(model_name, mode=mode)
+    target_model = normalize_model_key(model_name)
 
     for cooldown_model, cooldown_until in model_cooldowns.items():
-        if cooldown_model != model_name and (
-            not target_group or model_cooldown_group(cooldown_model, mode=mode) != target_group
-        ):
+        if normalize_model_key(cooldown_model) != target_model:
             continue
 
         try:

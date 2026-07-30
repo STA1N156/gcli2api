@@ -15,11 +15,11 @@ class MultiWorkerConfigTests(unittest.IsolatedAsyncioTestCase):
         backend = SimpleNamespace(reload_config_cache=AsyncMock())
         storage_adapter = SimpleNamespace(
             _backend=backend,
-            get_all_config=AsyncMock(return_value={"retry_429_max_retries": 9}),
+            get_all_config=AsyncMock(return_value={"max_retry_credentials": 9}),
         )
 
         try:
-            config._config_cache = {"retry_429_max_retries": 2}
+            config._config_cache = {"max_retry_credentials": 2}
             config._config_initialized = True
             config._config_loaded_at = 0
 
@@ -27,7 +27,7 @@ class MultiWorkerConfigTests(unittest.IsolatedAsyncioTestCase):
                 "src.storage_adapter.get_storage_adapter",
                 AsyncMock(return_value=storage_adapter),
             ):
-                value = await config.get_config_value("retry_429_max_retries")
+                value = await config.get_config_value("max_retry_credentials")
 
             self.assertEqual(value, 9)
             backend.reload_config_cache.assert_awaited_once()

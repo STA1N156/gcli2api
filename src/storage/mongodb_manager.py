@@ -4,14 +4,12 @@ MongoDB 存储管理器
 
 import json
 import os
-import random
 import time
 from typing import Any, Dict, List, Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from log import log
-from src.model_cooldown import has_active_model_cooldown, model_cooldown_group
 
 
 class MongoDBManager:
@@ -104,7 +102,7 @@ class MongoDBManager:
             # 唯一索引 - 用于所有按文件名的精确查询
             IndexModel([("filename", ASCENDING)], unique=True, name="idx_filename_unique"),
 
-            # 复合索引 - 用于 get_next_available_credential 和 get_available_credentials_list
+            # 复合索引 - 用于可用凭证列表
             # 查询模式: {disabled: False} + sort by rotation_order
             IndexModel(
                 [("disabled", ASCENDING), ("rotation_order", ASCENDING)],
@@ -388,95 +386,6 @@ class MongoDBManager:
         except Exception as e:
             log.warning(f"Redis sync_cred error: {e}")
 
-    async def _get_next_available_from_redis(
-        self, mode: str, model_name: Optional[str], exclude_free_tier: bool = False, preview_only: bool = False
-    ) -> Optional[tuple]:
-        """
-        Redis 快速路径：随机取候选凭证，跳过冷却中的，返回 (filename, credential_data)。
-        失败或池为空时返回 None，由调用方降级到 MongoDB。
-        """
-        try:
-            # 选择候选池优先级：preview_only > exclude_free_tier > 全量池
-            if preview_only and exclude_free_tier:
-                # preview 且非 free：preview ∩ (pro ∪ ultra)
-                preview_set = await self._redis.smembers(self._rk_preview(mode))
-                pro_members = await self._redis.smembers(self._rk_tier(mode, "pro"))
-                ultra_members = await self._redis.smembers(self._rk_tier(mode, "ultra"))
-                non_free = pro_members | ultra_members
-                all_candidates = list(preview_set & non_free)
-                if not all_candidates:
-                    log.debug(f"[Redis MISS] mode={mode} preview+non-free: no candidates, fallback to MongoDB")
-                    return None
-                sample_size = min(len(all_candidates), 10)
-                candidates = random.sample(all_candidates, sample_size)
-            elif preview_only:
-                preview_key = self._rk_preview(mode)
-                preview_size = await self._redis.scard(preview_key)
-                if preview_size == 0:
-                    log.debug(f"[Redis MISS] mode={mode} preview_only: pool empty, fallback to MongoDB")
-                    return None
-                sample_size = min(preview_size, 10)
-                candidates = await self._redis.srandmember(preview_key, sample_size)
-                if not candidates:
-                    return None
-            elif exclude_free_tier:
-                pro_members = await self._redis.smembers(self._rk_tier(mode, "pro"))
-                ultra_members = await self._redis.smembers(self._rk_tier(mode, "ultra"))
-                all_candidates = list(pro_members | ultra_members)
-                if not all_candidates:
-                    log.debug(f"[Redis MISS] mode={mode} exclude_free: no non-free creds, fallback to MongoDB")
-                    return None
-                sample_size = min(len(all_candidates), 10)
-                candidates = random.sample(all_candidates, sample_size)
-            else:
-                pool_key = self._rk_avail(mode)
-                pool_size = await self._redis.scard(pool_key)
-                if pool_size == 0:
-                    log.debug(f"[Redis MISS] mode={mode} pool_key={pool_key}: pool empty, fallback to MongoDB")
-                    return None
-                sample_size = min(pool_size, 10)
-                candidates = await self._redis.srandmember(pool_key, sample_size)
-                if not candidates:
-                    return None
-
-            # 过滤冷却中的凭证
-            if model_name:
-                escaped = self._escape_model_name(model_name)
-                group_aware_cooldown = bool(model_cooldown_group(model_name, mode=mode))
-                for filename in candidates:
-                    state = None
-                    if group_aware_cooldown:
-                        state = await self.get_credential_state(filename, mode)
-                        if has_active_model_cooldown(state.get("model_cooldowns"), model_name, mode=mode):
-                            continue
-                    else:
-                        cd_key = self._rk_cd(mode, filename, escaped)
-                        if await self._redis.exists(cd_key):
-                            continue
-
-                    credential_data = await self.get_credential(filename, mode)
-                    if mode == "antigravity":
-                        state = state or await self.get_credential_state(filename, mode)
-                        credential_data = credential_data or {}
-                        credential_data["enable_credit"] = bool(state.get("enable_credit", False))
-                    log.debug(f"[Redis HIT] mode={mode} model={model_name} -> {filename}")
-                    return filename, credential_data
-                # 所有候选都在冷却中，降级到 MongoDB
-                log.debug(f"[Redis MISS] mode={mode} model={model_name}: all {len(candidates)} candidates in cooldown, fallback to MongoDB")
-                return None
-            else:
-                filename = candidates[0]
-                credential_data = await self.get_credential(filename, mode)
-                if mode == "antigravity":
-                    state = await self.get_credential_state(filename, mode)
-                    credential_data = credential_data or {}
-                    credential_data["enable_credit"] = bool(state.get("enable_credit", False))
-                log.debug(f"[Redis HIT] mode={mode} -> {filename}")
-                return filename, credential_data
-        except Exception as e:
-            log.warning(f"Redis get_next_available error: {e}")
-            return None
-
     async def close(self) -> None:
         """关闭 MongoDB 连接"""
         if self._redis:
@@ -505,133 +414,6 @@ class MongoDBManager:
             raise ValueError(f"Invalid mode: {mode}. Must be 'geminicli' or 'antigravity'")
 
     # ============ SQL 方法 ============
-
-    async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
-    ) -> Optional[tuple[str, Dict[str, Any]]]:
-        """
-        随机获取一个可用凭证（负载均衡）
-        - 未禁用
-        - 如果提供了 model_name，还会检查模型级冷却
-        - 随机选择
-
-        Args:
-            mode: 凭证模式 ("geminicli" 或 "antigravity")
-            model_name: 完整模型名（如 "gemini-2.0-flash-exp"）
-
-        Note:
-            - 开启 Redis 时：利用 Redis Set 随机选凭证 + TTL key 判断冷却
-            - 未开启 Redis 时：使用 count + random skip + limit(1)
-        """
-        self._ensure_initialized()
-
-        # Redis 快速路径：根据模型名派生过滤标志，直接在 Redis 分桶中筛选
-        if self._redis_enabled:
-            model_lower = model_name.lower() if model_name else ""
-            exclude_free = False
-            preview_only = mode == "geminicli" and "preview" in model_lower
-            result = await self._get_next_available_from_redis(
-                mode, model_name, exclude_free_tier=exclude_free, preview_only=preview_only
-            )
-            if result is not None:
-                return result
-            # result 为 None：池为空或所有候选都冷却中，降级到 MongoDB 以扩大样本空间
-            log.debug(f"[MongoDB fallback] mode={mode} model={model_name}")
-
-        try:
-            collection_name = self._get_collection_name(mode)
-            collection = self._db[collection_name]
-            current_time = time.time()
-
-            # 构建普通查询（避免 $sample 聚合导致全集合扫描）
-            match_query: Dict[str, Any] = {"disabled": False}
-
-            # preview 模型只允许 preview=True 的凭证
-            if mode == "geminicli" and model_name and "preview" in model_name.lower():
-                match_query["preview"] = True
-
-            # 冷却检查：直接用 MongoDB 查询表达，无需 $addFields
-            group_aware_cooldown = bool(model_name and model_cooldown_group(model_name, mode=mode))
-            if model_name and not group_aware_cooldown:
-                escaped_model_name = self._escape_model_name(model_name)
-                field = f"model_cooldowns.{escaped_model_name}"
-                match_query["$or"] = [
-                    {field: {"$exists": False}},
-                    {field: {"$lte": current_time}},
-                ]
-
-            # Gemini/Claude 同类模型共用额度，先取候选再按组过滤
-            if group_aware_cooldown:
-                projection = {
-                    "filename": 1,
-                    "credential_data": 1,
-                    "enable_credit": 1,
-                    "model_cooldowns": 1,
-                    "_id": 0,
-                }
-                docs = await collection.find(match_query, projection).to_list(length=None)
-                random.shuffle(docs)
-
-                for doc in docs:
-                    if has_active_model_cooldown(doc.get("model_cooldowns"), model_name, current_time, mode=mode):
-                        continue
-
-                    credential_data = doc.get("credential_data") or {}
-                    if mode == "antigravity":
-                        credential_data["enable_credit"] = bool(doc.get("enable_credit", False))
-                    return doc["filename"], credential_data
-
-                return None
-
-            # 统计符合条件的凭证总数（走索引，极快）
-            count = await collection.count_documents(match_query)
-            if count == 0:
-                return None
-
-            # 随机偏移 + limit(1)，替代 $sample，避免全集合随机排序
-            skip_n = random.randint(0, count - 1)
-            projection = {"filename": 1, "credential_data": 1, "enable_credit": 1, "_id": 0}
-            docs = await collection.find(match_query, projection).skip(skip_n).limit(1).to_list(1)
-
-            if docs:
-                doc = docs[0]
-                credential_data = doc.get("credential_data") or {}
-                if mode == "antigravity":
-                    credential_data["enable_credit"] = bool(doc.get("enable_credit", False))
-                return doc["filename"], credential_data
-
-            return None
-
-        except Exception as e:
-            log.error(f"Error getting next available credential (mode={mode}, model_name={model_name}): {e}")
-            return None
-
-    async def get_available_credentials_list(self, mode: str = "geminicli") -> List[str]:
-        """
-        获取所有可用凭证列表
-        - 未禁用
-        - 按轮换顺序排序
-        """
-        self._ensure_initialized()
-
-        try:
-            collection_name = self._get_collection_name(mode)
-            collection = self._db[collection_name]
-
-            pipeline = [
-                {"$match": {"disabled": False}},
-                {"$sort": {"rotation_order": 1}},
-                {"$project": {"filename": 1, "_id": 0}}
-            ]
-
-            docs = await collection.aggregate(pipeline).to_list(length=None)
-            return [doc["filename"] for doc in docs]
-
-        except Exception as e:
-            log.error(f"Error getting available credentials list (mode={mode}): {e}")
-            return []
-
-    # ============ StorageBackend 协议方法 ============
 
     async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "geminicli") -> bool:
         """存储或更新凭证"""
@@ -1065,7 +847,7 @@ class MongoDBManager:
         Args:
             offset: 跳过的记录数（默认0）
             limit: 返回的最大记录数（None表示返回所有）
-            status_filter: 状态筛选（all=全部, enabled=仅启用, disabled=仅禁用）
+            status_filter: 状态筛选（all=全部, normal=正常, abnormal=异常）
             mode: 凭证模式 ("geminicli" 或 "antigravity")
             error_code_filter: 错误码筛选（格式如"400"或"403"，筛选包含该错误码的凭证）
             cooldown_filter: 冷却状态筛选（"in_cooldown"=冷却中, "no_cooldown"=未冷却）
@@ -1082,51 +864,21 @@ class MongoDBManager:
             collection_name = self._get_collection_name(mode)
             collection = self._db[collection_name]
 
-            # 构建查询条件
             query = {}
-            if status_filter == "enabled":
-                query["disabled"] = False
-            elif status_filter == "disabled":
-                query["disabled"] = True
-
-            # 错误码筛选 - 兼容存储为数字或字符串的情况
+            filter_none = False
+            filter_value = None
+            filter_int = None
             if error_code_filter and str(error_code_filter).strip().lower() != "all":
                 if str(error_code_filter).strip().lower() == "none":
-                    # 筛选无错误的凭证：error_codes 为空数组、不存在、或为 null
-                    query["$or"] = [
-                        {"error_codes": {"$exists": False}},
-                        {"error_codes": None},
-                        {"error_codes": []},
-                        {"error_codes": "[]"},
-                    ]
+                    filter_none = True
                 else:
                     filter_value = str(error_code_filter).strip()
-                    query_values = [filter_value]
                     try:
-                        query_values.append(int(filter_value))
+                        filter_int = int(filter_value)
                     except ValueError:
-                        pass
-                    query["error_codes"] = {"$in": query_values}
+                        filter_int = None
 
-            # 计算全局统计数据（不受筛选条件影响）
-            global_stats = {"total": 0, "normal": 0, "disabled": 0}
-            stats_pipeline = [
-                {
-                    "$group": {
-                        "_id": "$disabled",
-                        "count": {"$sum": 1}
-                    }
-                }
-            ]
-
-            stats_result = await collection.aggregate(stats_pipeline).to_list(length=10)
-            for item in stats_result:
-                count = item["count"]
-                global_stats["total"] += count
-                if item["_id"]:
-                    global_stats["disabled"] = count
-                else:
-                    global_stats["normal"] = count
+            global_stats = {"total": 0, "normal": 0, "abnormal": 0}
 
             # 获取所有匹配的文档（用于冷却筛选，因为需要在Python中判断）
             projection = {
@@ -1159,10 +911,34 @@ class MongoDBManager:
                         if isinstance(v, (int, float)) and v > current_time
                     }
 
+                error_codes = doc.get("error_codes") or []
+                if isinstance(error_codes, str):
+                    try:
+                        error_codes = json.loads(error_codes)
+                    except (TypeError, ValueError):
+                        error_codes = []
+                abnormal = bool(
+                    doc.get("disabled") or error_codes or active_cooldowns
+                )
+                global_stats["total"] += 1
+                global_stats["abnormal" if abnormal else "normal"] += 1
+
+                if status_filter == "normal" and abnormal:
+                    continue
+                if status_filter == "abnormal" and not abnormal:
+                    continue
+                if filter_none and error_codes:
+                    continue
+                if filter_value and not any(
+                    code == filter_value or code == filter_int
+                    for code in error_codes
+                ):
+                    continue
+
                 summary = {
                     "filename": doc["filename"],
                     "disabled": doc.get("disabled", False),
-                    "error_codes": doc.get("error_codes", []),
+                    "error_codes": error_codes,
                     "last_success": doc.get("last_success", current_time),
                     "user_email": doc.get("user_email"),
                     "rotation_order": doc.get("rotation_order", 0),
@@ -1221,7 +997,7 @@ class MongoDBManager:
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "disabled": 0},
+                "stats": {"total": 0, "normal": 0, "abnormal": 0},
             }
 
     # ============ 配置管理（内存缓存 + 可选 Redis）============

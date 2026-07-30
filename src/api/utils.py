@@ -1,146 +1,49 @@
 """
 Base API Client - 共用的 API 客户端基础功能
-提供错误处理、自动封禁、重试逻辑等共同功能
+提供错误记录和重试配置等共同功能
 """
 
-import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import Response
 
 from config import (
-    get_auto_ban_enabled,
-    get_auto_ban_error_codes,
+    get_credential_retry_interval,
+    get_credential_retry_limit_enabled,
     get_empty_output_error_enabled,
-    get_retry_429_enabled,
-    get_retry_429_interval,
-    get_retry_429_max_retries,
+    get_max_retry_credentials,
 )
 from log import log
 from src.api.empty_output import build_empty_model_output_response, is_empty_model_output_payload
 from src.credential_manager import CredentialManager
 
 
-# ==================== 错误检查与处理 ====================
-
-async def check_should_auto_ban(status_code: int) -> bool:
-    """
-    检查是否应该触发自动封禁
-    
-    Args:
-        status_code: HTTP状态码
-        
-    Returns:
-        bool: 是否应该触发自动封禁
-    """
-    return (
-        await get_auto_ban_enabled()
-        and status_code in await get_auto_ban_error_codes()
-    )
+RETRYABLE_STATUS_CODES = {401, 402, 403, 404, 408, 429, 500, 502, 503, 504}
 
 
-async def handle_auto_ban(
-    credential_manager: CredentialManager,
-    status_code: int,
-    credential_name: str,
-    mode: str = "geminicli"
-) -> None:
-    """
-    处理自动封禁：直接禁用凭证
-    
-    Args:
-        credential_manager: 凭证管理器实例
-        status_code: HTTP状态码
-        credential_name: 凭证名称
-        mode: 模式（geminicli 或 antigravity）
-    """
-    if credential_manager and credential_name:
-        log.warning(
-            f"[{mode.upper()} AUTO_BAN] Status {status_code} triggers auto-ban for credential: {credential_name}"
-        )
-        await credential_manager.set_cred_disabled(
-            credential_name, True, mode=mode
-        )
-
-
-async def handle_error_with_retry(
-    credential_manager: CredentialManager,
-    status_code: int,
-    credential_name: str,
-    retry_enabled: bool,
-    attempt: int,
-    max_retries: int,
-    retry_interval: float,
-    mode: str = "geminicli"
-) -> bool:
-    """
-    统一处理错误和重试逻辑
-
-    仅在以下情况下进行自动重试:
-    1. 429错误(速率限制)
-    2. 503错误(服务不可用)
-    3. 500错误(服务临时不可用)
-    4. 导致凭证封禁的错误(AUTO_BAN_ERROR_CODES配置)
-
-    Args:
-        credential_manager: 凭证管理器实例
-        status_code: HTTP状态码
-        credential_name: 凭证名称
-        retry_enabled: 是否启用重试
-        attempt: 当前重试次数
-        max_retries: 最大重试次数
-        retry_interval: 重试间隔
-        mode: 模式（geminicli 或 antigravity）
-        
-    Returns:
-        bool: True表示需要继续重试，False表示不需要重试
-    """
-    # 优先检查自动封禁
-    should_auto_ban = await check_should_auto_ban(status_code)
-
-    if should_auto_ban:
-        # 触发自动封禁
-        await handle_auto_ban(credential_manager, status_code, credential_name, mode)
-
-        # 自动封禁后，仍然尝试重试（会在下次循环中自动获取新凭证）
-        if retry_enabled and attempt < max_retries:
-            log.info(
-                f"[{mode.upper()} RETRY] Retrying with next credential after auto-ban "
-                f"(status {status_code}, attempt {attempt + 1}/{max_retries})"
-            )
-            await asyncio.sleep(retry_interval)
-            return True
-        return False
-
-    # 如果不触发自动封禁，仅对429、503和500错误进行重试
-    if status_code in (429, 500, 503) and retry_enabled and attempt < max_retries:
-        log.info(
-            f"[{mode.upper()} RETRY] {status_code} error encountered, retrying "
-            f"(attempt {attempt + 1}/{max_retries})"
-        )
-        await asyncio.sleep(retry_interval)
-        return True
-
-    # 其他错误不进行重试
-    return False
+def is_retryable_status(status_code: int) -> bool:
+    return status_code in RETRYABLE_STATUS_CODES
 
 
 # ==================== 重试配置获取 ====================
 
 async def get_retry_config() -> Dict[str, Any]:
-    """
-    获取重试配置
-    
-    Returns:
-        包含重试配置的字典
-    """
+    """未开启限制时遍历全部可用凭证；开启后限制总尝试凭证数。"""
+    limit_enabled = await get_credential_retry_limit_enabled()
     return {
-        "retry_enabled": await get_retry_429_enabled(),
-        "max_retries": await get_retry_429_max_retries(),
-        "retry_interval": await get_retry_429_interval(),
+        "max_credentials": await get_max_retry_credentials()
+        if limit_enabled
+        else 0,
+        "retry_interval": await get_credential_retry_interval(),
     }
+
+
+def retry_limit_reached(retry_config: Dict[str, Any], attempted_count: int) -> bool:
+    maximum = int(retry_config.get("max_credentials", 0) or 0)
+    return maximum > 0 and attempted_count >= maximum
 
 
 # ==================== API调用结果记录 ====================
@@ -188,6 +91,27 @@ async def record_api_call_error(
         error_message: 错误信息（可选）
     """
     if credential_manager and credential_name:
+        if cooldown_until is None and model_name:
+            if status_code in (429, 503) and error_message:
+                cooldown_until = await parse_and_log_cooldown(
+                    error_message, mode=mode
+                )
+            if cooldown_until is None:
+                cooldown_seconds = {
+                    401: 24 * 60 * 60,
+                    402: 30 * 60,
+                    403: 30 * 60,
+                    404: 12 * 60 * 60,
+                    408: 60,
+                    429: 5,
+                    500: 5,
+                    502: 60,
+                    503: 5,
+                    504: 60,
+                }.get(status_code)
+                if cooldown_seconds:
+                    cooldown_until = time.time() + cooldown_seconds
+
         await credential_manager.record_api_call_result(
             credential_name,
             False,
@@ -452,7 +376,7 @@ async def collect_streaming_response(stream_generator) -> Response:
     # 去掉嵌套的 "response" 包装（Antigravity格式 -> 标准Gemini格式）
     if "response" in merged_response and "candidates" not in merged_response:
         if debug_enabled:
-            log.debug(f"[STREAM COLLECTOR] 展开response包装")
+            log.debug("[STREAM COLLECTOR] 展开response包装")
         merged_response = merged_response["response"]
 
     # 返回纯JSON格式

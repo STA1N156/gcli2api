@@ -456,9 +456,11 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 - `PASSWORD`: Universal password, overrides the above two when set (default: pwd)
 
 **Performance and Stability Configuration**
-- `RETRY_429_ENABLED`: Enable 429 error automatic retry (default: true)
-- `RETRY_429_MAX_RETRIES`: Maximum retry attempts for 429 errors (default: 3)
-- `RETRY_429_INTERVAL`: Retry interval for 429 errors, in seconds (default: 1.0)
+- `CREDENTIAL_RETRY_LIMIT_ENABLED`: Limit credentials attempted per request (default: false; when disabled, all eligible credentials are traversed)
+- `MAX_RETRY_CREDENTIALS`: Maximum total credentials attempted when the limit is enabled, including the first (default: 5)
+- `CREDENTIAL_RETRY_INTERVAL`: Delay before switching credentials, in seconds (default: 1.0)
+- `SESSION_AFFINITY_ENABLED`: Enable session affinity (default: false)
+- `SESSION_AFFINITY_TTL_SECONDS`: Session affinity lifetime in seconds (default: 3600)
 - `ANTI_TRUNCATION_MAX_ATTEMPTS`: Maximum retry attempts for anti-truncation (default: 3)
 
 **Network and Proxy Configuration**
@@ -468,7 +470,6 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 - `METADATA_SERVICE_URL`: Metadata service proxy endpoint
 
 **Automation Configuration**
-- `AUTO_BAN`: Enable automatic credential banning (default: true)
 - `AUTO_LOAD_ENV_CREDS`: Automatically load environment variable credentials at startup (default: false)
 
 **Compatibility Configuration**

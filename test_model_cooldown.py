@@ -3,13 +3,13 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from src.api.utils import parse_quota_reset_timestamp
+from src.api.utils import parse_quota_reset_timestamp, record_api_call_error
 from src.model_cooldown import has_active_model_cooldown
 from src.panel.creds import clear_all_credential_cooldowns
 
 
 class ModelCooldownTests(unittest.TestCase):
-    def test_antigravity_gemini_group_behavior_is_unchanged(self):
+    def test_antigravity_cooldown_only_blocks_the_exact_gemini_model(self):
         cooldowns = {"gemini-3-flash": 2000}
 
         self.assertTrue(
@@ -17,16 +17,16 @@ class ModelCooldownTests(unittest.TestCase):
                 cooldowns, "gemini-3-flash", current_time=1000, mode="antigravity"
             )
         )
-        self.assertTrue(
+        self.assertFalse(
             has_active_model_cooldown(
                 cooldowns, "gemini-3.1-pro-preview", current_time=1000, mode="antigravity"
             )
         )
 
-    def test_geminicli_flash_group_behavior_is_unchanged(self):
+    def test_geminicli_cooldown_only_blocks_the_exact_model(self):
         cooldowns = {"gemini-2.5-flash": 2000}
 
-        self.assertTrue(
+        self.assertFalse(
             has_active_model_cooldown(
                 cooldowns, "gemini-3-flash", current_time=1000, mode="geminicli"
             )
@@ -47,10 +47,10 @@ class ModelCooldownTests(unittest.TestCase):
             )
             self.assertEqual(parse_quota_reset_timestamp(error), 15400)
 
-    def test_antigravity_claude_group_behavior_is_unchanged(self):
+    def test_antigravity_cooldown_only_blocks_the_exact_claude_model(self):
         cooldowns = {"claude-sonnet-4-6": 2000}
 
-        self.assertTrue(
+        self.assertFalse(
             has_active_model_cooldown(
                 cooldowns, "claude-opus-4-6-thinking", current_time=1000, mode="antigravity"
             )
@@ -58,6 +58,29 @@ class ModelCooldownTests(unittest.TestCase):
 
 
 class BatchCooldownTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ordinary_403_sets_model_cooldown_without_disabling(self):
+        manager = SimpleNamespace(record_api_call_result=AsyncMock())
+
+        with patch("src.api.utils.time.time", return_value=1000):
+            await record_api_call_error(
+                manager,
+                "credential.json",
+                403,
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                error_message="permission denied",
+            )
+
+        manager.record_api_call_result.assert_awaited_once_with(
+            "credential.json",
+            False,
+            403,
+            cooldown_until=2800,
+            mode="antigravity",
+            model_name="gemini-3.1-pro-preview",
+            error_message="permission denied",
+        )
+
     async def test_clear_all_cooldowns_applies_to_every_cooled_credential(self):
         backend = SimpleNamespace(
             clear_all_model_cooldowns=AsyncMock(return_value=True)

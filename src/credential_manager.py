@@ -9,6 +9,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from config import (
+    get_session_affinity_enabled,
+    get_session_affinity_ttl_seconds,
+)
 from log import log
 
 from src.google_oauth_api import Credentials
@@ -16,12 +20,9 @@ from src.model_cooldown import has_active_model_cooldown
 from src.storage_adapter import get_storage_adapter
 
 
-SESSION_BINDING_TTL_SECONDS = 3 * 60 * 60
 SESSION_BINDING_MAX_ENTRIES = int(os.getenv("SESSION_BINDING_MAX_ENTRIES", "50000"))
-SESSION_FAILURE_TTL_SECONDS = int(os.getenv("SESSION_FAILURE_TTL_SECONDS", "900"))
-SESSION_FAILURE_MAX_ENTRIES = int(os.getenv("SESSION_FAILURE_MAX_ENTRIES", "10000"))
 SESSION_BINDING_PRUNE_INTERVAL_SECONDS = 60
-SESSION_FAILURE_REDIS_PREFIX = "credential:session-failures:"
+ROUND_ROBIN_MAX_KEYS = 4096
 
 
 class CredentialManager:
@@ -35,11 +36,9 @@ class CredentialManager:
         self._initialized = False
         self._storage_adapter = None
         self._session_bindings: Dict[str, Tuple[str, float]] = {}
-        self._session_failures: Dict[str, Tuple[Set[str], float]] = {}
+        self._round_robin_cursors: Dict[str, int] = {}
         self._session_lock = asyncio.Lock()
         self._last_session_prune = 0.0
-        self._session_redis = None
-        self._session_redis_checked = False
 
         # 并发控制（简化）
         # 后端数据库自行处理并发，credential_manager 不再使用本地锁
@@ -74,32 +73,10 @@ class CredentialManager:
     def _session_log_id(self, binding_key: str) -> str:
         return hashlib.sha256(binding_key.encode("utf-8")).hexdigest()[:12]
 
-    def _session_failure_redis_key(self, binding_key: str) -> str:
-        digest = hashlib.sha256(binding_key.encode("utf-8")).hexdigest()
-        return f"{SESSION_FAILURE_REDIS_PREFIX}{digest}"
-
-    async def _get_session_failure_redis(self):
-        if self._session_redis_checked:
-            return self._session_redis
-        self._session_redis_checked = True
-        redis_url = os.getenv("REDIS_URL")
-        if not redis_url:
-            return None
-        try:
-            import redis.asyncio as aioredis  # type: ignore
-
-            client = aioredis.from_url(redis_url, decode_responses=True)
-            await client.ping()
-            self._session_redis = client
-        except Exception as e:
-            log.warning(f"[CredMgr] Redis session failure store unavailable: {e}")
-        return self._session_redis
-
     def _prune_session_bindings_locked(self, now: float) -> None:
         if (
             now - self._last_session_prune < SESSION_BINDING_PRUNE_INTERVAL_SECONDS
             and len(self._session_bindings) <= SESSION_BINDING_MAX_ENTRIES
-            and len(self._session_failures) <= SESSION_FAILURE_MAX_ENTRIES
         ):
             return
 
@@ -107,18 +84,11 @@ class CredentialManager:
         for key, (_, expires_at) in list(self._session_bindings.items()):
             if expires_at <= now:
                 self._session_bindings.pop(key, None)
-        for key, (_, expires_at) in list(self._session_failures.items()):
-            if expires_at <= now:
-                self._session_failures.pop(key, None)
 
         overflow = len(self._session_bindings) - SESSION_BINDING_MAX_ENTRIES
         if overflow > 0:
             for key in list(self._session_bindings)[:overflow]:
                 self._session_bindings.pop(key, None)
-        overflow = len(self._session_failures) - SESSION_FAILURE_MAX_ENTRIES
-        if overflow > 0:
-            for key in list(self._session_failures)[:overflow]:
-                self._session_failures.pop(key, None)
 
     async def _get_session_binding(self, binding_key: str) -> Optional[str]:
         async with self._session_lock:
@@ -131,7 +101,12 @@ class CredentialManager:
                 return None
             return filename
 
-    async def _remember_session_binding(self, binding_key: Optional[str], filename: str) -> None:
+    async def _remember_session_binding(
+        self,
+        binding_key: Optional[str],
+        filename: str,
+        ttl_seconds: int,
+    ) -> None:
         if not binding_key or not filename:
             return
         if SESSION_BINDING_MAX_ENTRIES <= 0:
@@ -141,7 +116,7 @@ class CredentialManager:
             self._prune_session_bindings_locked(now)
             self._session_bindings[binding_key] = (
                 os.path.basename(filename),
-                now + SESSION_BINDING_TTL_SECONDS,
+                now + ttl_seconds,
             )
 
     async def _forget_session_binding(self, binding_key: Optional[str]) -> None:
@@ -150,87 +125,22 @@ class CredentialManager:
         async with self._session_lock:
             self._session_bindings.pop(binding_key, None)
 
-    async def _get_session_failures(self, binding_key: str) -> Set[str]:
-        async with self._session_lock:
-            failure = self._session_failures.get(binding_key)
-            filenames = set(failure[0]) if failure else set()
-            if failure and failure[1] <= time.time():
-                self._session_failures.pop(binding_key, None)
-                filenames.clear()
-
-        redis = await self._get_session_failure_redis()
-        if redis is not None:
-            try:
-                shared = await redis.smembers(
-                    self._session_failure_redis_key(binding_key)
-                )
-                filenames.update(os.path.basename(name) for name in shared)
-            except Exception as e:
-                log.warning(f"[CredMgr] Failed to read session failures from Redis: {e}")
-        return filenames
-
-    async def remember_session_failure(
-        self,
-        credential_name: str,
-        *,
-        mode: str,
-        model_name: Optional[str],
-        session_key: Optional[str],
-    ) -> None:
-        binding_key = self._session_binding_key(mode, model_name, session_key)
-        if not binding_key or not credential_name or SESSION_FAILURE_MAX_ENTRIES <= 0:
-            return
-
-        now = time.time()
-        async with self._session_lock:
-            self._prune_session_bindings_locked(now)
-            filenames, expires_at = self._session_failures.pop(
-                binding_key,
-                (set(), 0),
-            )
-            if expires_at <= now:
-                filenames = set()
-            filenames.add(os.path.basename(credential_name))
-            self._session_failures[binding_key] = (
-                filenames,
-                now + SESSION_FAILURE_TTL_SECONDS,
-            )
-
-        redis = await self._get_session_failure_redis()
-        if redis is not None:
-            try:
-                redis_key = self._session_failure_redis_key(binding_key)
-                pipe = redis.pipeline()
-                pipe.sadd(redis_key, os.path.basename(credential_name))
-                pipe.expire(redis_key, SESSION_FAILURE_TTL_SECONDS)
-                await pipe.execute()
-            except Exception as e:
-                log.warning(f"[CredMgr] Failed to store session failure in Redis: {e}")
-
     async def _get_bound_credential_if_available(
         self,
         filename: str,
         *,
         mode: str,
         model_name: Optional[str],
-        exclude_credential: Optional[str],
+        exclude_credentials: Set[str],
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
-        if exclude_credential and os.path.basename(filename) == os.path.basename(exclude_credential):
+        if os.path.basename(filename) in exclude_credentials:
             return None
 
         state = await self._storage_adapter.get_credential_state(filename, mode=mode)
-        if state.get("disabled"):
+        if not self._credential_state_allows_model(
+            state, mode=mode, model_name=model_name
+        ):
             return None
-
-        model_lower = (model_name or "").lower()
-        if has_active_model_cooldown(state.get("model_cooldowns"), model_name, mode=mode):
-            return None
-
-        if mode == "geminicli":
-            if "pro" in model_lower and state.get("tier") == "free":
-                return None
-            if "preview" in model_lower and state.get("preview") is False:
-                return None
 
         credential_data = await self._storage_adapter.get_credential(filename, mode=mode)
         if not credential_data:
@@ -263,10 +173,9 @@ class CredentialManager:
 
         return True
 
-    async def _get_session_routed_credential(
+    async def _get_round_robin_credential(
         self,
         *,
-        binding_key: str,
         mode: str,
         model_name: Optional[str],
         exclude_credentials: Set[str],
@@ -292,13 +201,18 @@ class CredentialManager:
         if not candidates:
             return None
 
-        ordered_candidates = sorted(
-            candidates,
-            key=lambda item: hashlib.sha256(
-                f"{binding_key}\0{item[0]}".encode("utf-8")
-            ).digest(),
-            reverse=True,
-        )
+        candidates.sort(key=lambda item: item[0])
+        cursor_key = f"{mode}:{(model_name or '').strip().lower()}"
+        async with self._session_lock:
+            if (
+                cursor_key not in self._round_robin_cursors
+                and len(self._round_robin_cursors) >= ROUND_ROBIN_MAX_KEYS
+            ):
+                self._round_robin_cursors.clear()
+            start = self._round_robin_cursors.get(cursor_key, 0) % len(candidates)
+            self._round_robin_cursors[cursor_key] = start + 1
+
+        ordered_candidates = candidates[start:] + candidates[:start]
 
         for filename, state in ordered_candidates:
             credential_data = await self._storage_adapter.get_credential(filename, mode=mode)
@@ -307,13 +221,6 @@ class CredentialManager:
 
             if mode == "antigravity":
                 credential_data["enable_credit"] = bool(state.get("enable_credit", False))
-
-            if log.is_debug_enabled():
-                log.debug(
-                    "Session route selected: "
-                    f"session={self._session_log_id(binding_key)}, "
-                    f"credential={filename}, mode={mode}, model={model_name}"
-                )
             return filename, credential_data
 
         return None
@@ -327,17 +234,15 @@ class CredentialManager:
         exclude_credentials: Optional[Set[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
-        获取有效的凭证 - 随机负载均衡版
-        每次随机选择一个可用的凭证（未禁用、未冷却、符合preview要求）
-        如果刷新失败会自动禁用失效凭证并重试获取下一个可用凭证
+        按 CLIProxy 的方式获取凭证：
+        先过滤禁用、模型冷却和本次请求已尝试的凭证，再按模型轮询。
+        开启粘性会话后优先复用仍可用的绑定凭证；不可用时自动换下一个。
 
         Args:
             mode: 凭证模式 ("geminicli" 或 "antigravity")
             model_name: 完整模型名，用于模型级冷却检查和preview筛选
-                       - geminicli: 完整模型名
-                                   - 包含 "preview" 的模型只能使用 preview=True 的凭证
-                                   - 不包含 "preview" 的模型优先使用 preview=False 的凭证
-                       - antigravity: 完整模型名（如 "gemini-2.0-flash-exp"）
+                       - geminicli: Pro 模型排除 free，preview 模型排除不支持的凭证
+                       - antigravity: 按完整模型名过滤冷却
         """
         await self._ensure_initialized()
         excluded_credentials = {
@@ -347,34 +252,27 @@ class CredentialManager:
         }
         if exclude_credential:
             excluded_credentials.add(os.path.basename(exclude_credential))
-        retry_excluded_credentials = set(excluded_credentials)
 
-        binding_key = self._session_binding_key(mode, model_name, session_key)
+        affinity_enabled = bool(session_key) and await get_session_affinity_enabled()
+        binding_key = (
+            self._session_binding_key(mode, model_name, session_key)
+            if affinity_enabled
+            else None
+        )
+        affinity_ttl = (
+            await get_session_affinity_ttl_seconds()
+            if binding_key
+            else 0
+        )
+
         if binding_key:
-            excluded_credentials.update(await self._get_session_failures(binding_key))
-        bypass_session_routing = bool(binding_key and retry_excluded_credentials)
-
-        if bypass_session_routing:
-            await self._forget_session_binding(binding_key)
-            if log.is_debug_enabled():
-                log.debug(
-                    "Session route bypassed for retry: "
-                    f"session={self._session_log_id(binding_key)}, "
-                    f"excluded={len(excluded_credentials)}, "
-                    f"mode={mode}, model={model_name}"
-                )
-
-        if binding_key and not bypass_session_routing:
             bound_filename = await self._get_session_binding(binding_key)
-            if bound_filename and os.path.basename(bound_filename) in excluded_credentials:
-                await self._forget_session_binding(binding_key)
-                bound_filename = None
             if bound_filename:
                 bound_result = await self._get_bound_credential_if_available(
                     bound_filename,
                     mode=mode,
                     model_name=model_name,
-                    exclude_credential=None,
+                    exclude_credentials=excluded_credentials,
                 )
                 if bound_result:
                     filename, credential_data = bound_result
@@ -387,9 +285,12 @@ class CredentialManager:
                                     f"session={self._session_log_id(binding_key)}, "
                                     f"credential={filename}, mode={mode}, model={model_name}"
                                 )
-                            await self._remember_session_binding(binding_key, filename)
+                            await self._remember_session_binding(
+                                binding_key, filename, affinity_ttl
+                            )
                             return filename, refreshed_data
                         await self._forget_session_binding(binding_key)
+                        excluded_credentials.add(filename)
                     else:
                         if log.is_debug_enabled():
                             log.debug(
@@ -397,92 +298,47 @@ class CredentialManager:
                                 f"session={self._session_log_id(binding_key)}, "
                                 f"credential={filename}, mode={mode}, model={model_name}"
                             )
-                        await self._remember_session_binding(binding_key, filename)
+                        await self._remember_session_binding(
+                            binding_key, filename, affinity_ttl
+                        )
                         return filename, credential_data
                 else:
                     await self._forget_session_binding(binding_key)
 
-        if binding_key or excluded_credentials:
-            route_key = (
-                binding_key
-                if binding_key and not bypass_session_routing
-                else f"retry:{time.time_ns()}"
-            )
-            routed_result = await self._get_session_routed_credential(
-                binding_key=route_key,
+        while True:
+            result = await self._get_round_robin_credential(
                 mode=mode,
                 model_name=model_name,
                 exclude_credentials=excluded_credentials,
             )
-            if routed_result:
-                filename, credential_data = routed_result
-                if await self._should_refresh_token(credential_data):
-                    log.debug(f"Token needs refresh: {filename} (mode={mode})")
-                    refreshed_data = await self._refresh_token(credential_data, filename, mode=mode)
-                    if refreshed_data:
-                        log.debug(f"Token refreshed: {filename} (mode={mode})")
-                        await self._remember_session_binding(binding_key, filename)
-                        return filename, refreshed_data
-                    await self._forget_session_binding(binding_key)
-                else:
-                    await self._remember_session_binding(binding_key, filename)
-                    return filename, credential_data
-
-        # 最多重试3次
-        max_retries = max(20, len(excluded_credentials) * 3) if excluded_credentials else 3
-        for attempt in range(max_retries):
-            result = await self._storage_adapter._backend.get_next_available_credential(
-                mode=mode, model_name=model_name
-            )
-
-            # 如果没有可用凭证，直接返回None
             if not result:
-                if attempt == 0:
-                    log.warning(f"没有可用凭证 (mode={mode}, model_name={model_name})")
+                log.warning(f"没有可用凭证 (mode={mode}, model_name={model_name})")
                 return None
 
             filename, credential_data = result
-            if os.path.basename(filename) in excluded_credentials:
-                continue
-
-            # Token 刷新检查
             if await self._should_refresh_token(credential_data):
-                log.debug(f"Token需要刷新 - 文件: {filename} (mode={mode})")
+                log.debug(f"Token需要刷新: {filename} (mode={mode})")
                 refreshed_data = await self._refresh_token(credential_data, filename, mode=mode)
                 if refreshed_data:
-                    # 刷新成功，返回凭证
                     credential_data = refreshed_data
-                    log.debug(f"Token刷新成功: {filename} (mode={mode})")
-                    await self._remember_session_binding(binding_key, filename)
-                    return filename, credential_data
                 else:
-                    # 刷新失败（_refresh_token内部已自动禁用失效凭证）
-                    log.warning(f"Token刷新失败，尝试获取下一个凭证: {filename} (mode={mode}, attempt={attempt+1}/{max_retries})")
-                    # 继续循环，尝试获取下一个可用凭证
+                    excluded_credentials.add(os.path.basename(filename))
+                    await self._forget_session_binding(binding_key)
                     continue
-            else:
-                # Token有效，直接返回
-                await self._remember_session_binding(binding_key, filename)
-                return filename, credential_data
 
-        # 重试次数用尽
-        log.error(f"重试{max_retries}次后仍无可用凭证 (mode={mode}, model_name={model_name})")
-        return None
+            await self._remember_session_binding(
+                binding_key, filename, affinity_ttl
+            )
+            return filename, credential_data
 
     async def add_credential(self, credential_name: str, credential_data: Dict[str, Any]):
-        """
-        新增或更新一个凭证
-        存储层会自动处理轮换顺序
-        """
+        """新增或更新一个凭证。"""
         await self._ensure_initialized()
         await self._storage_adapter.store_credential(credential_name, credential_data)
         log.info(f"Credential added/updated: {credential_name}")
 
     async def add_antigravity_credential(self, credential_name: str, credential_data: Dict[str, Any]):
-        """
-        新增或更新一个Antigravity凭证
-        存储层会自动处理轮换顺序
-        """
+        """新增或更新一个 Antigravity 凭证。"""
         await self._ensure_initialized()
         await self._storage_adapter.store_credential(credential_name, credential_data, mode="antigravity")
         log.info(f"Antigravity credential added/updated: {credential_name}")
@@ -500,19 +356,12 @@ class CredentialManager:
 
     async def update_credential_state(self, credential_name: str, state_updates: Dict[str, Any], mode: str = "geminicli"):
         """更新凭证状态"""
-        log.debug(f"[CredMgr] update_credential_state 开始: credential_name={credential_name}, state_updates={state_updates}, mode={mode}")
-        log.debug(f"[CredMgr] 调用 _ensure_initialized...")
         await self._ensure_initialized()
-        log.debug(f"[CredMgr] _ensure_initialized 完成")
         try:
-            log.debug(f"[CredMgr] 调用 storage_adapter.update_credential_state...")
             success = await self._storage_adapter.update_credential_state(
                 credential_name, state_updates, mode=mode
             )
-            log.debug(f"[CredMgr] storage_adapter.update_credential_state 返回: {success}")
-            if success:
-                log.debug(f"Updated credential state: {credential_name} (mode={mode})")
-            else:
+            if not success:
                 log.warning(f"Failed to update credential state: {credential_name} (mode={mode})")
             return success
         except Exception as e:
@@ -522,16 +371,12 @@ class CredentialManager:
     async def set_cred_disabled(self, credential_name: str, disabled: bool, mode: str = "geminicli"):
         """设置凭证的启用/禁用状态"""
         try:
-            log.info(f"[CredMgr] set_cred_disabled 开始: credential_name={credential_name}, disabled={disabled}, mode={mode}")
             success = await self.update_credential_state(
                 credential_name, {"disabled": disabled}, mode=mode
             )
-            log.info(f"[CredMgr] update_credential_state 返回: success={success}")
             if success:
                 action = "disabled" if disabled else "enabled"
                 log.info(f"Credential {action}: {credential_name} (mode={mode})")
-            else:
-                log.warning(f"[CredMgr] 设置禁用状态失败: credential_name={credential_name}, disabled={disabled}")
             return success
         except Exception as e:
             log.error(f"Error setting credential disabled state {credential_name}: {e}")
@@ -633,12 +478,10 @@ class CredentialManager:
         await self._ensure_initialized()
         try:
             if success:
-            # 条件写入：仅当凭证有错误状态或模型冷却时才写 DB，零内存缓存
-            # fire-and-forget，不阻塞请求链路
-                asyncio.create_task(
-                    self._storage_adapter._backend.record_success(
-                        credential_name, model_name=model_name, mode=mode
-                    )
+                # 存储层只在有错误/冷却时写入；这里等待完成，避免旧成功结果
+                # 在新冷却之后才落库并把冷却误删。
+                await self._storage_adapter._backend.record_success(
+                    credential_name, model_name=model_name, mode=mode
                 )
 
             elif error_code:
@@ -667,6 +510,22 @@ class CredentialManager:
 
         except Exception as e:
             log.error(f"Error recording API call result for {credential_name}: {e}")
+
+    async def refresh_credential(
+        self,
+        credential_name: str,
+        mode: str = "geminicli",
+    ) -> Optional[Dict[str, Any]]:
+        """收到 401 后强制刷新一次当前凭证。"""
+        await self._ensure_initialized()
+        credential_data = await self._storage_adapter.get_credential(
+            credential_name, mode=mode
+        )
+        if not credential_data:
+            return None
+        return await self._refresh_token(
+            credential_data, credential_name, mode=mode
+        )
 
     async def _should_refresh_token(self, credential_data: Dict[str, Any]) -> bool:
         """检查token是否需要刷新"""
@@ -771,8 +630,8 @@ class CredentialManager:
             if hasattr(e, 'status_code'):
                 status_code = e.status_code
 
-            # 检查是否是凭证永久失效的错误（只有明确的400/403等才判定为永久失效）
-            is_permanent_failure = self._is_permanent_refresh_failure(error_msg, status_code)
+            # 仅明确的 OAuth 吊销/失效信息才永久禁用，不能只凭 HTTP 状态码判断。
+            is_permanent_failure = self._is_permanent_refresh_failure(error_msg)
 
             if is_permanent_failure:
                 log.warning(f"检测到凭证永久失效 (HTTP {status_code}): {filename}")
@@ -784,7 +643,6 @@ class CredentialManager:
 
                 # 禁用失效凭证
                 try:
-                    # 直接禁用该凭证（随机选择机制会自动跳过它）
                     disabled_ok = await self.update_credential_state(filename, {"disabled": True}, mode=mode)
                     if disabled_ok:
                         log.warning(f"永久失效凭证已禁用: {filename}")
@@ -798,39 +656,22 @@ class CredentialManager:
 
             return None
 
-    def _is_permanent_refresh_failure(self, error_msg: str, status_code: Optional[int] = None) -> bool:
+    def _is_permanent_refresh_failure(self, error_msg: str) -> bool:
         """
         判断是否是凭证永久失效的错误
 
         Args:
             error_msg: 错误信息
-            status_code: HTTP状态码（如果有）
-
         Returns:
             True表示凭证永久失效应封禁，False表示临时错误不应封禁
         """
-        # 优先使用HTTP状态码判断
-        if status_code is not None:
-            # 400/401/403 明确表示凭证有问题，应该封禁
-            if status_code in [400, 401, 403]:
-                log.debug(f"检测到客户端错误状态码 {status_code}，判定为永久失效")
-                return True
-            # 500/502/503/504 是服务器错误，不应封禁凭证
-            elif status_code in [500, 502, 503, 504]:
-                log.debug(f"检测到服务器错误状态码 {status_code}，不应封禁凭证")
-                return False
-            # 429 (限流) 不应封禁凭证
-            elif status_code == 429:
-                log.debug("检测到限流错误 429，不应封禁凭证")
-                return False
-
-        # 如果没有状态码，回退到错误信息匹配（谨慎判断）
-        # 只有明确的凭证失效错误才判定为永久失效
         permanent_error_patterns = [
             "invalid_grant",
             "refresh_token_expired",
             "invalid_refresh_token",
             "unauthorized_client",
+            "invalid_client",
+            "token has been expired or revoked",
             "access_denied",
         ]
 

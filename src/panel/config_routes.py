@@ -25,8 +25,22 @@ from .utils import get_env_locked_keys
 # 创建路由器
 router = APIRouter(prefix="/config", tags=["config"])
 
+_REMOVED_CREDENTIAL_POLICY_KEYS = {
+    "auto_ban_enabled",
+    "auto_ban_error_codes",
+    "calls_per_rotation",
+    "retry_429_enabled",
+    "retry_429_max_retries",
+    "retry_429_interval",
+}
+
+
 def _is_removed_empty_output_retry_key(key: str) -> bool:
     return "empty_output" in key and key.endswith("_max_retries")
+
+
+def _is_removed_credential_policy_key(key: str) -> bool:
+    return key in _REMOVED_CREDENTIAL_POLICY_KEYS
 
 
 @router.get("/get")
@@ -51,14 +65,12 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["service_usage_api_url"] = await config.get_service_usage_api_url()
         current_config["antigravity_api_url"] = await config.get_antigravity_api_url()
 
-        # 自动封禁配置
-        current_config["auto_ban_enabled"] = await config.get_auto_ban_enabled()
-        current_config["auto_ban_error_codes"] = await config.get_auto_ban_error_codes()
-
-        # 429重试配置
-        current_config["retry_429_max_retries"] = await config.get_retry_429_max_retries()
-        current_config["retry_429_enabled"] = await config.get_retry_429_enabled()
-        current_config["retry_429_interval"] = await config.get_retry_429_interval()
+        # 凭证重试与粘性配置
+        current_config["max_retry_credentials"] = await config.get_max_retry_credentials()
+        current_config["credential_retry_limit_enabled"] = await config.get_credential_retry_limit_enabled()
+        current_config["credential_retry_interval"] = await config.get_credential_retry_interval()
+        current_config["session_affinity_enabled"] = await config.get_session_affinity_enabled()
+        current_config["session_affinity_ttl_seconds"] = await config.get_session_affinity_ttl_seconds()
         current_config["empty_output_error_enabled"] = await config.get_empty_output_error_enabled()
         current_config["request_capture_status"] = await get_request_capture_status()
         # 抗截断配置
@@ -93,7 +105,10 @@ async def get_config(token: str = Depends(verify_panel_token)):
 
         # 合并存储系统配置（不覆盖环境变量）
         for key, value in storage_config.items():
-            if _is_removed_empty_output_retry_key(key):
+            if (
+                _is_removed_empty_output_retry_key(key)
+                or _is_removed_credential_policy_key(key)
+            ):
                 continue
             if key not in env_locked_keys:
                 current_config[key] = value
@@ -120,28 +135,43 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
 
         # 验证配置项
         for key in list(new_config):
-            if _is_removed_empty_output_retry_key(key):
+            if (
+                _is_removed_empty_output_retry_key(key)
+                or _is_removed_credential_policy_key(key)
+            ):
                 new_config.pop(key, None)
 
-        if "retry_429_max_retries" in new_config:
+        if "max_retry_credentials" in new_config:
             if (
-                not isinstance(new_config["retry_429_max_retries"], int)
-                or new_config["retry_429_max_retries"] < 0
+                not isinstance(new_config["max_retry_credentials"], int)
+                or new_config["max_retry_credentials"] < 1
             ):
-                raise HTTPException(status_code=400, detail="最大429重试次数必须是大于等于0的整数")
+                raise HTTPException(status_code=400, detail="最多尝试凭证数必须是大于0的整数")
 
-        if "retry_429_enabled" in new_config:
-            if not isinstance(new_config["retry_429_enabled"], bool):
-                raise HTTPException(status_code=400, detail="429重试开关必须是布尔值")
+        if "credential_retry_limit_enabled" in new_config:
+            if not isinstance(new_config["credential_retry_limit_enabled"], bool):
+                raise HTTPException(status_code=400, detail="凭证尝试上限开关必须是布尔值")
+
+        if "session_affinity_enabled" in new_config:
+            if not isinstance(new_config["session_affinity_enabled"], bool):
+                raise HTTPException(status_code=400, detail="粘性会话开关必须是布尔值")
+
+        if "session_affinity_ttl_seconds" in new_config:
+            ttl = new_config["session_affinity_ttl_seconds"]
+            if not isinstance(ttl, int) or ttl < 60 or ttl > 604800:
+                raise HTTPException(
+                    status_code=400,
+                    detail="粘性会话有效期必须是60-604800秒之间的整数",
+                )
 
         # 验证新的配置项
-        if "retry_429_interval" in new_config:
+        if "credential_retry_interval" in new_config:
             try:
-                interval = float(new_config["retry_429_interval"])
+                interval = float(new_config["credential_retry_interval"])
                 if interval < 0.01 or interval > 10:
-                    raise HTTPException(status_code=400, detail="429重试间隔必须在0.01-10秒之间")
+                    raise HTTPException(status_code=400, detail="切换凭证间隔必须在0.01-10秒之间")
             except (ValueError, TypeError):
-                raise HTTPException(status_code=400, detail="429重试间隔必须是有效的数字")
+                raise HTTPException(status_code=400, detail="切换凭证间隔必须是有效的数字")
 
         if "empty_output_error_enabled" in new_config:
             if not isinstance(new_config["empty_output_error_enabled"], bool):
@@ -212,6 +242,8 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
 
         # 直接使用存储适配器保存配置
         storage_adapter = await get_storage_adapter()
+        for key in _REMOVED_CREDENTIAL_POLICY_KEYS:
+            await storage_adapter.delete_config(key)
         for key, value in new_config.items():
             if key not in env_locked_keys:
                 await storage_adapter.set_config(key, value)

@@ -2,60 +2,212 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call, patch
 
-from src.api.antigravity import non_stream_request
+from src.api.antigravity import non_stream_request as antigravity_request
+from src.api.geminicli import non_stream_request as geminicli_request
+from src.api.utils import get_retry_config
 from src.credential_manager import CredentialManager
 
 
-class CredentialRetrySelectionTests(unittest.IsolatedAsyncioTestCase):
+def http_response(status_code, body=b"{}"):
+    return SimpleNamespace(
+        status_code=status_code,
+        text=body.decode(),
+        content=body,
+        headers={},
+    )
+
+
+class CredentialSelectionTests(unittest.IsolatedAsyncioTestCase):
     def make_manager(self, states):
-        backend = SimpleNamespace(
-            get_next_available_credential=AsyncMock(return_value=None)
-        )
-        storage_adapter = SimpleNamespace(
-            _backend=backend,
-            get_all_credential_states=AsyncMock(return_value=states),
-            get_credential=AsyncMock(return_value={
-                "access_token": "token",
+        credentials = {
+            filename: {
+                "access_token": f"token-{filename}",
+                "project_id": f"project-{filename}",
                 "expiry": "2099-01-01T00:00:00+00:00",
-            }),
+            }
+            for filename in states
+        }
+        storage_adapter = SimpleNamespace(
+            get_all_credential_states=AsyncMock(return_value=states),
+            get_credential=AsyncMock(
+                side_effect=lambda filename, mode: credentials.get(filename)
+            ),
+            get_credential_state=AsyncMock(
+                side_effect=lambda filename, mode: states.get(filename, {})
+            ),
         )
         manager = CredentialManager()
         manager._storage_adapter = storage_adapter
         manager._initialized = True
-        return manager, backend
+        return manager
 
-    async def test_antigravity_retry_accumulates_every_attempted_credential(self):
-        credentials = [
+    async def test_round_robin_is_the_only_default_selection_policy(self):
+        manager = self.make_manager({
+            "a.json": {"disabled": False, "model_cooldowns": {}},
+            "b.json": {"disabled": False, "model_cooldowns": {}},
+            "c.json": {"disabled": False, "model_cooldowns": {}},
+        })
+
+        with patch(
+            "src.credential_manager.get_session_affinity_enabled",
+            AsyncMock(return_value=False),
+        ):
+            selected = [
+                (
+                    await manager.get_valid_credential(
+                        mode="antigravity", model_name="gemini-3.1-pro-preview"
+                    )
+                )[0]
+                for _ in range(3)
+            ]
+
+        self.assertEqual(selected, ["a.json", "b.json", "c.json"])
+
+    async def test_selector_filters_disabled_cooled_and_tried_credentials(self):
+        manager = self.make_manager({
+            "attempted.json": {"disabled": False, "model_cooldowns": {}},
+            "disabled.json": {"disabled": True, "model_cooldowns": {}},
+            "cooled.json": {
+                "disabled": False,
+                "model_cooldowns": {"gemini-3.1-pro-preview": 4102444800},
+            },
+            "available.json": {"disabled": False, "model_cooldowns": {}},
+        })
+
+        with patch(
+            "src.credential_manager.get_session_affinity_enabled",
+            AsyncMock(return_value=False),
+        ):
+            result = await manager.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                exclude_credentials={"attempted.json"},
+            )
+
+        self.assertEqual(result[0], "available.json")
+
+    async def test_cooldown_is_per_exact_model(self):
+        manager = self.make_manager({
+            "flash-cooled.json": {
+                "disabled": False,
+                "model_cooldowns": {"gemini-3-flash": 4102444800},
+            },
+        })
+
+        with patch(
+            "src.credential_manager.get_session_affinity_enabled",
+            AsyncMock(return_value=False),
+        ):
+            pro_result = await manager.get_valid_credential(
+                mode="antigravity", model_name="gemini-3.1-pro-preview"
+            )
+            flash_result = await manager.get_valid_credential(
+                mode="antigravity", model_name="gemini-3-flash"
+            )
+
+        self.assertEqual(pro_result[0], "flash-cooled.json")
+        self.assertIsNone(flash_result)
+
+    async def test_optional_affinity_reuses_available_credential(self):
+        manager = self.make_manager({
+            "a.json": {"disabled": False, "model_cooldowns": {}},
+            "b.json": {"disabled": False, "model_cooldowns": {}},
+        })
+
+        with (
+            patch(
+                "src.credential_manager.get_session_affinity_enabled",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "src.credential_manager.get_session_affinity_ttl_seconds",
+                AsyncMock(return_value=3600),
+            ),
+        ):
+            first = await manager.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="chat",
+            )
+            second = await manager.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="chat",
+            )
+
+        self.assertEqual(first[0], second[0])
+
+    async def test_affinity_falls_back_and_rebinds_when_tried(self):
+        manager = self.make_manager({
+            "a.json": {"disabled": False, "model_cooldowns": {}},
+            "b.json": {"disabled": False, "model_cooldowns": {}},
+            "c.json": {"disabled": False, "model_cooldowns": {}},
+        })
+
+        with (
+            patch(
+                "src.credential_manager.get_session_affinity_enabled",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "src.credential_manager.get_session_affinity_ttl_seconds",
+                AsyncMock(return_value=3600),
+            ),
+        ):
+            first = await manager.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="chat",
+            )
+            replacement = await manager.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="chat",
+                exclude_credentials={first[0]},
+            )
+            next_request = await manager.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="chat",
+            )
+
+        self.assertNotEqual(first[0], replacement[0])
+        self.assertEqual(replacement[0], next_request[0])
+
+
+class CredentialRetryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_antigravity_retry_never_reuses_an_attempted_credential(self):
+        get_credential = AsyncMock(side_effect=[
             ("a.json", {"access_token": "a", "project_id": "a-project"}),
             ("b.json", {"access_token": "b", "project_id": "b-project"}),
             ("c.json", {"access_token": "c", "project_id": "c-project"}),
-        ]
-        get_credential = AsyncMock(side_effect=credentials)
-        responses = [
-            SimpleNamespace(status_code=429, text="{}", content=b"{}", headers={}),
-            SimpleNamespace(status_code=429, text="{}", content=b"{}", headers={}),
-            SimpleNamespace(status_code=200, text="{}", content=b"{}", headers={}),
-        ]
+        ])
 
         with patch.multiple(
             "src.api.antigravity",
-            credential_manager=SimpleNamespace(get_valid_credential=get_credential),
+            credential_manager=SimpleNamespace(
+                get_valid_credential=get_credential,
+                set_cred_disabled=AsyncMock(),
+            ),
             get_antigravity_stream2nostream=AsyncMock(return_value=False),
             get_antigravity_api_url=AsyncMock(return_value="https://example.test"),
-            wrap_cli_request=AsyncMock(return_value=({"project": "a-project"}, {})),
+            wrap_cli_request=AsyncMock(return_value=({"project": "a-project"}, "id")),
             get_retry_config=AsyncMock(return_value={
-                "max_retries": 2,
+                "max_credentials": 0,
                 "retry_interval": 0,
-                "retry_enabled": True,
             }),
             get_empty_output_error_enabled=AsyncMock(return_value=False),
-            get_auto_ban_error_codes=AsyncMock(return_value=[403]),
-            post_async=AsyncMock(side_effect=responses),
-            handle_error_with_retry=AsyncMock(return_value=True),
+            post_async=AsyncMock(side_effect=[
+                http_response(429),
+                http_response(429),
+                http_response(200),
+            ]),
             record_api_call_error=AsyncMock(),
             record_api_call_success=AsyncMock(),
         ):
-            response = await non_stream_request({"model": "gemini-3.1-pro-preview"})
+            response = await antigravity_request(
+                {"model": "gemini-3.1-pro-preview"}
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -65,6 +217,7 @@ class CredentialRetrySelectionTests(unittest.IsolatedAsyncioTestCase):
                     mode="antigravity",
                     model_name="gemini-3.1-pro-preview",
                     session_key=None,
+                    exclude_credentials=set(),
                 ),
                 call(
                     mode="antigravity",
@@ -81,174 +234,155 @@ class CredentialRetrySelectionTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_antigravity_429_is_remembered_for_next_session_request(self):
+    async def test_enabled_limit_counts_total_credentials(self):
+        get_credential = AsyncMock(side_effect=[
+            ("a.json", {"access_token": "a", "project_id": "a-project"}),
+            ("b.json", {"access_token": "b", "project_id": "b-project"}),
+        ])
+        disabled = AsyncMock()
+
+        with patch.multiple(
+            "src.api.antigravity",
+            credential_manager=SimpleNamespace(
+                get_valid_credential=get_credential,
+                set_cred_disabled=disabled,
+            ),
+            get_antigravity_stream2nostream=AsyncMock(return_value=False),
+            get_antigravity_api_url=AsyncMock(return_value="https://example.test"),
+            wrap_cli_request=AsyncMock(return_value=({"project": "a-project"}, "id")),
+            get_retry_config=AsyncMock(return_value={
+                "max_credentials": 2,
+                "retry_interval": 0,
+            }),
+            get_empty_output_error_enabled=AsyncMock(return_value=False),
+            post_async=AsyncMock(side_effect=[
+                http_response(403),
+                http_response(429),
+            ]),
+            record_api_call_error=AsyncMock(),
+        ):
+            response = await antigravity_request(
+                {"model": "gemini-3.1-pro-preview"}
+            )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(get_credential.await_count, 2)
+        disabled.assert_not_awaited()
+
+    async def test_401_refreshes_current_credential_once_before_switching(self):
         manager = SimpleNamespace(
             get_valid_credential=AsyncMock(return_value=(
                 "a.json",
-                {"access_token": "a", "project_id": "a-project"},
+                {"access_token": "old", "project_id": "a-project"},
             )),
-            remember_session_failure=AsyncMock(),
+            refresh_credential=AsyncMock(return_value={
+                "access_token": "new",
+                "project_id": "a-project",
+            }),
+            set_cred_disabled=AsyncMock(),
         )
+        record_error = AsyncMock()
+        post = AsyncMock(side_effect=[
+            http_response(401),
+            http_response(200),
+        ])
 
         with patch.multiple(
             "src.api.antigravity",
             credential_manager=manager,
             get_antigravity_stream2nostream=AsyncMock(return_value=False),
             get_antigravity_api_url=AsyncMock(return_value="https://example.test"),
-            wrap_cli_request=AsyncMock(return_value=({"project": "a-project"}, {})),
+            wrap_cli_request=AsyncMock(return_value=({"project": "a-project"}, "id")),
             get_retry_config=AsyncMock(return_value={
-                "max_retries": 0,
+                "max_credentials": 1,
                 "retry_interval": 0,
-                "retry_enabled": True,
             }),
             get_empty_output_error_enabled=AsyncMock(return_value=False),
-            get_auto_ban_error_codes=AsyncMock(return_value=[403]),
-            post_async=AsyncMock(return_value=SimpleNamespace(
-                status_code=429,
-                text='{"error":{"code":429}}',
-                content=b'{"error":{"code":429}}',
-                headers={},
-            )),
-            handle_error_with_retry=AsyncMock(return_value=False),
-            record_api_call_error=AsyncMock(),
+            post_async=post,
+            record_api_call_error=record_error,
+            record_api_call_success=AsyncMock(),
         ):
-            response = await non_stream_request({
-                "model": "gemini-3.1-pro-preview",
-                "cache_session_key": "rp-hub-chat",
-            })
-
-        self.assertEqual(response.status_code, 429)
-        manager.remember_session_failure.assert_awaited_once_with(
-            "a.json",
-            mode="antigravity",
-            model_name="gemini-3.1-pro-preview",
-            session_key="rp-hub-chat",
-        )
-
-    async def test_retry_excludes_attempted_disabled_and_family_cooled_credentials(self):
-        states = {
-            "attempted.json": {"disabled": False, "model_cooldowns": {}},
-            "disabled.json": {"disabled": True, "model_cooldowns": {}},
-            "cooled.json": {
-                "disabled": False,
-                "model_cooldowns": {"gemini-3-flash": 4102444800},
-            },
-            "available.json": {"disabled": False, "model_cooldowns": {}},
-        }
-        manager, backend = self.make_manager(states)
-
-        result = await manager.get_valid_credential(
-            mode="antigravity",
-            model_name="gemini-3.1-pro-preview",
-            exclude_credentials={"attempted.json"},
-        )
-
-        self.assertEqual(result[0], "available.json")
-        backend.get_next_available_credential.assert_not_awaited()
-
-    async def test_session_retry_uses_a_fresh_route_order(self):
-        manager, _ = self.make_manager({})
-        manager._get_session_routed_credential = AsyncMock(return_value=(
-            "available.json",
-            {
-                "access_token": "token",
-                "expiry": "2099-01-01T00:00:00+00:00",
-            },
-        ))
-
-        with patch("src.credential_manager.time.time_ns", return_value=123):
-            result = await manager.get_valid_credential(
-                mode="antigravity",
-                model_name="gemini-3.1-pro-preview",
-                session_key="rp-hub-chat",
-                exclude_credentials={"attempted.json"},
+            response = await antigravity_request(
+                {"model": "gemini-3.1-pro-preview"}
             )
 
-        self.assertEqual(result[0], "available.json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(manager.get_valid_credential.await_count, 1)
+        manager.refresh_credential.assert_awaited_once_with(
+            "a.json", mode="antigravity"
+        )
         self.assertEqual(
-            manager._get_session_routed_credential.await_args.kwargs["binding_key"],
-            "retry:123",
+            post.await_args_list[1].kwargs["headers"]["Authorization"],
+            "Bearer new",
         )
+        record_error.assert_not_awaited()
 
-    async def test_next_request_skips_session_credentials_that_returned_429(self):
-        states = {
-            "a.json": {"disabled": False, "model_cooldowns": {}},
-            "b.json": {"disabled": False, "model_cooldowns": {}},
-            "c.json": {"disabled": False, "model_cooldowns": {}},
-        }
-        manager, _ = self.make_manager(states)
-        for filename in ("a.json", "b.json"):
-            await manager.remember_session_failure(
-                filename,
-                mode="antigravity",
-                model_name="gemini-3.1-pro-preview",
-                session_key="rp-hub-chat",
+    async def test_geminicli_uses_the_same_tried_set(self):
+        get_credential = AsyncMock(side_effect=[
+            ("a.json", {"access_token": "a", "project_id": "a-project"}),
+            ("b.json", {"access_token": "b", "project_id": "b-project"}),
+        ])
+
+        with patch.multiple(
+            "src.api.geminicli",
+            credential_manager=SimpleNamespace(
+                get_valid_credential=get_credential,
+                set_cred_disabled=AsyncMock(),
+            ),
+            get_code_assist_endpoint=AsyncMock(return_value="https://example.test"),
+            get_retry_config=AsyncMock(return_value={
+                "max_credentials": 0,
+                "retry_interval": 0,
+            }),
+            get_empty_output_error_enabled=AsyncMock(return_value=False),
+            post_async=AsyncMock(side_effect=[
+                http_response(429),
+                http_response(200),
+            ]),
+            record_api_call_error=AsyncMock(),
+            record_api_call_success=AsyncMock(),
+        ):
+            response = await geminicli_request(
+                {"model": "gemini-3.1-pro-preview", "request": {}}
             )
 
-        result = await manager.get_valid_credential(
-            mode="antigravity",
-            model_name="gemini-3.1-pro-preview",
-            session_key="rp-hub-chat",
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            get_credential.await_args_list[1],
+            call(
+                mode="geminicli",
+                model_name="gemini-3.1-pro-preview",
+                session_key=None,
+                exclude_credentials={"a.json"},
+            ),
         )
 
-        self.assertEqual(result[0], "c.json")
 
-    async def test_session_429_does_not_exclude_credential_for_other_chat(self):
-        manager, _ = self.make_manager({
-            "available.json": {"disabled": False, "model_cooldowns": {}},
+class RetryConfigTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disabled_limit_means_no_numeric_cap(self):
+        with patch.multiple(
+            "src.api.utils",
+            get_credential_retry_limit_enabled=AsyncMock(return_value=False),
+            get_max_retry_credentials=AsyncMock(return_value=2),
+            get_credential_retry_interval=AsyncMock(return_value=0.5),
+        ):
+            config = await get_retry_config()
+
+        self.assertEqual(config, {
+            "max_credentials": 0,
+            "retry_interval": 0.5,
         })
-        await manager.remember_session_failure(
-            "available.json",
-            mode="antigravity",
-            model_name="gemini-3.1-pro-preview",
-            session_key="failed-chat",
-        )
 
-        result = await manager.get_valid_credential(
-            mode="antigravity",
-            model_name="gemini-3.1-pro-preview",
-            session_key="other-chat",
-        )
+    async def test_enabled_limit_is_total_credentials(self):
+        with patch.multiple(
+            "src.api.utils",
+            get_credential_retry_limit_enabled=AsyncMock(return_value=True),
+            get_max_retry_credentials=AsyncMock(return_value=3),
+            get_credential_retry_interval=AsyncMock(return_value=1),
+        ):
+            config = await get_retry_config()
 
-        self.assertEqual(result[0], "available.json")
-
-    async def test_session_429_failures_are_shared_between_workers_with_redis(self):
-        manager, _ = self.make_manager({
-            "a.json": {"disabled": False, "model_cooldowns": {}},
-            "b.json": {"disabled": False, "model_cooldowns": {}},
-        })
-        manager._get_session_failure_redis = AsyncMock(return_value=SimpleNamespace(
-            smembers=AsyncMock(return_value={"a.json"}),
-        ))
-
-        result = await manager.get_valid_credential(
-            mode="antigravity",
-            model_name="gemini-3.1-pro-preview",
-            session_key="rp-hub-chat",
-        )
-
-        self.assertEqual(result[0], "b.json")
-
-    async def test_claude_request_can_use_credential_with_only_gemini_cooldown(self):
-        states = {
-            "gemini-cooled.json": {
-                "disabled": False,
-                "model_cooldowns": {"gemini-3-flash": 4102444800},
-            },
-            "claude-cooled.json": {
-                "disabled": False,
-                "model_cooldowns": {"claude-sonnet-4-6": 4102444800},
-            },
-        }
-        manager, _ = self.make_manager(states)
-
-        result = await manager.get_valid_credential(
-            mode="antigravity",
-            model_name="claude-sonnet-4-6",
-            exclude_credentials={"already-tried.json"},
-        )
-
-        self.assertEqual(result[0], "gemini-cooled.json")
+        self.assertEqual(config["max_credentials"], 3)
 
 
 if __name__ == "__main__":

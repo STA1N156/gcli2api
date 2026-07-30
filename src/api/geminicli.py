@@ -1,114 +1,67 @@
-"""
-GeminiCli API Client - Handles all communication with GeminiCli API.
-This module is used by both OpenAI compatibility layer and native Gemini endpoints.
-GeminiCli API 客户端 - 处理与 GeminiCli API 的所有通信
-"""
-
-import sys
-from pathlib import Path
-
-# 添加项目根目录到Python路径（用于直接运行测试）
-if __name__ == "__main__":
-    project_root = Path(__file__).resolve().parent.parent.parent
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
+"""Gemini CLI API client."""
 
 import asyncio
 import json
-from typing import Any, Dict, Optional, Callable, Tuple
+from pathlib import Path
+from typing import Any, Dict, Optional, Set, Tuple
 
 from fastapi import Response
-from config import get_code_assist_endpoint, get_auto_ban_error_codes, get_empty_output_error_enabled
-from log import log
 
-from src.credential_manager import credential_manager
+from config import get_code_assist_endpoint, get_empty_output_error_enabled
+from log import log
 from src.api.empty_output import (
     build_empty_model_output_response,
     is_empty_model_output,
     stream_chunk_has_visible_output,
 )
-from src.httpx_client import stream_post_async, post_async
-from src.session_affinity import extract_cache_session_key
-
-# 导入共同的基础功能
 from src.api.utils import (
-    handle_error_with_retry,
     get_retry_config,
-    record_api_call_success,
+    is_retryable_status,
     record_api_call_error,
-    parse_and_log_cooldown,
+    record_api_call_success,
+    retry_limit_reached,
 )
+from src.credential_manager import credential_manager
+from src.httpx_client import post_async, stream_post_async
+from src.session_affinity import extract_cache_session_key
 from src.utils import get_geminicli_user_agent
 
-# ==================== 全局凭证管理器 ====================
-
-# 使用全局单例 credential_manager，自动初始化
-
-
-# ==================== 请求准备 ====================
 
 class InvalidCredentialError(Exception):
     """凭证缺少请求必需字段。"""
 
 
 def _get_invalid_credential_reason(credential_data: Dict[str, Any]) -> Optional[str]:
-    token = credential_data.get("token") or credential_data.get("access_token", "")
-    if not token:
-        return "凭证中没有找到有效的访问令牌（token或access_token字段）"
-    if not credential_data.get("project_id", ""):
-        return "项目ID不存在于凭证数据中"
+    if not (credential_data.get("token") or credential_data.get("access_token")):
+        return "凭证中没有访问令牌"
+    if not credential_data.get("project_id"):
+        return "凭证中没有项目 ID"
     return None
 
 
 async def prepare_request_headers_and_payload(
-    payload: dict, credential_data: dict, target_url: str
-):
-    """
-    从凭证数据准备请求头和最终payload
-    
-    Args:
-        payload: 原始请求payload
-        credential_data: 凭证数据字典
-        target_url: 目标URL
-        
-    Returns:
-        元组: (headers, final_payload, target_url)
-        
-    Raises:
-        Exception: 如果凭证中缺少必要字段
-    """
+    payload: dict,
+    credential_data: dict,
+    target_url: str,
+) -> Tuple[Dict[str, str], Dict[str, Any], str]:
     invalid_reason = _get_invalid_credential_reason(credential_data)
     if invalid_reason:
         raise InvalidCredentialError(invalid_reason)
 
-    token = credential_data.get("token") or credential_data.get("access_token", "")
-
-    source_request = payload.get("request", {})
-
-    # 内部API使用Bearer Token和项目ID
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "User-Agent": get_geminicli_user_agent(payload.get("model", "")),
-    }
-    project_id = credential_data.get("project_id", "")
-    final_payload = {
-        "model": payload.get("model"),
-        "project": project_id,
-        "request": source_request,
-    }
-
-    return headers, final_payload, target_url
-
-
-def _is_retryable_status(status_code: int, disable_error_codes: list[int]) -> bool:
-    """统一判断是否属于可重试状态码。"""
-    return status_code in (429, 500, 503) or status_code in disable_error_codes
-
-
-async def _disable_invalid_credential(credential_name: str, reason: str) -> None:
-    log.warning(f"[GEMINICLI] 禁用无效凭证 {credential_name}: {reason}")
-    await credential_manager.set_cred_disabled(credential_name, True, mode="geminicli")
+    token = credential_data.get("token") or credential_data.get("access_token")
+    return (
+        {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": get_geminicli_user_agent(payload.get("model", "")),
+        },
+        {
+            "model": payload.get("model"),
+            "project": credential_data["project_id"],
+            "request": payload.get("request", {}),
+        },
+        target_url,
+    )
 
 
 async def _prepare_with_valid_credential(
@@ -117,168 +70,102 @@ async def _prepare_with_valid_credential(
     model_name: str,
     session_key: Optional[str],
     target_url: str,
-    exclude_credential: Optional[str] = None,
-) -> Optional[Tuple[str, Dict[str, Any], Dict[str, str], Dict[str, Any], str]]:
-    """跳过并禁用缺少必需字段的凭证，直到找到可用凭证。"""
-    skipped_credential = exclude_credential
-    blocked_credentials = {Path(exclude_credential).name} if exclude_credential else set()
-    seen_invalid = set()
-
+    excluded_credentials: Set[str],
+) -> Optional[Tuple[str, Dict[str, str], Dict[str, Any], str]]:
+    """从未尝试的候选中找到一份结构完整的凭证。"""
     while True:
         cred_result = await credential_manager.get_valid_credential(
             mode="geminicli",
             model_name=model_name,
             session_key=session_key,
-            exclude_credential=skipped_credential,
+            exclude_credentials=set(excluded_credentials),
         )
         if not cred_result:
             return None
 
-        current_file, credential_data = cred_result
-        if current_file in blocked_credentials:
-            skipped_credential = current_file
-            continue
-        if current_file in seen_invalid:
-            return None
-
+        filename, credential_data = cred_result
+        filename = Path(filename).name
+        excluded_credentials.add(filename)
         try:
-            auth_headers, final_payload, prepared_url = await prepare_request_headers_and_payload(
-                body, credential_data, target_url
+            auth_headers, payload, prepared_url = (
+                await prepare_request_headers_and_payload(
+                    body, credential_data, target_url
+                )
             )
-        except InvalidCredentialError as e:
-            seen_invalid.add(current_file)
-            skipped_credential = current_file
-            await _disable_invalid_credential(current_file, str(e))
+        except InvalidCredentialError as exc:
+            log.warning(f"[GEMINICLI] 禁用无效凭证 {filename}: {exc}")
+            await credential_manager.set_cred_disabled(
+                filename, True, mode="geminicli"
+            )
             continue
 
         if headers:
             auth_headers.update(headers)
-        return current_file, credential_data, auth_headers, final_payload, prepared_url
+        return filename, auth_headers, payload, prepared_url
 
 
-async def _switch_credential_for_retry(
-    *,
-    next_cred_task: Optional[asyncio.Task],
-    retry_interval: float,
-    refresh_credential_fast: Callable[[], Any],
-    apply_cred_result: Callable[[Tuple[str, Dict[str, Any]]], Any],
-    log_prefix: str,
-) -> Tuple[bool, Optional[asyncio.Task]]:
-    """优先使用预热凭证，失败后退回同步刷新。"""
-    if next_cred_task is not None:
-        try:
-            cred_result = await next_cred_task
-            next_cred_task = None
-            applied = apply_cred_result(cred_result) if cred_result else False
-            if asyncio.iscoroutine(applied):
-                applied = await applied
-            if applied:
-                await asyncio.sleep(retry_interval)
-                return True, next_cred_task
-        except Exception as e:
-            log.warning(f"{log_prefix} 预热凭证任务失败: {e}")
-            next_cred_task = None
-
-    await asyncio.sleep(retry_interval)
-    if await refresh_credential_fast():
-        return True, next_cred_task
-
-    return False, next_cred_task
+def _response_from_httpx(response) -> Response:
+    headers = dict(response.headers)
+    headers.pop("content-encoding", None)
+    headers.pop("content-length", None)
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        headers=headers,
+    )
 
 
-# ==================== 新的流式和非流式请求函数 ====================
+async def _record_response_error(
+    current_file: str,
+    model_name: str,
+    status_code: int,
+    error_text: str,
+) -> None:
+    if status_code == 404 and "preview" in model_name.lower():
+        await credential_manager.update_credential_state(
+            current_file, {"preview": False}, mode="geminicli"
+        )
+    await record_api_call_error(
+        credential_manager,
+        current_file,
+        status_code,
+        mode="geminicli",
+        model_name=model_name,
+        error_message=error_text,
+    )
+
 
 async def stream_request(
     body: Dict[str, Any],
     native: bool = False,
     headers: Optional[Dict[str, str]] = None,
 ):
-    """
-    流式请求函数
-
-    Args:
-        body: 请求体
-        native: 是否返回原生bytes流，False则返回str流
-        headers: 额外的请求头
-
-    Yields:
-        Response对象（错误时）或 bytes流/str流（成功时）
-    """
-    # 获取有效凭证
+    """流式请求；每次失败都换一份本次尚未尝试的可用凭证。"""
     model_name = body.get("model", "")
     session_key = extract_cache_session_key(body, headers)
-
-    try:
-        prepared_request = await _prepare_with_valid_credential(
-            body,
-            headers,
-            model_name,
-            session_key,
-            f"{await get_code_assist_endpoint()}/v1internal:streamGenerateContent?alt=sse",
-        )
-    except Exception as e:
-        log.error(f"准备请求失败: {e}")
-        yield Response(
-            content=json.dumps({"error": f"准备请求失败: {str(e)}"}),
-            status_code=500,
-            media_type="application/json"
-        )
-        return
-
-    if not prepared_request:
+    target_url = f"{await get_code_assist_endpoint()}/v1internal:streamGenerateContent?alt=sse"
+    attempted: Set[str] = set()
+    prepared = await _prepare_with_valid_credential(
+        body, headers, model_name, session_key, target_url, attempted
+    )
+    if not prepared:
         yield Response(
             content=json.dumps({"error": "当前无可用凭证"}),
             status_code=500,
-            media_type="application/json"
+            media_type="application/json",
         )
         return
 
-    current_file, credential_data, auth_headers, final_payload, target_url = prepared_request
-
-    # 3. 调用stream_post_async进行请求
     retry_config = await get_retry_config()
-    max_retries = retry_config["max_retries"]
-    retry_interval = retry_config["retry_interval"]
     empty_output_error_enabled = await get_empty_output_error_enabled()
+    last_error: Optional[Response] = None
+    refreshed_after_401: Set[str] = set()
 
-    DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
-    last_error_response = None  # 记录最后一次的错误响应
-    next_cred_task = None  # 预热的下一个凭证任务
-
-    # 内部函数：切换到下一份可用凭证
-    async def refresh_credential_fast():
-        nonlocal current_file, credential_data, auth_headers, final_payload, target_url
-        prepared_request = await _prepare_with_valid_credential(
-            body,
-            headers,
-            model_name,
-            session_key,
-            target_url,
-            exclude_credential=current_file
-        )
-        if not prepared_request:
-            return None
-        current_file, credential_data, auth_headers, final_payload, target_url = prepared_request
-        return True
-
-    async def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
-        nonlocal current_file, credential_data, auth_headers, final_payload
-        current_file, credential_data = cred_result
-        invalid_reason = _get_invalid_credential_reason(credential_data)
-        if invalid_reason:
-            await _disable_invalid_credential(current_file, invalid_reason)
-            return False
-
-        token = credential_data.get("token") or credential_data.get("access_token", "")
-        project_id = credential_data.get("project_id", "")
-        auth_headers["Authorization"] = f"Bearer {token}"
-        final_payload["project"] = project_id
-        return True
-
-    attempt = 0
     while True:
-        success_recorded = False  # 标记是否已记录成功
-        need_retry = False  # 标记是否需要重试
+        current_file, auth_headers, final_payload, target_url = prepared
+        success_recorded = False
+        retry_current = False
+        retry_same = False
         buffered_chunks = []
 
         try:
@@ -286,617 +173,197 @@ async def stream_request(
                 url=target_url,
                 body=final_payload,
                 native=native,
-                headers=auth_headers
+                headers=auth_headers,
             ):
-                # 判断是否是Response对象
                 if isinstance(chunk, Response):
-                    status_code = chunk.status_code
-                    last_error_response = chunk  # 记录最后一次错误
-
-                    # 缓存错误解析结果,避免重复decode
-                    error_body = None
-                    try:
-                        error_body = chunk.body.decode('utf-8') if isinstance(chunk.body, bytes) else str(chunk.body)
-                    except Exception:
-                        error_body = ""
-
-                    # 如果错误码是429、503或者在禁用码当中，做好记录后进行重试
-                    if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
-                        log.warning(f"[GEMINICLI STREAM] 流式请求失败 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
-
-                        # 解析冷却时间
-                        cooldown_until = None
-                        if (status_code == 429 or status_code == 503) and error_body:
-                            try:
-                                cooldown_until = await parse_and_log_cooldown(error_body, mode="geminicli")
-                            except Exception:
-                                pass
-
-                        # 预热下一个凭证
-                        if next_cred_task is None and attempt < max_retries:
-                            next_cred_task = asyncio.create_task(
-                                credential_manager.get_valid_credential(
-                                    mode="geminicli", model_name=model_name,
-                                    session_key=session_key, exclude_credential=current_file
-                                )
-                            )
-
-                        # 记录错误并切换凭证
-                        await record_api_call_error(
-                            credential_manager, current_file, status_code,
-                            cooldown_until, mode="geminicli", model_name=model_name,
-                            error_message=error_body
+                    error_text = (
+                        chunk.body.decode("utf-8", errors="replace")
+                        if isinstance(chunk.body, bytes)
+                        else str(chunk.body)
+                    )
+                    if (
+                        chunk.status_code == 401
+                        and current_file not in refreshed_after_401
+                    ):
+                        refreshed_after_401.add(current_file)
+                        refreshed = await credential_manager.refresh_credential(
+                            current_file, mode="geminicli"
                         )
-
-                        # 检查是否应该重试
-                        should_retry = await handle_error_with_retry(
-                            credential_manager, status_code, current_file,
-                            retry_config["retry_enabled"], attempt, max_retries, retry_interval,
-                            mode="geminicli"
-                        )
-
-                        if should_retry and attempt < max_retries:
-                            need_retry = True
-                            break  # 跳出内层循环，准备重试
-                        else:
-                            # 不重试，直接返回原始错误
-                            log.error(f"[GEMINICLI STREAM] 达到最大重试次数或不应重试，返回原始错误")
-                            yield chunk
-                            return
-                    elif status_code == 404 and "preview" in model_name.lower():
-                        # 特殊处理：preview模型返回404，说明该凭证不支持preview模型
-                        log.warning(f"[GEMINICLI STREAM] Preview模型404错误，凭证不支持preview: {current_file}")
-
-                        # 将该凭证的preview状态设置为False
-                        try:
-                            await credential_manager.update_credential_state(
-                                current_file, {"preview": False}, mode="geminicli"
-                            )
-                            log.info(f"[GEMINICLI STREAM] 已将凭证 {current_file} 的preview状态设置为False")
-                        except Exception as e:
-                            log.error(f"[GEMINICLI STREAM] 更新凭证preview状态失败: {e}")
-
-                        # 记录404错误
-                        await record_api_call_error(
-                            credential_manager, current_file, status_code,
-                            None, mode="geminicli", model_name=model_name,
-                            error_message=error_body
-                        )
-
-                        # 预热下一个凭证（会自动跳过preview=False的凭证）
-                        if next_cred_task is None and attempt < max_retries:
-                            next_cred_task = asyncio.create_task(
-                                credential_manager.get_valid_credential(
-                                    mode="geminicli", model_name=model_name,
-                                    session_key=session_key, exclude_credential=current_file
-                                )
-                            )
-
-                        # 触发重试
-                        if attempt < max_retries:
-                            need_retry = True
+                        if refreshed and not _get_invalid_credential_reason(refreshed):
+                            token = refreshed.get("token") or refreshed.get("access_token")
+                            auth_headers["Authorization"] = f"Bearer {token}"
+                            final_payload["project"] = refreshed["project_id"]
+                            retry_same = True
                             break
-                        else:
-                            log.error(f"[GEMINICLI STREAM] 达到最大重试次数，返回404错误")
-                            yield chunk
-                            return
-                    else:
-                        # 错误码不在禁用码当中，直接返回，无需重试
-                        log.error(f"[GEMINICLI STREAM] 流式请求失败，非重试错误码 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
-                        await record_api_call_error(
-                            credential_manager, current_file, status_code,
-                            None, mode="geminicli", model_name=model_name,
-                            error_message=error_body
-                        )
+                    await _record_response_error(
+                        current_file, model_name, chunk.status_code, error_text
+                    )
+                    if success_recorded or not is_retryable_status(chunk.status_code):
                         yield chunk
                         return
-                else:
-                    # 不是Response，说明是真流，直接yield返回
-                    # 只在第一个chunk时记录成功
-                    if not success_recorded:
-                        if empty_output_error_enabled:
-                            buffered_chunks.append(chunk)
-                            if not stream_chunk_has_visible_output(chunk):
-                                continue
+                    last_error = chunk
+                    retry_current = True
+                    break
 
-                        await record_api_call_success(
-                            credential_manager, current_file, mode="geminicli", model_name=model_name
-                        )
-                        success_recorded = True
-                        log.debug(f"[GEMINICLI STREAM] 开始接收流式响应，模型: {model_name}")
-
-                        if empty_output_error_enabled:
-                            for buffered_chunk in buffered_chunks:
-                                yield buffered_chunk
-                            buffered_chunks = []
-                        else:
-                            yield chunk
+                if not success_recorded:
+                    if empty_output_error_enabled:
+                        buffered_chunks.append(chunk)
+                        if not stream_chunk_has_visible_output(chunk):
+                            continue
+                    await record_api_call_success(
+                        credential_manager,
+                        current_file,
+                        mode="geminicli",
+                        model_name=model_name,
+                    )
+                    success_recorded = True
+                    if empty_output_error_enabled:
+                        for buffered_chunk in buffered_chunks:
+                            yield buffered_chunk
+                        buffered_chunks.clear()
                     else:
                         yield chunk
+                else:
+                    yield chunk
 
-            # 流式请求完成，检查结果
             if success_recorded:
-                log.debug(f"[GEMINICLI STREAM] 流式响应完成，模型: {model_name}")
                 return
-
-            if not need_retry:
+            if retry_same:
+                continue
+            if not retry_current:
                 if empty_output_error_enabled:
-                    log.warning(f"[GEMINICLI STREAM] Model returned empty output, credential: {current_file}")
                     await record_api_call_error(
-                        credential_manager, current_file, 461,
-                        None, mode="geminicli", model_name=model_name,
-                        error_message="模型输出为空，请检查是否含有敏感内容"
+                        credential_manager,
+                        current_file,
+                        461,
+                        mode="geminicli",
+                        model_name=model_name,
+                        error_message="模型输出为空，请检查是否含有敏感内容",
                     )
                     yield build_empty_model_output_response()
                 return
+        except Exception as exc:
+            log.warning(
+                f"[GEMINICLI STREAM] 请求异常，切换凭证: {current_file}: {exc}"
+            )
 
-            # 统一处理重试
-            if need_retry:
-                # 如果已经是最后一次尝试，不再重试，直接返回错误
-                if attempt >= max_retries:
-                    log.error(f"[GEMINICLI STREAM] 达到最大重试次数，返回错误")
-                    if last_error_response:
-                        yield last_error_response
-                    else:
-                        yield Response(
-                            content=json.dumps({"error": "请求失败，所有重试均已耗尽"}),
-                            status_code=429,
-                            media_type="application/json"
-                        )
-                    return
+        if retry_limit_reached(retry_config, len(attempted)):
+            yield last_error or Response(
+                content=json.dumps({"error": "请求失败，已达到凭证尝试上限"}),
+                status_code=500,
+                media_type="application/json",
+            )
+            return
 
-                log.info(f"[GEMINICLI STREAM] 重试请求 (attempt {attempt + 2}/{max_retries + 1})...")
-
-                switched, next_cred_task = await _switch_credential_for_retry(
-                    next_cred_task=next_cred_task,
-                    retry_interval=retry_interval,
-                    refresh_credential_fast=refresh_credential_fast,
-                    apply_cred_result=apply_cred_result,
-                    log_prefix="[GEMINICLI STREAM]",
-                )
-                if not switched:
-                    log.error("[GEMINICLI STREAM] 重试时无可用凭证或刷新失败")
-                    yield Response(
-                        content=json.dumps({"error": "当前无可用凭证"}),
-                        status_code=500,
-                        media_type="application/json"
-                    )
-                    return
-                attempt += 1
-                continue  # 重试
-
-        except Exception as e:
-            log.error(f"[GEMINICLI STREAM] 流式请求异常: {e}, 凭证: {current_file}")
-            if attempt < max_retries:
-                log.info(f"[GEMINICLI STREAM] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
-                await asyncio.sleep(retry_interval)
-                attempt += 1
-                continue
-            else:
-                # 所有重试都失败，返回最后一次的错误（如果有）
-                log.error(f"[GEMINICLI STREAM] 所有重试均失败，最后异常: {e}")
-                if last_error_response:
-                    yield last_error_response
-                else:
-                    # 如果没有记录到错误响应，返回500错误
-                    yield Response(
-                        content=json.dumps({"error": f"流式请求异常: {str(e)}"}),
-                        status_code=500,
-                        media_type="application/json"
-                    )
-                return
-
-    # 所有重试均已耗尽（for循环正常结束），返回最后记录的错误
-    log.error("[GEMINICLI STREAM] 所有重试均失败")
-    if last_error_response:
-        yield last_error_response
-    else:
-        yield Response(
-            content=json.dumps({"error": "请求失败，所有重试均已耗尽"}),
-            status_code=429,
-            media_type="application/json"
+        if retry_config["retry_interval"] > 0:
+            await asyncio.sleep(retry_config["retry_interval"])
+        prepared = await _prepare_with_valid_credential(
+            body, headers, model_name, session_key, target_url, attempted
         )
+        if not prepared:
+            yield last_error or Response(
+                content=json.dumps({"error": "没有更多可用凭证"}),
+                status_code=500,
+                media_type="application/json",
+            )
+            return
 
 
 async def non_stream_request(
     body: Dict[str, Any],
     headers: Optional[Dict[str, str]] = None,
 ) -> Response:
-    """
-    非流式请求函数
-
-    Args:
-        body: 请求体
-        native: 保留参数以保持接口一致性（实际未使用）
-        headers: 额外的请求头
-
-    Returns:
-        Response对象
-    """
-    # 获取有效凭证
+    """非流式请求；选择、冷却过滤和重试规则与流式请求完全一致。"""
     model_name = body.get("model", "")
     session_key = extract_cache_session_key(body, headers)
-
-    try:
-        prepared_request = await _prepare_with_valid_credential(
-            body,
-            headers,
-            model_name,
-            session_key,
-            f"{await get_code_assist_endpoint()}/v1internal:generateContent",
-        )
-    except Exception as e:
-        log.error(f"准备请求失败: {e}")
-        return Response(
-            content=json.dumps({"error": f"准备请求失败: {str(e)}"}),
-            status_code=500,
-            media_type="application/json"
-        )
-
-    if not prepared_request:
+    target_url = f"{await get_code_assist_endpoint()}/v1internal:generateContent"
+    attempted: Set[str] = set()
+    prepared = await _prepare_with_valid_credential(
+        body, headers, model_name, session_key, target_url, attempted
+    )
+    if not prepared:
         return Response(
             content=json.dumps({"error": "当前无可用凭证"}),
             status_code=500,
-            media_type="application/json"
+            media_type="application/json",
         )
 
-    current_file, credential_data, auth_headers, final_payload, target_url = prepared_request
-
-    # 3. 调用post_async进行请求
     retry_config = await get_retry_config()
-    max_retries = retry_config["max_retries"]
-    retry_interval = retry_config["retry_interval"]
     empty_output_error_enabled = await get_empty_output_error_enabled()
+    last_error: Optional[Response] = None
+    refreshed_after_401: Set[str] = set()
 
-    DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
-    last_error_response = None  # 记录最后一次的错误响应
-    next_cred_task = None  # 预热的下一个凭证任务
-
-    # 内部函数：切换到下一份可用凭证
-    async def refresh_credential_fast():
-        nonlocal current_file, credential_data, auth_headers, final_payload, target_url
-        prepared_request = await _prepare_with_valid_credential(
-            body,
-            headers,
-            model_name,
-            session_key,
-            target_url,
-            exclude_credential=current_file
-        )
-        if not prepared_request:
-            return None
-        current_file, credential_data, auth_headers, final_payload, target_url = prepared_request
-        return True
-
-    async def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
-        nonlocal current_file, credential_data, auth_headers, final_payload
-        current_file, credential_data = cred_result
-        invalid_reason = _get_invalid_credential_reason(credential_data)
-        if invalid_reason:
-            await _disable_invalid_credential(current_file, invalid_reason)
-            return False
-
-        token = credential_data.get("token") or credential_data.get("access_token", "")
-        project_id = credential_data.get("project_id", "")
-        auth_headers["Authorization"] = f"Bearer {token}"
-        final_payload["project"] = project_id
-        return True
-
-    attempt = 0
     while True:
+        current_file, auth_headers, final_payload, target_url = prepared
         try:
             response = await post_async(
                 url=target_url,
                 json=final_payload,
                 headers=auth_headers,
-                timeout=300.0
+                timeout=300.0,
             )
-
-            status_code = response.status_code
-
-            # 成功
-            if status_code == 200:
-                if empty_output_error_enabled and is_empty_model_output(response.content):
-                    log.warning(f"[NON-STREAM] Model returned empty output, credential: {current_file}")
+            if response.status_code == 200:
+                if empty_output_error_enabled and is_empty_model_output(
+                    response.content
+                ):
                     await record_api_call_error(
-                        credential_manager, current_file, 461,
-                        None, mode="geminicli", model_name=model_name,
-                        error_message="模型输出为空，请检查是否含有敏感内容"
+                        credential_manager,
+                        current_file,
+                        461,
+                        mode="geminicli",
+                        model_name=model_name,
+                        error_message="模型输出为空，请检查是否含有敏感内容",
                     )
                     return build_empty_model_output_response()
-
                 await record_api_call_success(
-                    credential_manager, current_file, mode="geminicli", model_name=model_name
+                    credential_manager,
+                    current_file,
+                    mode="geminicli",
+                    model_name=model_name,
                 )
-                # 创建响应头,移除压缩相关的header避免重复解压
-                response_headers = dict(response.headers)
-                response_headers.pop('content-encoding', None)
-                response_headers.pop('content-length', None)
+                return _response_from_httpx(response)
 
-                return Response(
-                    content=response.content,
-                    status_code=200,
-                    headers=response_headers
+            if (
+                response.status_code == 401
+                and current_file not in refreshed_after_401
+            ):
+                refreshed_after_401.add(current_file)
+                refreshed = await credential_manager.refresh_credential(
+                    current_file, mode="geminicli"
                 )
+                if refreshed and not _get_invalid_credential_reason(refreshed):
+                    token = refreshed.get("token") or refreshed.get("access_token")
+                    auth_headers["Authorization"] = f"Bearer {token}"
+                    final_payload["project"] = refreshed["project_id"]
+                    continue
 
-            # 失败 - 记录最后一次错误
-            # 创建响应头,移除压缩相关的header避免重复解压
-            error_headers = dict(response.headers)
-            error_headers.pop('content-encoding', None)
-            error_headers.pop('content-length', None)
-
-            last_error_response = Response(
-                content=response.content,
-                status_code=status_code,
-                headers=error_headers
+            error_text = getattr(response, "text", "") or ""
+            last_error = _response_from_httpx(response)
+            await _record_response_error(
+                current_file, model_name, response.status_code, error_text
+            )
+            if not is_retryable_status(response.status_code):
+                return last_error
+        except Exception as exc:
+            log.warning(
+                f"[GEMINICLI] 请求异常，切换凭证: {current_file}: {exc}"
             )
 
-            # 判断是否需要重试
-            # 缓存错误文本,避免重复解析
-            error_text = ""
-            try:
-                error_text = response.text
-            except Exception:
-                pass
+        if retry_limit_reached(retry_config, len(attempted)):
+            return last_error or Response(
+                content=json.dumps({"error": "请求失败，已达到凭证尝试上限"}),
+                status_code=500,
+                media_type="application/json",
+            )
 
-            # 统一处理所有需要重试的错误码（429、503、禁用码）
-            if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
-                log.warning(f"[NON-STREAM] 非流式请求失败 (status={status_code}), 凭证: {current_file}, 响应: {error_text[:500] if error_text else '无'}")
-
-                # 解析冷却时间
-                cooldown_until = None
-                if (status_code == 429 or status_code == 503) and error_text:
-                    try:
-                        cooldown_until = await parse_and_log_cooldown(error_text, mode="geminicli")
-                    except Exception:
-                        pass
-
-                # 并行预热下一个凭证,不阻塞当前处理
-                if next_cred_task is None and attempt < max_retries:
-                    next_cred_task = asyncio.create_task(
-                        credential_manager.get_valid_credential(
-                            mode="geminicli", model_name=model_name,
-                            session_key=session_key, exclude_credential=current_file
-                        )
-                    )
-
-                # 记录错误并切换凭证
-                await record_api_call_error(
-                    credential_manager, current_file, status_code,
-                    cooldown_until, mode="geminicli", model_name=model_name,
-                    error_message=error_text
-                )
-
-                # 检查是否应该重试（会自动处理禁用逻辑）
-                should_retry = await handle_error_with_retry(
-                    credential_manager, status_code, current_file,
-                    retry_config["retry_enabled"], attempt, max_retries, retry_interval,
-                    mode="geminicli"
-                )
-
-                if should_retry and attempt < max_retries:
-                    # 重新获取凭证并重试
-                    log.info(f"[NON-STREAM] 重试请求 (attempt {attempt + 2}/{max_retries + 1})...")
-
-                    switched, next_cred_task = await _switch_credential_for_retry(
-                        next_cred_task=next_cred_task,
-                        retry_interval=retry_interval,
-                        refresh_credential_fast=refresh_credential_fast,
-                        apply_cred_result=apply_cred_result,
-                        log_prefix="[NON-STREAM]",
-                    )
-                    if not switched:
-                        log.error("[NON-STREAM] 重试时无可用凭证或刷新失败")
-                        return Response(
-                            content=json.dumps({"error": "当前无可用凭证"}),
-                            status_code=500,
-                            media_type="application/json"
-                        )
-                    attempt += 1
-                    continue  # 重试
-                else:
-                    # 不重试，直接返回原始错误
-                    log.error(f"[NON-STREAM] 达到最大重试次数或不应重试，返回原始错误")
-                    return last_error_response
-            elif status_code == 404 and "preview" in model_name.lower():
-                # 特殊处理：preview模型返回404，说明该凭证不支持preview模型
-                log.warning(f"[NON-STREAM] Preview模型404错误，凭证不支持preview: {current_file}")
-
-                # 将该凭证的preview状态设置为False
-                try:
-                    await credential_manager.update_credential_state(
-                        current_file, {"preview": False}, mode="geminicli"
-                    )
-                    log.info(f"[NON-STREAM] 已将凭证 {current_file} 的preview状态设置为False")
-                except Exception as e:
-                    log.error(f"[NON-STREAM] 更新凭证preview状态失败: {e}")
-
-                # 记录404错误
-                await record_api_call_error(
-                    credential_manager, current_file, status_code,
-                    None, mode="geminicli", model_name=model_name,
-                    error_message=error_text
-                )
-
-                # 预热下一个凭证（会自动跳过preview=False的凭证）
-                if next_cred_task is None and attempt < max_retries:
-                    next_cred_task = asyncio.create_task(
-                        credential_manager.get_valid_credential(
-                            mode="geminicli", model_name=model_name,
-                            session_key=session_key, exclude_credential=current_file
-                        )
-                    )
-
-                # 触发重试
-                if attempt < max_retries:
-                    log.info(f"[NON-STREAM] 重试请求 (attempt {attempt + 2}/{max_retries + 1})...")
-
-                    switched, next_cred_task = await _switch_credential_for_retry(
-                        next_cred_task=next_cred_task,
-                        retry_interval=retry_interval,
-                        refresh_credential_fast=refresh_credential_fast,
-                        apply_cred_result=apply_cred_result,
-                        log_prefix="[NON-STREAM]",
-                    )
-                    if not switched:
-                        log.error("[NON-STREAM] 重试时无可用凭证或刷新失败")
-                        return Response(
-                            content=json.dumps({"error": "当前无可用凭证"}),
-                            status_code=500,
-                            media_type="application/json"
-                        )
-                    attempt += 1
-                    continue  # 重试
-                else:
-                    log.error(f"[NON-STREAM] 达到最大重试次数，返回404错误")
-                    return last_error_response
-            else:
-                # 错误码不在重试范围内，直接返回
-                log.error(f"[NON-STREAM] 非流式请求失败，非重试错误码 (status={status_code}), 凭证: {current_file}, 响应: {error_text[:500] if error_text else '无'}")
-                await record_api_call_error(
-                    credential_manager, current_file, status_code,
-                    None, mode="geminicli", model_name=model_name,
-                    error_message=error_text
-                )
-                return last_error_response
-
-        except Exception as e:
-            log.error(f"非流式请求异常: {e}, 凭证: {current_file}")
-            if attempt < max_retries:
-                log.info(f"[NON-STREAM] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
-                await asyncio.sleep(retry_interval)
-                attempt += 1
-                continue
-            else:
-                # 所有重试都失败，返回最后一次的错误（如果有）或500错误
-                log.error(f"[NON-STREAM] 所有重试均失败，最后异常: {e}")
-                if last_error_response:
-                    return last_error_response
-                else:
-                    return Response(
-                        content=json.dumps({"error": f"请求异常: {str(e)}"}),
-                        status_code=500,
-                        media_type="application/json"
-                    )
-
-    # 所有重试都失败，返回最后一次的原始错误
-    log.error("[NON-STREAM] 所有重试均失败")
-    return last_error_response
-
-
-# ==================== 测试代码 ====================
-
-if __name__ == "__main__":
-    """
-    测试代码：演示API返回的流式和非流式数据格式
-    运行方式: python src/api/geminicli.py
-    """
-    print("=" * 80)
-    print("GeminiCli API 测试")
-    print("=" * 80)
-
-    # 测试请求体
-    test_body = {
-        "model": "gemini-2.5-flash",
-        "request": {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": "Hello, tell me a joke in one sentence."}]
-                }
-            ]
-        }
-    }
-
-    async def test_stream_request():
-        """测试流式请求"""
-        print("\n" + "=" * 80)
-        print("【测试1】流式请求 (stream_request with native=False)")
-        print("=" * 80)
-        print(f"请求体: {json.dumps(test_body, indent=2, ensure_ascii=False)}\n")
-
-        print("流式响应数据 (每个chunk):")
-        print("-" * 80)
-
-        chunk_count = 0
-        async for chunk in stream_request(body=test_body, native=False):
-            chunk_count += 1
-            if isinstance(chunk, Response):
-                # 错误响应
-                print(f"\n❌ 错误响应:")
-                print(f"  状态码: {chunk.status_code}")
-                print(f"  Content-Type: {chunk.headers.get('content-type', 'N/A')}")
-                try:
-                    content = chunk.body.decode('utf-8') if isinstance(chunk.body, bytes) else str(chunk.body)
-                    print(f"  内容: {content}")
-                except Exception as e:
-                    print(f"  内容解析失败: {e}")
-            else:
-                # 正常的流式数据块 (str类型)
-                print(f"\nChunk #{chunk_count}:")
-                print(f"  类型: {type(chunk).__name__}")
-                print(f"  长度: {len(chunk) if hasattr(chunk, '__len__') else 'N/A'}")
-                print(f"  内容预览: {repr(chunk[:200] if len(chunk) > 200 else chunk)}")
-
-                # 如果是SSE格式，尝试解析
-                if isinstance(chunk, str) and chunk.startswith("data: "):
-                    try:
-                        data_line = chunk.strip()
-                        if data_line.startswith("data: "):
-                            json_str = data_line[6:]  # 去掉 "data: " 前缀
-                            json_data = json.loads(json_str)
-                            print(f"  解析后的JSON: {json.dumps(json_data, indent=4, ensure_ascii=False)}")
-                    except Exception as e:
-                        print(f"  SSE解析尝试失败: {e}")
-
-        print(f"\n总共收到 {chunk_count} 个chunk")
-
-    async def test_non_stream_request():
-        """测试非流式请求"""
-        print("\n" + "=" * 80)
-        print("【测试2】非流式请求 (non_stream_request)")
-        print("=" * 80)
-        print(f"请求体: {json.dumps(test_body, indent=2, ensure_ascii=False)}\n")
-
-        response = await non_stream_request(body=test_body)
-
-        print("非流式响应数据:")
-        print("-" * 80)
-        print(f"状态码: {response.status_code}")
-        print(f"Content-Type: {response.headers.get('content-type', 'N/A')}")
-        print(f"\n响应头: {dict(response.headers)}\n")
-
-        try:
-            content = response.body.decode('utf-8') if isinstance(response.body, bytes) else str(response.body)
-            print(f"响应内容 (原始):\n{content}\n")
-
-            # 尝试解析JSON
-            try:
-                json_data = json.loads(content)
-                print(f"响应内容 (格式化JSON):")
-                print(json.dumps(json_data, indent=2, ensure_ascii=False))
-            except json.JSONDecodeError:
-                print("(非JSON格式)")
-        except Exception as e:
-            print(f"内容解析失败: {e}")
-
-    async def main():
-        """主测试函数"""
-        try:
-            # 测试流式请求
-            await test_stream_request()
-
-            # 测试非流式请求
-            await test_non_stream_request()
-
-            print("\n" + "=" * 80)
-            print("测试完成")
-            print("=" * 80)
-
-        except Exception as e:
-            print(f"\n❌ 测试过程中出现异常: {e}")
-            import traceback
-            traceback.print_exc()
-
-    # 运行测试
-    asyncio.run(main())
+        if retry_config["retry_interval"] > 0:
+            await asyncio.sleep(retry_config["retry_interval"])
+        prepared = await _prepare_with_valid_credential(
+            body, headers, model_name, session_key, target_url, attempted
+        )
+        if not prepared:
+            return last_error or Response(
+                content=json.dumps({"error": "没有更多可用凭证"}),
+                status_code=500,
+                media_type="application/json",
+            )

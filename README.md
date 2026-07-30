@@ -456,9 +456,11 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 - `PASSWORD`: 通用密码，设置后覆盖上述两个（默认：pwd）
 
 **性能和稳定性配置**
-- `RETRY_429_ENABLED`: 启用 429 错误自动重试（默认：true）
-- `RETRY_429_MAX_RETRIES`: 429 错误最大重试次数（默认：3）
-- `RETRY_429_INTERVAL`: 429 错误重试间隔，秒（默认：1.0）
+- `CREDENTIAL_RETRY_LIMIT_ENABLED`: 是否限制单次请求尝试的凭证数量（默认：false；关闭时遍历全部可用凭证）
+- `MAX_RETRY_CREDENTIALS`: 开启限制后最多尝试的凭证总数，包含第一次（默认：5）
+- `CREDENTIAL_RETRY_INTERVAL`: 切换凭证前的等待时间，秒（默认：1.0）
+- `SESSION_AFFINITY_ENABLED`: 是否启用粘性会话（默认：false）
+- `SESSION_AFFINITY_TTL_SECONDS`: 粘性会话有效期，秒（默认：3600）
 - `ANTI_TRUNCATION_MAX_ATTEMPTS`: 抗截断最大重试次数（默认：3）
 
 **网络和代理配置**
@@ -468,7 +470,6 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 - `METADATA_SERVICE_URL`: 元数据服务代理端点
 
 **自动化配置**
-- `AUTO_BAN`: 启用凭证自动封禁（默认：true）
 - `AUTO_LOAD_ENV_CREDS`: 启动时自动加载环境变量凭证（默认：false）
 
 **兼容性配置**

@@ -77,7 +77,7 @@ function createCredsManager(type) {
         currentCooldownFilter: 'all',
         currentPreviewFilter: 'all',
         currentTierFilter: 'all',
-        statsData: { total: 0, normal: 0, disabled: 0 },
+        statsData: { total: 0, normal: 0, abnormal: 0 },
 
         // API端点
         getEndpoint: (action) => {
@@ -166,7 +166,7 @@ function createCredsManager(type) {
 
                     let msg = `已加载 ${data.total} 个${type === 'antigravity' ? 'Antigravity' : ''}凭证文件`;
                     if (this.currentStatusFilter !== 'all') {
-                        msg += ` (筛选: ${this.currentStatusFilter === 'enabled' ? '仅启用' : '仅禁用'})`;
+                        msg += ` (筛选: ${this.currentStatusFilter === 'normal' ? '正常' : '异常'})`;
                     }
                     if (!silent) showStatus(msg, 'success');
                 } else {
@@ -181,10 +181,12 @@ function createCredsManager(type) {
 
         // 计算统计数据（仅用于兼容旧版本后端）
         calculateStats() {
-            this.statsData = { total: this.totalCount, normal: 0, disabled: 0 };
+            this.statsData = { total: this.totalCount, normal: 0, abnormal: 0 };
             Object.values(this.data).forEach(credInfo => {
-                if (credInfo.status.disabled) {
-                    this.statsData.disabled++;
+                const hasCooldown = Object.keys(credInfo.model_cooldowns || {}).length > 0;
+                const hasErrors = (credInfo.status.error_codes || []).length > 0;
+                if (credInfo.status.disabled || hasCooldown || hasErrors) {
+                    this.statsData.abnormal++;
                 } else {
                     this.statsData.normal++;
                 }
@@ -195,7 +197,7 @@ function createCredsManager(type) {
         updateStatsDisplay() {
             document.getElementById(this.getElementId('StatTotal')).textContent = this.statsData.total;
             document.getElementById(this.getElementId('StatNormal')).textContent = this.statsData.normal;
-            document.getElementById(this.getElementId('StatDisabled')).textContent = this.statsData.disabled;
+            document.getElementById(this.getElementId('StatAbnormal')).textContent = this.statsData.abnormal;
         },
 
         // 渲染凭证列表
@@ -751,10 +753,6 @@ function createCredCard(credInfo, manager) {
 
     if (status.error_codes && status.error_codes.length > 0) {
         statusBadges += `<span class="error-codes">错误码: ${status.error_codes.join(', ')}</span>`;
-        const autoBan = status.error_codes.filter(c => c === 400 || c === 403);
-        if (autoBan.length > 0 && status.disabled) {
-            statusBadges += '<span class="status-badge" style="background-color: #e74c3c; color: white;">AUTO_BAN</span>';
-        }
     } else {
         statusBadges += '<span class="status-badge" style="background-color: #28a745; color: white;">无错误</span>';
     }
@@ -3316,13 +3314,11 @@ function populateConfigForm() {
     setConfigField('serviceUsageApiUrl', c.service_usage_api_url || '');
     setConfigField('antigravityApiUrl', c.antigravity_api_url || '');
 
-    document.getElementById('autoBanEnabled').checked = Boolean(c.auto_ban_enabled);
-    setConfigField('autoBanErrorCodes', (c.auto_ban_error_codes || []).join(','));
-    setConfigField('callsPerRotation', c.calls_per_rotation || 10);
-
-    document.getElementById('retry429Enabled').checked = Boolean(c.retry_429_enabled);
-    setConfigField('retry429MaxRetries', c.retry_429_max_retries || 20);
-    setConfigField('retry429Interval', c.retry_429_interval || 0.1);
+    document.getElementById('credentialRetryLimitEnabled').checked = Boolean(c.credential_retry_limit_enabled);
+    setConfigField('maxRetryCredentials', c.max_retry_credentials || 5);
+    setConfigField('credentialRetryInterval', c.credential_retry_interval || 1);
+    document.getElementById('sessionAffinityEnabled').checked = Boolean(c.session_affinity_enabled);
+    setConfigField('sessionAffinityTtlSeconds', c.session_affinity_ttl_seconds || 3600);
     document.getElementById('emptyOutputErrorEnabled').checked = Boolean(c.empty_output_error_enabled !== false);
     updateRequestCaptureStatus(c.request_capture_status);
     if (c.request_capture_status && c.request_capture_status.active) {
@@ -3378,13 +3374,11 @@ async function saveConfig() {
             resource_manager_api_url: getValue('resourceManagerApiUrl'),
             service_usage_api_url: getValue('serviceUsageApiUrl'),
             antigravity_api_url: getValue('antigravityApiUrl'),
-            auto_ban_enabled: getChecked('autoBanEnabled'),
-            auto_ban_error_codes: getValue('autoBanErrorCodes').split(',')
-                .map(c => parseInt(c.trim())).filter(c => !isNaN(c)),
-            calls_per_rotation: getInt('callsPerRotation', 10),
-            retry_429_enabled: getChecked('retry429Enabled'),
-            retry_429_max_retries: getInt('retry429MaxRetries', 20),
-            retry_429_interval: getFloat('retry429Interval', 0.1),
+            credential_retry_limit_enabled: getChecked('credentialRetryLimitEnabled'),
+            max_retry_credentials: getInt('maxRetryCredentials', 5),
+            credential_retry_interval: getFloat('credentialRetryInterval', 1),
+            session_affinity_enabled: getChecked('sessionAffinityEnabled'),
+            session_affinity_ttl_seconds: getInt('sessionAffinityTtlSeconds', 3600),
             empty_output_error_enabled: getChecked('emptyOutputErrorEnabled', true),
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),

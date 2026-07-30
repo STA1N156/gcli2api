@@ -16,11 +16,6 @@ _config_initialized = False
 _config_loaded_at = 0.0
 _CONFIG_REFRESH_INTERVAL = 5.0
 
-# Client Configuration
-
-# 需要自动封禁的错误码 (默认值，可通过环境变量或配置覆盖)
-AUTO_BAN_ERROR_CODES = [403]
-
 # ====================== 环境变量映射表 ======================
 # 统一维护环境变量名和配置键名的映射关系
 # 格式: "环境变量名": "配置键名"
@@ -33,11 +28,15 @@ ENV_MAPPINGS = {
     "RESOURCE_MANAGER_API_URL": "resource_manager_api_url",
     "SERVICE_USAGE_API_URL": "service_usage_api_url",
     "ANTIGRAVITY_API_URL": "antigravity_api_url",
-    "AUTO_BAN": "auto_ban_enabled",
-    "AUTO_BAN_ERROR_CODES": "auto_ban_error_codes",
-    "RETRY_429_MAX_RETRIES": "retry_429_max_retries",
-    "RETRY_429_ENABLED": "retry_429_enabled",
-    "RETRY_429_INTERVAL": "retry_429_interval",
+    "CREDENTIAL_RETRY_LIMIT_ENABLED": "credential_retry_limit_enabled",
+    "MAX_RETRY_CREDENTIALS": "max_retry_credentials",
+    "CREDENTIAL_RETRY_INTERVAL": "credential_retry_interval",
+    # 旧变量名继续锁定对应的新配置，便于无感升级。
+    "RETRY_429_MAX_RETRIES": "max_retry_credentials",
+    "RETRY_429_ENABLED": "credential_retry_limit_enabled",
+    "RETRY_429_INTERVAL": "credential_retry_interval",
+    "SESSION_AFFINITY_ENABLED": "session_affinity_enabled",
+    "SESSION_AFFINITY_TTL_SECONDS": "session_affinity_ttl_seconds",
     "EMPTY_OUTPUT_ERROR_ENABLED": "empty_output_error_enabled",
     "ANTI_TRUNCATION_MAX_ATTEMPTS": "anti_truncation_max_attempts",
     "COMPATIBILITY_MODE": "compatibility_mode_enabled",
@@ -131,67 +130,75 @@ async def get_proxy_config():
     return proxy_url if proxy_url else None
 
 
-async def get_auto_ban_enabled() -> bool:
-    """Get auto ban enabled setting."""
-    env_value = os.getenv("AUTO_BAN")
-    if env_value:
-        return env_value.lower() in ("true", "1", "yes", "on")
-
-    return bool(await get_config_value("auto_ban_enabled", False))
-
-
-async def get_auto_ban_error_codes() -> list:
-    """
-    Get auto ban error codes.
-
-    Environment variable: AUTO_BAN_ERROR_CODES (comma-separated, e.g., "400,403")
-    Database config key: auto_ban_error_codes
-    Default: [400, 403]
-    """
-    env_value = os.getenv("AUTO_BAN_ERROR_CODES")
+async def get_max_retry_credentials() -> int:
+    """开启限制后，单次请求最多尝试的凭证总数。"""
+    env_value = os.getenv("MAX_RETRY_CREDENTIALS") or os.getenv(
+        "RETRY_429_MAX_RETRIES"
+    )
     if env_value:
         try:
-            return [int(code.strip()) for code in env_value.split(",") if code.strip()]
+            return max(1, int(env_value))
         except ValueError:
             pass
 
-    codes = await get_config_value("auto_ban_error_codes")
-    if codes and isinstance(codes, list):
-        return codes
-    return AUTO_BAN_ERROR_CODES
+    value = await get_config_value("max_retry_credentials")
+    if value is None:
+        value = await get_config_value("retry_429_max_retries", 5)
+    return max(1, int(value))
 
 
-async def get_retry_429_max_retries() -> int:
-    """Get max retries for 429 errors."""
-    env_value = os.getenv("RETRY_429_MAX_RETRIES")
-    if env_value:
-        try:
-            return int(env_value)
-        except ValueError:
-            pass
-
-    return int(await get_config_value("retry_429_max_retries", 5))
-
-
-async def get_retry_429_enabled() -> bool:
-    """Get 429 retry enabled setting."""
-    env_value = os.getenv("RETRY_429_ENABLED")
+async def get_credential_retry_limit_enabled() -> bool:
+    """是否限制单次请求尝试的凭证数量。"""
+    env_value = os.getenv("CREDENTIAL_RETRY_LIMIT_ENABLED") or os.getenv(
+        "RETRY_429_ENABLED"
+    )
     if env_value:
         return env_value.lower() in ("true", "1", "yes", "on")
 
-    return bool(await get_config_value("retry_429_enabled", True))
+    value = await get_config_value("credential_retry_limit_enabled")
+    if value is None:
+        value = await get_config_value("retry_429_enabled", False)
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes", "on")
+    return bool(value)
 
 
-async def get_retry_429_interval() -> float:
-    """Get 429 retry interval in seconds."""
-    env_value = os.getenv("RETRY_429_INTERVAL")
+async def get_credential_retry_interval() -> float:
+    """切换到下一份凭证前的等待时间。"""
+    env_value = os.getenv("CREDENTIAL_RETRY_INTERVAL") or os.getenv(
+        "RETRY_429_INTERVAL"
+    )
     if env_value:
         try:
             return float(env_value)
         except ValueError:
             pass
 
-    return float(await get_config_value("retry_429_interval", 1))
+    value = await get_config_value("credential_retry_interval")
+    if value is None:
+        value = await get_config_value("retry_429_interval", 1)
+    return float(value)
+
+
+async def get_session_affinity_enabled() -> bool:
+    """Whether requests from the same session should reuse one credential."""
+    env_value = os.getenv("SESSION_AFFINITY_ENABLED")
+    if env_value:
+        return env_value.lower() in ("true", "1", "yes", "on")
+
+    return bool(await get_config_value("session_affinity_enabled", False))
+
+
+async def get_session_affinity_ttl_seconds() -> int:
+    """How long a successful session-to-credential binding remains active."""
+    env_value = os.getenv("SESSION_AFFINITY_TTL_SECONDS")
+    if env_value:
+        try:
+            return max(60, int(env_value))
+        except ValueError:
+            pass
+
+    return max(60, int(await get_config_value("session_affinity_ttl_seconds", 3600)))
 
 
 async def get_empty_output_error_enabled() -> bool:
