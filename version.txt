@@ -1,4 +1,4 @@
-full_hash=268e18dec9fb8178be2b41fb9a2444e78edbff4d
-short_hash=268e18d
-message=Merge pull request #5 from STA1N156/agent/antigravity-stability-fixes
-date=2026-07-30 18:35:43 +0800
+full_hash=270f40540f593893c3465e5861fe52a19f4c6297
+short_hash=270f405
+message=Merge pull request #6 from STA1N156/agent/antigravity-stability-fixes
+date=2026-07-30 22:40:11 +0800
