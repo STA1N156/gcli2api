@@ -1,4 +1,4 @@
-full_hash=23eafe409020800cea36c39dd570c84fab279533
-short_hash=23eafe4
-message=Share session 429 failures across workers
-date=2026-07-30 23:04:46 +0800
+full_hash=47c4a213bd1571555f2966cf3a3d29ea3592c139
+short_hash=47c4a21
+message=Cool generic Antigravity quota errors for four hours
+date=2026-07-30 23:21:53 +0800
