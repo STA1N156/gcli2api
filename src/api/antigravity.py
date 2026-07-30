@@ -327,6 +327,7 @@ async def stream_request(
         return
 
     current_file, credential_data = cred_result
+    attempted_credentials = {current_file}
     access_token = credential_data.get("access_token") or credential_data.get("token")
     project_id = credential_data.get("project_id", "")
 
@@ -368,11 +369,12 @@ async def stream_request(
         nonlocal current_file, access_token, auth_headers, project_id, final_payload
         cred_result = await credential_manager.get_valid_credential(
             mode="antigravity", model_name=model_name, session_key=session_key,
-            exclude_credential=current_file
+            exclude_credentials=attempted_credentials,
         )
         if not cred_result:
             return None
         current_file, credential_data = cred_result
+        attempted_credentials.add(current_file)
         access_token = credential_data.get("access_token") or credential_data.get("token")
         project_id = credential_data.get("project_id", "")
         if not access_token:
@@ -385,6 +387,7 @@ async def stream_request(
     def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
         nonlocal current_file, access_token, project_id, auth_headers, final_payload
         current_file, credential_data = cred_result
+        attempted_credentials.add(current_file)
         access_token = credential_data.get("access_token") or credential_data.get("token")
         project_id = credential_data.get("project_id", "")
         if not access_token or not project_id:
@@ -435,7 +438,8 @@ async def stream_request(
                             next_cred_task = asyncio.create_task(
                                 credential_manager.get_valid_credential(
                                     mode="antigravity", model_name=model_name,
-                                    session_key=session_key, exclude_credential=current_file
+                                    session_key=session_key,
+                                    exclude_credentials=set(attempted_credentials),
                                 )
                             )
 
@@ -619,6 +623,7 @@ async def non_stream_request(
         )
 
     current_file, credential_data = cred_result
+    attempted_credentials = {current_file}
     access_token = credential_data.get("access_token") or credential_data.get("token")
     project_id = credential_data.get("project_id", "")
 
@@ -659,11 +664,12 @@ async def non_stream_request(
         nonlocal current_file, access_token, auth_headers, project_id, final_payload
         cred_result = await credential_manager.get_valid_credential(
             mode="antigravity", model_name=model_name, session_key=session_key,
-            exclude_credential=current_file
+            exclude_credentials=attempted_credentials,
         )
         if not cred_result:
             return None
         current_file, credential_data = cred_result
+        attempted_credentials.add(current_file)
         access_token = credential_data.get("access_token") or credential_data.get("token")
         project_id = credential_data.get("project_id", "")
         if not access_token:
@@ -676,6 +682,7 @@ async def non_stream_request(
     def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
         nonlocal current_file, access_token, project_id, auth_headers, final_payload
         current_file, credential_data = cred_result
+        attempted_credentials.add(current_file)
         access_token = credential_data.get("access_token") or credential_data.get("token")
         project_id = credential_data.get("project_id", "")
         if not access_token or not project_id:
@@ -750,7 +757,8 @@ async def non_stream_request(
                         next_cred_task = asyncio.create_task(
                             credential_manager.get_valid_credential(
                                 mode="antigravity", model_name=model_name,
-                                session_key=session_key, exclude_credential=current_file
+                                session_key=session_key,
+                                exclude_credentials=set(attempted_credentials),
                             )
                         )
 

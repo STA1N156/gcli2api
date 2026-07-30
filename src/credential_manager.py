@@ -7,7 +7,7 @@ import hashlib
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from log import log
 
@@ -177,18 +177,17 @@ class CredentialManager:
         binding_key: str,
         mode: str,
         model_name: Optional[str],
-        exclude_credential: Optional[str],
+        exclude_credentials: Set[str],
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         states = await self._storage_adapter.get_all_credential_states(mode=mode)
         if not states:
             return None
 
-        excluded = os.path.basename(exclude_credential) if exclude_credential else None
         candidates: List[Tuple[str, Dict[str, Any]]] = []
 
         for raw_filename, state in states.items():
             filename = os.path.basename(raw_filename)
-            if excluded and filename == excluded:
+            if filename in exclude_credentials:
                 continue
             if not self._credential_state_allows_model(
                 state,
@@ -233,6 +232,7 @@ class CredentialManager:
         model_name: Optional[str] = None,
         session_key: Optional[str] = None,
         exclude_credential: Optional[str] = None,
+        exclude_credentials: Optional[Set[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         获取有效的凭证 - 随机负载均衡版
@@ -248,8 +248,16 @@ class CredentialManager:
                        - antigravity: 完整模型名（如 "gemini-2.0-flash-exp"）
         """
         await self._ensure_initialized()
+        excluded_credentials = {
+            os.path.basename(filename)
+            for filename in (exclude_credentials or set())
+            if filename
+        }
+        if exclude_credential:
+            excluded_credentials.add(os.path.basename(exclude_credential))
+
         binding_key = self._session_binding_key(mode, model_name, session_key)
-        bypass_session_routing = bool(binding_key and exclude_credential)
+        bypass_session_routing = bool(binding_key and excluded_credentials)
 
         if bypass_session_routing:
             await self._forget_session_binding(binding_key)
@@ -257,7 +265,7 @@ class CredentialManager:
                 log.debug(
                     "Session route bypassed for retry: "
                     f"session={self._session_log_id(binding_key)}, "
-                    f"excluded={os.path.basename(exclude_credential)}, "
+                    f"excluded={len(excluded_credentials)}, "
                     f"mode={mode}, model={model_name}"
                 )
 
@@ -268,7 +276,7 @@ class CredentialManager:
                     bound_filename,
                     mode=mode,
                     model_name=model_name,
-                    exclude_credential=exclude_credential,
+                    exclude_credential=None,
                 )
                 if bound_result:
                     filename, credential_data = bound_result
@@ -296,11 +304,13 @@ class CredentialManager:
                 else:
                     await self._forget_session_binding(binding_key)
 
+        if binding_key or excluded_credentials:
+            route_key = binding_key or f"retry:{time.time_ns()}"
             routed_result = await self._get_session_routed_credential(
-                binding_key=binding_key,
+                binding_key=route_key,
                 mode=mode,
                 model_name=model_name,
-                exclude_credential=exclude_credential,
+                exclude_credentials=excluded_credentials,
             )
             if routed_result:
                 filename, credential_data = routed_result
@@ -317,7 +327,7 @@ class CredentialManager:
                     return filename, credential_data
 
         # 最多重试3次
-        max_retries = 20 if exclude_credential else 3
+        max_retries = max(20, len(excluded_credentials) * 3) if excluded_credentials else 3
         for attempt in range(max_retries):
             result = await self._storage_adapter._backend.get_next_available_credential(
                 mode=mode, model_name=model_name
@@ -330,7 +340,7 @@ class CredentialManager:
                 return None
 
             filename, credential_data = result
-            if exclude_credential and os.path.basename(filename) == os.path.basename(exclude_credential):
+            if os.path.basename(filename) in excluded_credentials:
                 continue
 
             # Token 刷新检查
