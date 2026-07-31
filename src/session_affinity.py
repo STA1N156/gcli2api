@@ -10,7 +10,6 @@ import json
 import re
 from typing import Any, Mapping, Optional
 
-
 _CLAUDE_SESSION_RE = re.compile(r"_session_([a-fA-F0-9-]+)$")
 
 
@@ -63,7 +62,6 @@ def _session_key_from_headers(headers: Optional[Mapping[str, str]]) -> Optional[
         ("x-session-id", "header"),
         ("session_id", "codex"),
         ("x-amp-thread-id", "amp"),
-        ("x-client-request-id", "clientreq"),
     )
 
     for header_name, prefix in header_names:

@@ -54,6 +54,20 @@ class StorageBackend(Protocol):
         """获取所有凭证状态"""
         ...
 
+    # 粘性会话绑定
+    async def get_session_binding(self, binding_key: str, now: float) -> Optional[str]:
+        ...
+
+    async def set_session_binding(
+        self, binding_key: str, filename: str, expires_at: float
+    ) -> bool:
+        ...
+
+    async def delete_session_binding(
+        self, binding_key: str, expected_filename: Optional[str] = None
+    ) -> bool:
+        ...
+
     # 配置管理
     async def set_config(self, key: str, value: Any) -> bool:
         """设置配置项"""
@@ -196,6 +210,29 @@ class StorageAdapter:
         """获取所有凭证状态"""
         self._ensure_initialized()
         return await self._backend.get_all_credential_states(mode)
+
+    async def get_session_binding(self, binding_key: str, now: float) -> Optional[str]:
+        """读取所有 Worker 共用的粘性会话绑定。"""
+        self._ensure_initialized()
+        return await self._backend.get_session_binding(binding_key, now)
+
+    async def set_session_binding(
+        self, binding_key: str, filename: str, expires_at: float
+    ) -> bool:
+        """保存所有 Worker 共用的粘性会话绑定。"""
+        self._ensure_initialized()
+        return await self._backend.set_session_binding(
+            binding_key, filename, expires_at
+        )
+
+    async def delete_session_binding(
+        self, binding_key: str, expected_filename: Optional[str] = None
+    ) -> bool:
+        """仅在绑定仍指向预期凭证时删除，避免覆盖其他 Worker 的迁移。"""
+        self._ensure_initialized()
+        return await self._backend.delete_session_binding(
+            binding_key, expected_filename
+        )
 
     # ============ 配置管理 ============
 

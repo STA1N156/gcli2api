@@ -3,10 +3,8 @@
 import asyncio
 import hashlib
 import json
-import os
 import time
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -39,46 +37,6 @@ from src.session_affinity import extract_cache_session_key
 from src.utils import ANTIGRAVITY_USER_AGENT
 
 
-# Antigravity 请求本身需要稳定的会话元数据；它与可选的凭证粘性互不影响。
-SESSION_TTL_SECONDS = 6 * 60 * 60
-MAX_SESSION_STATES = 1024
-_REDIS_KEY_PREFIX = "antigravity:session:"
-
-
-@dataclass
-class AntigravitySessionState:
-    conversation_id: str
-    trajectory_id: str
-    session_id: str
-    step_index: int
-    created_at: float
-    last_used_at: float
-
-
-_session_states: Dict[str, AntigravitySessionState] = {}
-_redis_client = None
-_redis_checked = False
-
-
-async def _get_redis():
-    global _redis_client, _redis_checked
-    if _redis_checked:
-        return _redis_client
-    _redis_checked = True
-    redis_url = os.getenv("REDIS_URL")
-    if not redis_url:
-        return None
-    try:
-        import redis.asyncio as aioredis  # type: ignore
-
-        client = aioredis.from_url(redis_url, decode_responses=True)
-        await client.ping()
-        _redis_client = client
-    except Exception as exc:
-        log.warning(f"[SESSION] Redis unavailable, using memory: {exc}")
-    return _redis_client
-
-
 def _extract_first_user_text(request_payload: Dict[str, Any]) -> str:
     contents = request_payload.get("contents", [])
     if not isinstance(contents, list):
@@ -92,95 +50,18 @@ def _extract_first_user_text(request_payload: Dict[str, Any]) -> str:
     return ""
 
 
-def _session_key(request_payload: Dict[str, Any], model: str = "") -> str:
-    if request_payload.get("sessionId"):
-        return f"session:{request_payload['sessionId']}"
-    model_prefix = f"model:{model}:" if model else ""
+def _generate_stable_session_id(request_payload: Dict[str, Any]) -> str:
     first_user_text = _extract_first_user_text(request_payload)
-    if first_user_text:
-        digest = hashlib.sha256(first_user_text.encode("utf-8")).hexdigest()[:32]
-        return f"{model_prefix}text:{digest}"
-    return f"{model_prefix}default"
-
-
-def _prune_session_states(now: float) -> None:
-    for key, state in list(_session_states.items()):
-        if now - state.last_used_at > SESSION_TTL_SECONDS:
-            _session_states.pop(key, None)
-    overflow = len(_session_states) - MAX_SESSION_STATES
-    if overflow > 0:
-        oldest = sorted(
-            _session_states.items(), key=lambda item: item[1].last_used_at
-        )
-        for key, _ in oldest[:overflow]:
-            _session_states.pop(key, None)
-
-
-def _make_new_state(first_user_text: str, now: float) -> AntigravitySessionState:
     if first_user_text:
         digest = hashlib.sha256(first_user_text.encode("utf-8")).digest()
-        session_id = f"-{int.from_bytes(digest[:8], 'big') & 0x7FFFFFFFFFFFFFFF}"
-    else:
-        session_id = f"-{uuid.uuid4().int % 9_000_000_000_000_000_000}"
-    return AntigravitySessionState(
-        conversation_id=str(uuid.uuid4()),
-        trajectory_id=str(uuid.uuid4()),
-        session_id=session_id,
-        step_index=1,
-        created_at=now,
-        last_used_at=now,
-    )
+        return f"-{int.from_bytes(digest[:8], 'big') & 0x7FFFFFFFFFFFFFFF}"
+    return f"-{uuid.uuid4().int % 9_000_000_000_000_000_000}"
 
 
-async def _get_session_state(
-    request_payload: Dict[str, Any],
-    model: str = "",
-) -> AntigravitySessionState:
-    now = time.time()
-    key = _session_key(request_payload, model)
-    first_user_text = _extract_first_user_text(request_payload)
-    redis = await _get_redis()
-    if redis is not None:
-        redis_key = f"{_REDIS_KEY_PREFIX}{key}"
-        try:
-            raw = await redis.get(redis_key)
-            if raw:
-                state = AntigravitySessionState(**json.loads(raw))
-                state.step_index += 1
-                state.last_used_at = now
-            else:
-                state = _make_new_state(first_user_text, now)
-            await redis.set(
-                redis_key, json.dumps(state.__dict__), ex=SESSION_TTL_SECONDS
-            )
-            return state
-        except Exception as exc:
-            log.warning(f"[SESSION] Redis error, using memory: {exc}")
-
-    _prune_session_states(now)
-    state = _session_states.get(key)
-    if state:
-        state.step_index += 1
-        state.last_used_at = now
-        return state
-    state = _make_new_state(first_user_text, now)
-    _session_states[key] = state
-    return state
-
-
-def _generate_request_id() -> str:
+def _generate_request_id(model: str = "") -> str:
+    if "image" in model.lower():
+        return f"image_gen/{int(time.time() * 1000)}/{uuid.uuid4()}/12"
     return f"agent-{uuid.uuid4()}"
-
-
-def _build_labels(model: str, trajectory_id: str, step: int) -> Dict[str, str]:
-    used_claude = "claude" in model.lower()
-    return {
-        "last_step_index": str(step),
-        "model_enum": model,
-        "trajectory_id": trajectory_id,
-        "used_claude": str(used_claude).lower(),
-        "used_claude_conservative": str(used_claude).lower(),
-    }
 
 
 async def wrap_cli_request(
@@ -190,19 +71,28 @@ async def wrap_cli_request(
 ) -> Tuple[Dict[str, Any], str]:
     inner = dict(gemini_request)
     inner.pop("safetySettings", None)
-    state = await _get_session_state(inner, model)
-    inner.setdefault("sessionId", state.session_id)
-    inner["labels"] = _build_labels(
-        model, state.trajectory_id, state.step_index
-    )
+    inner["sessionId"] = _generate_stable_session_id(inner)
+    system_instruction = inner.get("systemInstruction")
+    if isinstance(system_instruction, dict):
+        system_instruction = dict(system_instruction)
+        system_instruction["role"] = "user"
+        inner["systemInstruction"] = system_instruction
 
-    tool_config = inner.get("toolConfig") or {}
-    function_config = tool_config.get("functionCallingConfig") or {}
-    function_config.setdefault("mode", "VALIDATED")
-    tool_config["functionCallingConfig"] = function_config
-    inner["toolConfig"] = tool_config
+    if "claude" in model.lower():
+        tool_config = inner.get("toolConfig") or {}
+        function_config = tool_config.get("functionCallingConfig") or {}
+        function_config["mode"] = "VALIDATED"
+        tool_config["functionCallingConfig"] = function_config
+        inner["toolConfig"] = tool_config
+    else:
+        generation_config = inner.get("generationConfig")
+        if isinstance(generation_config, dict):
+            generation_config = dict(generation_config)
+            generation_config.pop("maxOutputTokens", None)
+            inner["generationConfig"] = generation_config
 
-    request_id = _generate_request_id()
+    request_id = _generate_request_id(model)
+    request_type = "image_gen" if "image" in model.lower() else "agent"
     return (
         {
             "project": project_id,
@@ -210,8 +100,7 @@ async def wrap_cli_request(
             "request": inner,
             "model": model,
             "userAgent": "antigravity",
-            "requestType": "agent",
-            "enabledCreditTypes": ["GOOGLE_ONE_AI"],
+            "requestType": request_type,
         },
         request_id,
     )
@@ -232,21 +121,23 @@ async def _get_valid_request_credential(
     attempted: Set[str],
 ) -> Optional[Tuple[str, str, str]]:
     """选择未尝试且可用于当前模型的凭证。"""
+    excluded = set(attempted)
     while True:
         result = await credential_manager.get_valid_credential(
             mode="antigravity",
             model_name=model_name,
             session_key=session_key,
-            exclude_credentials=set(attempted),
+            exclude_credentials=set(excluded),
         )
         if not result:
             return None
         filename, credential_data = result
         filename = Path(filename).name
-        attempted.add(filename)
+        excluded.add(filename)
         token = credential_data.get("access_token") or credential_data.get("token")
         project_id = credential_data.get("project_id")
         if token and project_id:
+            attempted.add(filename)
             return filename, token, project_id
         log.warning(f"[ANTIGRAVITY] 禁用缺少令牌或项目 ID 的凭证: {filename}")
         await credential_manager.set_cred_disabled(
@@ -336,6 +227,12 @@ async def stream_request(
                         if isinstance(chunk.body, bytes)
                         else str(chunk.body)
                     )
+                    log.warning(
+                        "[ANTIGRAVITY STREAM] 上游返回 "
+                        f"{chunk.status_code}: credential={current_file}, "
+                        f"model={model_name}, "
+                        f"request_id={final_payload.get('requestId', '')}"
+                    )
                     if (
                         chunk.status_code == 401
                         and current_file not in refreshed_after_401
@@ -355,7 +252,9 @@ async def stream_request(
                                     f"Bearer {refreshed_token}"
                                 )
                                 final_payload["project"] = refreshed_project
-                                final_payload["requestId"] = _generate_request_id()
+                                final_payload["requestId"] = _generate_request_id(
+                                    model_name
+                                )
                                 retry_same = True
                                 break
                     await _record_response_error(
@@ -432,7 +331,7 @@ async def stream_request(
         current_file, token, project_id = selected
         auth_headers["Authorization"] = f"Bearer {token}"
         final_payload["project"] = project_id
-        final_payload["requestId"] = _generate_request_id()
+        final_payload["requestId"] = _generate_request_id(model_name)
 
 
 async def non_stream_request(
@@ -519,11 +418,16 @@ async def non_stream_request(
                     if refreshed_token and refreshed_project:
                         auth_headers["Authorization"] = f"Bearer {refreshed_token}"
                         final_payload["project"] = refreshed_project
-                        final_payload["requestId"] = _generate_request_id()
+                        final_payload["requestId"] = _generate_request_id(model_name)
                         continue
 
             error_text = getattr(response, "text", "") or ""
             last_error = _response_from_httpx(response)
+            log.warning(
+                f"[ANTIGRAVITY] 上游返回 {response.status_code}: "
+                f"credential={current_file}, model={model_name}, "
+                f"request_id={final_payload.get('requestId', '')}"
+            )
             await _record_response_error(
                 current_file, model_name, response.status_code, error_text
             )
@@ -554,7 +458,7 @@ async def non_stream_request(
         current_file, token, project_id = selected
         auth_headers["Authorization"] = f"Bearer {token}"
         final_payload["project"] = project_id
-        final_payload["requestId"] = _generate_request_id()
+        final_payload["requestId"] = _generate_request_id(model_name)
 
 
 async def fetch_available_models() -> List[Dict[str, Any]]:

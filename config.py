@@ -186,7 +186,7 @@ async def get_session_affinity_enabled() -> bool:
     if env_value:
         return env_value.lower() in ("true", "1", "yes", "on")
 
-    return bool(await get_config_value("session_affinity_enabled", False))
+    return bool(await get_config_value("session_affinity_enabled", True))
 
 
 async def get_session_affinity_ttl_seconds() -> int:

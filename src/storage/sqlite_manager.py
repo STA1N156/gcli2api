@@ -250,6 +250,19 @@ class SQLiteManager:
             )
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS session_bindings (
+                binding_key TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                updated_at REAL DEFAULT (unixepoch())
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_bindings_expires_at
+            ON session_bindings(expires_at)
+        """)
+
         log.debug("SQLite tables and indexes created")
 
     async def _repair_credential_filenames(self, db: aiosqlite.Connection):
@@ -974,6 +987,62 @@ class SQLiteManager:
                 "unique_email_count": 0,
                 "total_count": 0,
             }
+
+    # ============ 粘性会话绑定 ============
+
+    async def get_session_binding(self, binding_key: str, now: float) -> Optional[str]:
+        self._ensure_initialized()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT filename FROM session_bindings "
+                "WHERE binding_key = ? AND expires_at > ?",
+                (binding_key, now),
+            ) as cursor:
+                row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def set_session_binding(
+        self, binding_key: str, filename: str, expires_at: float
+    ) -> bool:
+        self._ensure_initialized()
+        try:
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute(
+                    "DELETE FROM session_bindings WHERE expires_at <= ?",
+                    (time.time(),),
+                )
+                await db.execute("""
+                    INSERT INTO session_bindings
+                        (binding_key, filename, expires_at, updated_at)
+                    VALUES (?, ?, ?, unixepoch())
+                    ON CONFLICT(binding_key) DO UPDATE SET
+                        filename = excluded.filename,
+                        expires_at = excluded.expires_at,
+                        updated_at = excluded.updated_at
+                """, (binding_key, filename, expires_at))
+                await db.commit()
+            return True
+        except Exception as e:
+            log.error(f"Error setting session binding: {e}")
+            return False
+
+    async def delete_session_binding(
+        self, binding_key: str, expected_filename: Optional[str] = None
+    ) -> bool:
+        self._ensure_initialized()
+        try:
+            query = "DELETE FROM session_bindings WHERE binding_key = ?"
+            params = [binding_key]
+            if expected_filename is not None:
+                query += " AND filename = ?"
+                params.append(expected_filename)
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute(query, params)
+                await db.commit()
+            return True
+        except Exception as e:
+            log.error(f"Error deleting session binding: {e}")
+            return False
 
     # ============ 配置管理（内存缓存）============
 

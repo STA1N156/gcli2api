@@ -14,11 +14,9 @@ from config import (
     get_session_affinity_ttl_seconds,
 )
 from log import log
-
 from src.google_oauth_api import Credentials
 from src.model_cooldown import has_active_model_cooldown
 from src.storage_adapter import get_storage_adapter
-
 
 SESSION_BINDING_MAX_ENTRIES = int(os.getenv("SESSION_BINDING_MAX_ENTRIES", "50000"))
 SESSION_BINDING_PRUNE_INTERVAL_SECONDS = 60
@@ -73,6 +71,9 @@ class CredentialManager:
     def _session_log_id(self, binding_key: str) -> str:
         return hashlib.sha256(binding_key.encode("utf-8")).hexdigest()[:12]
 
+    def _shared_session_binding_key(self, binding_key: str) -> str:
+        return hashlib.sha256(binding_key.encode("utf-8")).hexdigest()
+
     def _prune_session_bindings_locked(self, now: float) -> None:
         if (
             now - self._last_session_prune < SESSION_BINDING_PRUNE_INTERVAL_SECONDS
@@ -91,6 +92,14 @@ class CredentialManager:
                 self._session_bindings.pop(key, None)
 
     async def _get_session_binding(self, binding_key: str) -> Optional[str]:
+        shared_get = getattr(self._storage_adapter, "get_session_binding", None)
+        if callable(shared_get):
+            filename = await shared_get(
+                self._shared_session_binding_key(binding_key), time.time()
+            )
+            if filename:
+                return filename
+
         async with self._session_lock:
             binding = self._session_bindings.get(binding_key)
             if not binding:
@@ -112,18 +121,40 @@ class CredentialManager:
         if SESSION_BINDING_MAX_ENTRIES <= 0:
             return
         now = time.time()
+        filename = os.path.basename(filename)
+        expires_at = now + ttl_seconds
+        shared_set = getattr(self._storage_adapter, "set_session_binding", None)
+        if callable(shared_set):
+            if await shared_set(
+                self._shared_session_binding_key(binding_key), filename, expires_at
+            ):
+                return
         async with self._session_lock:
             self._prune_session_bindings_locked(now)
             self._session_bindings[binding_key] = (
-                os.path.basename(filename),
-                now + ttl_seconds,
+                filename,
+                expires_at,
             )
 
-    async def _forget_session_binding(self, binding_key: Optional[str]) -> None:
+    async def _forget_session_binding(
+        self,
+        binding_key: Optional[str],
+        expected_filename: Optional[str] = None,
+    ) -> None:
         if not binding_key:
             return
+        expected_filename = (
+            os.path.basename(expected_filename) if expected_filename else None
+        )
+        shared_delete = getattr(self._storage_adapter, "delete_session_binding", None)
+        if callable(shared_delete):
+            await shared_delete(
+                self._shared_session_binding_key(binding_key), expected_filename
+            )
         async with self._session_lock:
-            self._session_bindings.pop(binding_key, None)
+            local = self._session_bindings.get(binding_key)
+            if expected_filename is None or (local and local[0] == expected_filename):
+                self._session_bindings.pop(binding_key, None)
 
     async def _get_bound_credential_if_available(
         self,
@@ -173,12 +204,13 @@ class CredentialManager:
 
         return True
 
-    async def _get_round_robin_credential(
+    async def _get_available_credential(
         self,
         *,
         mode: str,
         model_name: Optional[str],
         exclude_credentials: Set[str],
+        session_fallback_key: Optional[str] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         states = await self._storage_adapter.get_all_credential_states(mode=mode)
         if not states:
@@ -202,17 +234,29 @@ class CredentialManager:
             return None
 
         candidates.sort(key=lambda item: item[0])
-        cursor_key = f"{mode}:{(model_name or '').strip().lower()}"
-        async with self._session_lock:
-            if (
-                cursor_key not in self._round_robin_cursors
-                and len(self._round_robin_cursors) >= ROUND_ROBIN_MAX_KEYS
-            ):
-                self._round_robin_cursors.clear()
-            start = self._round_robin_cursors.get(cursor_key, 0) % len(candidates)
-            self._round_robin_cursors[cursor_key] = start + 1
+        if session_fallback_key:
+            # A worker that has not seen this session yet must choose the same
+            # initial credential as other workers. Once chosen, the normal
+            # session binding below remains authoritative and can migrate.
+            ordered_candidates = sorted(
+                candidates,
+                key=lambda item: hashlib.sha256(
+                    f"{session_fallback_key}\0{item[0]}".encode("utf-8")
+                ).digest(),
+                reverse=True,
+            )
+        else:
+            cursor_key = f"{mode}:{(model_name or '').strip().lower()}"
+            async with self._session_lock:
+                if (
+                    cursor_key not in self._round_robin_cursors
+                    and len(self._round_robin_cursors) >= ROUND_ROBIN_MAX_KEYS
+                ):
+                    self._round_robin_cursors.clear()
+                start = self._round_robin_cursors.get(cursor_key, 0) % len(candidates)
+                self._round_robin_cursors[cursor_key] = start + 1
 
-        ordered_candidates = candidates[start:] + candidates[:start]
+            ordered_candidates = candidates[start:] + candidates[:start]
 
         for filename, state in ordered_candidates:
             credential_data = await self._storage_adapter.get_credential(filename, mode=mode)
@@ -289,7 +333,7 @@ class CredentialManager:
                                 binding_key, filename, affinity_ttl
                             )
                             return filename, refreshed_data
-                        await self._forget_session_binding(binding_key)
+                        await self._forget_session_binding(binding_key, filename)
                         excluded_credentials.add(filename)
                     else:
                         if log.is_debug_enabled():
@@ -303,13 +347,14 @@ class CredentialManager:
                         )
                         return filename, credential_data
                 else:
-                    await self._forget_session_binding(binding_key)
+                    await self._forget_session_binding(binding_key, bound_filename)
 
         while True:
-            result = await self._get_round_robin_credential(
+            result = await self._get_available_credential(
                 mode=mode,
                 model_name=model_name,
                 exclude_credentials=excluded_credentials,
+                session_fallback_key=binding_key,
             )
             if not result:
                 log.warning(f"没有可用凭证 (mode={mode}, model_name={model_name})")
@@ -323,7 +368,7 @@ class CredentialManager:
                     credential_data = refreshed_data
                 else:
                     excluded_credentials.add(os.path.basename(filename))
-                    await self._forget_session_binding(binding_key)
+                    await self._forget_session_binding(binding_key, filename)
                     continue
 
             await self._remember_session_binding(

@@ -459,7 +459,7 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 - `CREDENTIAL_RETRY_LIMIT_ENABLED`: Limit credentials attempted per request (default: false; when disabled, all eligible credentials are traversed)
 - `MAX_RETRY_CREDENTIALS`: Maximum total credentials attempted when the limit is enabled, including the first (default: 5)
 - `CREDENTIAL_RETRY_INTERVAL`: Delay before switching credentials, in seconds (default: 1.0)
-- `SESSION_AFFINITY_ENABLED`: Enable session affinity (default: false)
+- `SESSION_AFFINITY_ENABLED`: Enable session affinity (default: true)
 - `SESSION_AFFINITY_TTL_SECONDS`: Session affinity lifetime in seconds (default: 3600)
 - `ANTI_TRUNCATION_MAX_ATTEMPTS`: Maximum retry attempts for anti-truncation (default: 3)
 

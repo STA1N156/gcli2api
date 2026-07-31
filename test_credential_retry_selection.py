@@ -1,14 +1,21 @@
+import os
+import tempfile
+import time
 import unittest
 from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call, patch
 
 from fastapi import Response
+
 from src.api.antigravity import non_stream_request as antigravity_request
 from src.api.antigravity import stream_request as antigravity_stream_request
+from src.api.antigravity import wrap_cli_request
 from src.api.geminicli import non_stream_request as geminicli_request
 from src.api.utils import get_retry_config, is_retryable_status
 from src.credential_manager import CredentialManager
+from src.session_affinity import extract_cache_session_key
+from src.storage.sqlite_manager import SQLiteManager
 
 
 def http_response(status_code, body=b"{}"):
@@ -20,8 +27,23 @@ def http_response(status_code, body=b"{}"):
     )
 
 
+class SessionKeyTests(unittest.TestCase):
+    def test_per_request_id_does_not_change_the_chat_session(self):
+        payload = {
+            "messages": [{"role": "user", "content": "first message"}]
+        }
+        first = extract_cache_session_key(
+            payload, {"x-client-request-id": "request-a"}
+        )
+        second = extract_cache_session_key(
+            payload, {"x-client-request-id": "request-b"}
+        )
+
+        self.assertEqual(first, second)
+
+
 class CredentialSelectionTests(unittest.IsolatedAsyncioTestCase):
-    def make_manager(self, states):
+    def make_manager(self, states, session_store=None):
         credentials = {
             filename: {
                 "access_token": f"token-{filename}",
@@ -39,6 +61,26 @@ class CredentialSelectionTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=lambda filename, mode: states.get(filename, {})
             ),
         )
+        if session_store is not None:
+            async def get_session_binding(binding_key, now):
+                binding = session_store.get(binding_key)
+                return binding[0] if binding and binding[1] > now else None
+
+            async def set_session_binding(binding_key, filename, expires_at):
+                session_store[binding_key] = (filename, expires_at)
+                return True
+
+            async def delete_session_binding(binding_key, expected_filename=None):
+                binding = session_store.get(binding_key)
+                if binding and (
+                    expected_filename is None or binding[0] == expected_filename
+                ):
+                    session_store.pop(binding_key, None)
+                return True
+
+            storage_adapter.get_session_binding = get_session_binding
+            storage_adapter.set_session_binding = set_session_binding
+            storage_adapter.delete_session_binding = delete_session_binding
         manager = CredentialManager()
         manager._storage_adapter = storage_adapter
         manager._initialized = True
@@ -140,6 +182,90 @@ class CredentialSelectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first[0], second[0])
 
+    async def test_affinity_uses_the_same_initial_credential_across_workers(self):
+        states = {
+            "a.json": {"disabled": False, "model_cooldowns": {}},
+            "b.json": {"disabled": False, "model_cooldowns": {}},
+            "c.json": {"disabled": False, "model_cooldowns": {}},
+        }
+        session_store = {}
+        first_worker = self.make_manager(states, session_store)
+        second_worker = self.make_manager(
+            dict(reversed(list(states.items()))), session_store
+        )
+
+        with (
+            patch(
+                "src.credential_manager.get_session_affinity_enabled",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "src.credential_manager.get_session_affinity_ttl_seconds",
+                AsyncMock(return_value=3600),
+            ),
+        ):
+            first = await first_worker.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="chat",
+            )
+            second = await second_worker.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="chat",
+            )
+
+        self.assertEqual(first[0], second[0])
+
+    async def test_affinity_migrates_binding_after_model_cooldown(self):
+        states = {
+            "a.json": {"disabled": False, "model_cooldowns": {}},
+            "b.json": {"disabled": False, "model_cooldowns": {}},
+            "c.json": {"disabled": False, "model_cooldowns": {}},
+        }
+        session_store = {}
+        first_worker = self.make_manager(states, session_store)
+        second_worker = self.make_manager(states, session_store)
+
+        with (
+            patch(
+                "src.credential_manager.get_session_affinity_enabled",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "src.credential_manager.get_session_affinity_ttl_seconds",
+                AsyncMock(return_value=3600),
+            ),
+        ):
+            first = await first_worker.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="chat",
+            )
+            same_binding = await second_worker.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="chat",
+            )
+            states[first[0]]["model_cooldowns"] = {
+                "gemini-3.1-pro-preview": 4102444800
+            }
+            replacement = await first_worker.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="chat",
+            )
+            states[first[0]]["model_cooldowns"] = {}
+            next_request = await second_worker.get_valid_credential(
+                mode="antigravity",
+                model_name="gemini-3.1-pro-preview",
+                session_key="chat",
+            )
+
+        self.assertEqual(first[0], same_binding[0])
+        self.assertNotEqual(first[0], replacement[0])
+        self.assertEqual(replacement[0], next_request[0])
+
     async def test_affinity_falls_back_and_rebinds_when_tried(self):
         manager = self.make_manager({
             "a.json": {"disabled": False, "model_cooldowns": {}},
@@ -178,7 +304,76 @@ class CredentialSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replacement[0], next_request[0])
 
 
+class SessionBindingStorageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sqlite_binding_is_shared_and_migration_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ, {"CREDENTIALS_DIR": temp_dir}
+        ):
+            first_worker = SQLiteManager()
+            second_worker = SQLiteManager()
+            await first_worker.initialize()
+            await second_worker.initialize()
+            try:
+                expires_at = time.time() + 3600
+                await first_worker.set_session_binding("chat", "a.json", expires_at)
+                self.assertEqual(
+                    await second_worker.get_session_binding("chat", time.time()),
+                    "a.json",
+                )
+
+                await second_worker.set_session_binding("chat", "b.json", expires_at)
+                await first_worker.delete_session_binding("chat", "a.json")
+                self.assertEqual(
+                    await first_worker.get_session_binding("chat", time.time()),
+                    "b.json",
+                )
+            finally:
+                await first_worker.close()
+                await second_worker.close()
+
 class CredentialRetryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_antigravity_wrapper_matches_cliproxy_session_and_request_ids(self):
+        request = {
+            "contents": [{"role": "user", "parts": [{"text": "same chat"}]}],
+            "generationConfig": {"maxOutputTokens": 64000},
+            "systemInstruction": {"parts": [{"text": "system"}]},
+        }
+
+        first, _ = await wrap_cli_request(request, "gemini-3-flash", "project")
+        second, _ = await wrap_cli_request(request, "gemini-3-flash", "project")
+        image, _ = await wrap_cli_request(
+            request, "gemini-3.1-flash-image", "project"
+        )
+
+        self.assertTrue(first["requestId"].startswith("agent-"))
+        self.assertNotEqual(first["requestId"], second["requestId"])
+        self.assertEqual(
+            first["request"]["sessionId"], second["request"]["sessionId"]
+        )
+        self.assertNotIn("labels", first["request"])
+        self.assertNotIn("toolConfig", first["request"])
+        self.assertNotIn("maxOutputTokens", first["request"]["generationConfig"])
+        self.assertNotIn("enabledCreditTypes", first)
+        self.assertEqual(first["request"]["systemInstruction"]["role"], "user")
+        self.assertEqual(image["requestType"], "image_gen")
+        self.assertTrue(image["requestId"].startswith("image_gen/"))
+
+        claude, _ = await wrap_cli_request(
+            {
+                **request,
+                "generationConfig": {"maxOutputTokens": 4096},
+            },
+            "claude-sonnet-4-6",
+            "project",
+        )
+        self.assertEqual(
+            claude["request"]["toolConfig"]["functionCallingConfig"]["mode"],
+            "VALIDATED",
+        )
+        self.assertEqual(
+            claude["request"]["generationConfig"]["maxOutputTokens"], 4096
+        )
+
     async def test_antigravity_retry_never_reuses_an_attempted_credential(self):
         get_credential = AsyncMock(side_effect=[
             ("a.json", {"access_token": "a", "project_id": "a-project"}),

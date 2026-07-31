@@ -459,7 +459,7 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 - `CREDENTIAL_RETRY_LIMIT_ENABLED`: 是否限制单次请求尝试的凭证数量（默认：false；关闭时遍历全部可用凭证）
 - `MAX_RETRY_CREDENTIALS`: 开启限制后最多尝试的凭证总数，包含第一次（默认：5）
 - `CREDENTIAL_RETRY_INTERVAL`: 切换凭证前的等待时间，秒（默认：1.0）
-- `SESSION_AFFINITY_ENABLED`: 是否启用粘性会话（默认：false）
+- `SESSION_AFFINITY_ENABLED`: 是否启用粘性会话（默认：true）
 - `SESSION_AFFINITY_TTL_SECONDS`: 粘性会话有效期，秒（默认：3600）
 - `ANTI_TRUNCATION_MAX_ATTEMPTS`: 抗截断最大重试次数（默认：3）
 

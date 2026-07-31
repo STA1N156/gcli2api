@@ -92,10 +92,11 @@ class MongoDBManager:
         """
         创建索引
         """
-        from pymongo import IndexModel, ASCENDING
+        from pymongo import ASCENDING, IndexModel
 
         credentials_collection = self._db["credentials"]
         antigravity_credentials_collection = self._db["antigravity_credentials"]
+        session_bindings_collection = self._db["session_bindings"]
 
         # ===== Geminicli 凭证索引 =====
         geminicli_indexes = [
@@ -139,6 +140,9 @@ class MongoDBManager:
         try:
             await credentials_collection.create_indexes(geminicli_indexes)
             await antigravity_credentials_collection.create_indexes(antigravity_indexes)
+            await session_bindings_collection.create_index(
+                [("expires_at", ASCENDING)], name="idx_session_bindings_expires_at"
+            )
             log.debug("MongoDB indexes created successfully")
         except Exception as e:
             # 如果索引已存在，忽略错误
@@ -999,6 +1003,51 @@ class MongoDBManager:
                 "limit": limit,
                 "stats": {"total": 0, "normal": 0, "abnormal": 0},
             }
+
+    # ============ 粘性会话绑定 ============
+
+    async def get_session_binding(self, binding_key: str, now: float) -> Optional[str]:
+        self._ensure_initialized()
+        doc = await self._db["session_bindings"].find_one(
+            {"_id": binding_key, "expires_at": {"$gt": now}},
+            {"filename": 1},
+        )
+        return doc.get("filename") if doc else None
+
+    async def set_session_binding(
+        self, binding_key: str, filename: str, expires_at: float
+    ) -> bool:
+        self._ensure_initialized()
+        try:
+            collection = self._db["session_bindings"]
+            await collection.delete_many({"expires_at": {"$lte": time.time()}})
+            await collection.update_one(
+                {"_id": binding_key},
+                {"$set": {
+                    "filename": filename,
+                    "expires_at": expires_at,
+                    "updated_at": time.time(),
+                }},
+                upsert=True,
+            )
+            return True
+        except Exception as e:
+            log.error(f"Error setting session binding: {e}")
+            return False
+
+    async def delete_session_binding(
+        self, binding_key: str, expected_filename: Optional[str] = None
+    ) -> bool:
+        self._ensure_initialized()
+        try:
+            query = {"_id": binding_key}
+            if expected_filename is not None:
+                query["filename"] = expected_filename
+            await self._db["session_bindings"].delete_one(query)
+            return True
+        except Exception as e:
+            log.error(f"Error deleting session binding: {e}")
+            return False
 
     # ============ 配置管理（内存缓存 + 可选 Redis）============
 

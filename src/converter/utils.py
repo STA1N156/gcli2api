@@ -191,7 +191,7 @@ async def merge_system_messages(request_body: Dict[str, Any]) -> Dict[str, Any]:
         result["messages"] = converted_messages
         return result
     else:
-        # 兼容性模式关闭：提取连续的system消息合并为systemInstruction
+        # 兼容性模式关闭：按 CLIProxy 的方式提取全部 system/developer 消息
         system_parts = []
         
         # 如果已经从顶层 system 参数创建了 systemInstruction，获取现有的 parts
@@ -201,13 +201,11 @@ async def merge_system_messages(request_body: Dict[str, Any]) -> Dict[str, Any]:
                 system_parts = existing_instruction.get("parts", []).copy()
         
         remaining_messages = []
-        collecting_system = True
-
         for message in messages:
             role = message.get("role", "")
             content = message.get("content", "")
 
-            if role == "system" and collecting_system:
+            if role in ("system", "developer"):
                 # 提取system消息的文本内容
                 if isinstance(content, str):
                     if content.strip():
@@ -221,15 +219,7 @@ async def merge_system_messages(request_body: Dict[str, Any]) -> Dict[str, Any]:
                         elif isinstance(item, str) and item.strip():
                             system_parts.append({"text": item})
             else:
-                # 遇到非system消息，停止收集
-                collecting_system = False
-                if role == "system":
-                    # 将后续的system消息转换为user消息
-                    converted_message = message.copy()
-                    converted_message["role"] = "user"
-                    remaining_messages.append(converted_message)
-                else:
-                    remaining_messages.append(message)
+                remaining_messages.append(message)
 
         # 如果没有找到任何system消息（包括顶层参数和messages中的），返回原始请求体
         if not system_parts:

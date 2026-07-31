@@ -129,6 +129,19 @@ class PSQLManager:
             )
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_bindings (
+                binding_key TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                expires_at DOUBLE PRECISION NOT NULL,
+                updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_bindings_expires_at
+            ON session_bindings(expires_at)
+        """)
+
         # 索引
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_disabled ON credentials(disabled)
@@ -721,6 +734,61 @@ class PSQLManager:
                 "unique_email_count": 0,
                 "total_count": 0,
             }
+
+    # ============ 粘性会话绑定 ============
+
+    async def get_session_binding(self, binding_key: str, now: float) -> Optional[str]:
+        self._ensure_initialized()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT filename FROM session_bindings "
+                "WHERE binding_key = $1 AND expires_at > $2",
+                binding_key,
+                now,
+            )
+        return row["filename"] if row else None
+
+    async def set_session_binding(
+        self, binding_key: str, filename: str, expires_at: float
+    ) -> bool:
+        self._ensure_initialized()
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "DELETE FROM session_bindings WHERE expires_at <= $1",
+                        time.time(),
+                    )
+                    await conn.execute("""
+                        INSERT INTO session_bindings
+                            (binding_key, filename, expires_at, updated_at)
+                        VALUES ($1, $2, $3, EXTRACT(EPOCH FROM NOW()))
+                        ON CONFLICT(binding_key) DO UPDATE SET
+                            filename = EXCLUDED.filename,
+                            expires_at = EXCLUDED.expires_at,
+                            updated_at = EXCLUDED.updated_at
+                    """, binding_key, filename, expires_at)
+            return True
+        except Exception as e:
+            log.error(f"Error setting session binding: {e}")
+            return False
+
+    async def delete_session_binding(
+        self, binding_key: str, expected_filename: Optional[str] = None
+    ) -> bool:
+        self._ensure_initialized()
+        try:
+            query = "DELETE FROM session_bindings WHERE binding_key = $1"
+            args = [binding_key]
+            if expected_filename is not None:
+                query += " AND filename = $2"
+                args.append(expected_filename)
+            async with self._pool.acquire() as conn:
+                await conn.execute(query, *args)
+            return True
+        except Exception as e:
+            log.error(f"Error deleting session binding: {e}")
+            return False
 
     # ============ 配置管理（内存缓存）============
 

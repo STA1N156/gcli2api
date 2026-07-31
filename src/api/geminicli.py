@@ -73,19 +73,20 @@ async def _prepare_with_valid_credential(
     excluded_credentials: Set[str],
 ) -> Optional[Tuple[str, Dict[str, str], Dict[str, Any], str]]:
     """从未尝试的候选中找到一份结构完整的凭证。"""
+    excluded = set(excluded_credentials)
     while True:
         cred_result = await credential_manager.get_valid_credential(
             mode="geminicli",
             model_name=model_name,
             session_key=session_key,
-            exclude_credentials=set(excluded_credentials),
+            exclude_credentials=set(excluded),
         )
         if not cred_result:
             return None
 
         filename, credential_data = cred_result
         filename = Path(filename).name
-        excluded_credentials.add(filename)
+        excluded.add(filename)
         try:
             auth_headers, payload, prepared_url = (
                 await prepare_request_headers_and_payload(
@@ -99,6 +100,7 @@ async def _prepare_with_valid_credential(
             )
             continue
 
+        excluded_credentials.add(filename)
         if headers:
             auth_headers.update(headers)
         return filename, auth_headers, payload, prepared_url
