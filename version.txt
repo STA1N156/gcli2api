@@ -1,4 +1,4 @@
-full_hash=52fd3623772c29f01bdb4364b09b92a05f6a277a
-short_hash=52fd362
-message=Restore shared sticky credential routing
-date=2026-08-01 00:10:14 +0800
+full_hash=364cbc5c9f555ae919a157bc6cd0a226f5d7d7c9
+short_hash=364cbc5
+message=Fix Antigravity payload and restore 64k output limit
+date=2026-08-01 00:31:59 +0800
