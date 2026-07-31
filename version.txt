@@ -1,4 +1,4 @@
-full_hash=e7b5d43a502f3d1d935ef45dc84430085f185391
-short_hash=e7b5d43
-message=Fix Antigravity retry identity and reset abnormal states
-date=2026-07-31 00:12:15 +0800
+full_hash=52fd3623772c29f01bdb4364b09b92a05f6a277a
+short_hash=52fd362
+message=Restore shared sticky credential routing
+date=2026-08-01 00:10:14 +0800
