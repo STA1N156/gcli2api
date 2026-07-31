@@ -352,9 +352,11 @@ class CredentialRetryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("labels", first["request"])
         self.assertNotIn("toolConfig", first["request"])
-        self.assertNotIn("maxOutputTokens", first["request"]["generationConfig"])
+        self.assertEqual(
+            first["request"]["generationConfig"]["maxOutputTokens"], 64000
+        )
         self.assertNotIn("enabledCreditTypes", first)
-        self.assertEqual(first["request"]["systemInstruction"]["role"], "user")
+        self.assertNotIn("role", first["request"]["systemInstruction"])
         self.assertEqual(image["requestType"], "image_gen")
         self.assertTrue(image["requestId"].startswith("image_gen/"))
 
@@ -371,7 +373,16 @@ class CredentialRetryTests(unittest.IsolatedAsyncioTestCase):
             "VALIDATED",
         )
         self.assertEqual(
-            claude["request"]["generationConfig"]["maxOutputTokens"], 4096
+            claude["request"]["generationConfig"]["maxOutputTokens"], 64000
+        )
+
+        with_client_session, _ = await wrap_cli_request(
+            {**request, "sessionId": "client-session"},
+            "gemini-3-flash",
+            "project",
+        )
+        self.assertEqual(
+            with_client_session["request"]["sessionId"], "client-session"
         )
 
     async def test_antigravity_retry_never_reuses_an_attempted_credential(self):

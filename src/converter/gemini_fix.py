@@ -908,7 +908,8 @@ async def normalize_gemini_request(
     # 2. 参数范围限制
     if generation_config:
         clamp_generation_config(generation_config)
-        _sanitize_thinking_config(generation_config)
+    generation_config["maxOutputTokens"] = 64000
+    _sanitize_thinking_config(generation_config)
 
     if "contents" in result:
         cleaned_contents = []
@@ -971,7 +972,6 @@ async def normalize_gemini_request(
         
         result["contents"] = cleaned_contents
 
-    if generation_config:
-        result["generationConfig"] = generation_config
+    result["generationConfig"] = generation_config
 
     return result

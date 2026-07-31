@@ -47,7 +47,7 @@ class GeminiThinkingConfigTests(unittest.IsolatedAsyncioTestCase):
 
 
 class UpstreamConverterRegressionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_normalization_does_not_invent_output_or_top_k_limits(self):
+    async def test_normalization_forces_output_limit_without_inventing_top_k(self):
         old_return_thoughts = config.get_return_thoughts_to_frontend
 
         async def disabled():
@@ -67,7 +67,7 @@ class UpstreamConverterRegressionTests(unittest.IsolatedAsyncioTestCase):
             config.get_return_thoughts_to_frontend = old_return_thoughts
 
         generation_config = normalized["generationConfig"]
-        self.assertNotIn("maxOutputTokens", generation_config)
+        self.assertEqual(generation_config["maxOutputTokens"], 64000)
         self.assertNotIn("topK", generation_config)
 
     def test_antigravity_claude_tools_use_parameters(self):

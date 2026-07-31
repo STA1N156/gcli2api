@@ -38,14 +38,14 @@ class OpenAIToolConversionTests(unittest.IsolatedAsyncioTestCase):
         final_payload, _ = await wrap_cli_request(normalized, model, "project")
 
         self.assertNotIn("enabledCreditTypes", final_payload)
-        self.assertNotIn(
-            "maxOutputTokens",
-            final_payload["request"]["generationConfig"],
+        self.assertEqual(
+            final_payload["request"]["generationConfig"]["maxOutputTokens"],
+            64000,
         )
         self.assertNotIn("toolConfig", final_payload["request"])
         self.assertNotIn("safetySettings", final_payload["request"])
-        self.assertEqual(
-            final_payload["request"]["systemInstruction"]["role"], "user"
+        self.assertNotIn(
+            "role", final_payload["request"]["systemInstruction"]
         )
 
     async def test_all_system_messages_become_one_system_instruction(self):

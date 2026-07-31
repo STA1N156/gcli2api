@@ -71,12 +71,11 @@ async def wrap_cli_request(
 ) -> Tuple[Dict[str, Any], str]:
     inner = dict(gemini_request)
     inner.pop("safetySettings", None)
-    inner["sessionId"] = _generate_stable_session_id(inner)
-    system_instruction = inner.get("systemInstruction")
-    if isinstance(system_instruction, dict):
-        system_instruction = dict(system_instruction)
-        system_instruction["role"] = "user"
-        inner["systemInstruction"] = system_instruction
+    inner.setdefault("sessionId", _generate_stable_session_id(inner))
+
+    generation_config = dict(inner.get("generationConfig") or {})
+    generation_config["maxOutputTokens"] = 64000
+    inner["generationConfig"] = generation_config
 
     if "claude" in model.lower():
         tool_config = inner.get("toolConfig") or {}
@@ -84,12 +83,6 @@ async def wrap_cli_request(
         function_config["mode"] = "VALIDATED"
         tool_config["functionCallingConfig"] = function_config
         inner["toolConfig"] = tool_config
-    else:
-        generation_config = inner.get("generationConfig")
-        if isinstance(generation_config, dict):
-            generation_config = dict(generation_config)
-            generation_config.pop("maxOutputTokens", None)
-            inner["generationConfig"] = generation_config
 
     request_id = _generate_request_id(model)
     request_type = "image_gen" if "image" in model.lower() else "agent"
