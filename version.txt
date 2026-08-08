@@ -1,4 +1,4 @@
-full_hash=9f68b7c6deb2598467701b46e3a04abab66c147b
-short_hash=9f68b7c
-message=Fix blank content in Antigravity tool calls
-date=2026-08-08 15:38:50 +0800
+full_hash=d9ddc257a3f0a0a4afe7b64d88467d3d2ece5a9f
+short_hash=d9ddc25
+message=Fix encrypted Antigravity tool schema
+date=2026-08-08 17:01:58 +0800
