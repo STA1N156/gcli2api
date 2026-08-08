@@ -1,4 +1,4 @@
-full_hash=364cbc5c9f555ae919a157bc6cd0a226f5d7d7c9
-short_hash=364cbc5
-message=Fix Antigravity payload and restore 64k output limit
-date=2026-08-01 00:31:59 +0800
+full_hash=9f68b7c6deb2598467701b46e3a04abab66c147b
+short_hash=9f68b7c
+message=Fix blank content in Antigravity tool calls
+date=2026-08-08 15:38:50 +0800
