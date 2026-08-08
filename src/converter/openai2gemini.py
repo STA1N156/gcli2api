@@ -1098,6 +1098,9 @@ def extract_tool_calls_from_parts(
                 continue
             text_content += text
 
+    if tool_calls and not text_content.strip():
+        text_content = ""
+
     return tool_calls, text_content
 
 

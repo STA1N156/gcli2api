@@ -1,9 +1,14 @@
+import json
 import unittest
 
 import config
 from src.api.antigravity import wrap_cli_request
 from src.converter.gemini_fix import normalize_gemini_request
-from src.converter.openai2gemini import convert_openai_to_gemini_request
+from src.converter.openai2gemini import (
+    convert_gemini_to_openai_response,
+    convert_gemini_to_openai_stream,
+    convert_openai_to_gemini_request,
+)
 
 
 class OpenAIToolConversionTests(unittest.IsolatedAsyncioTestCase):
@@ -91,6 +96,37 @@ class OpenAIToolConversionTests(unittest.IsolatedAsyncioTestCase):
         text_part = converted["contents"][0]["parts"][0]
         self.assertEqual(text_part, {"text": "hello"})
         self.assertIsInstance(text_part["text"], str)
+
+    def test_tool_call_drops_whitespace_only_content(self):
+        response = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "\n"},
+                            {
+                                "functionCall": {
+                                    "id": "call_1",
+                                    "name": "test_tool",
+                                    "args": {},
+                                }
+                            },
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+
+        converted = convert_gemini_to_openai_response(response, "test-model")
+        self.assertIsNone(converted["choices"][0]["message"]["content"])
+
+        chunk = convert_gemini_to_openai_stream(
+            f"data: {json.dumps(response)}", "test-model", "response-id"
+        )
+        delta = json.loads(chunk.removeprefix("data: "))["choices"][0]["delta"]
+        self.assertNotIn("content", delta)
 
 
 if __name__ == "__main__":
