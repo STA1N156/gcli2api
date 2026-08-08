@@ -200,7 +200,7 @@ def _clean_parameters_json_schema(
         "allOf", "anyOf", "oneOf", "$defs", "definitions", "example",
         "examples", "readOnly", "writeOnly", "const", "additionalItems",
         "contains", "patternProperties", "dependencies", "propertyNames",
-        "if", "then", "else", "contentEncoding", "contentMediaType",
+        "if", "then", "else", "contentEncoding", "contentMediaType", "encrypted",
     }
     for key in list(result.keys()):
         if key in unsupported_keys or key.startswith("x-"):

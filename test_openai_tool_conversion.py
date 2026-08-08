@@ -97,6 +97,35 @@ class OpenAIToolConversionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(text_part, {"text": "hello"})
         self.assertIsInstance(text_part["text"], str)
 
+    async def test_antigravity_drops_encrypted_tool_schema_metadata(self):
+        converted = await convert_openai_to_gemini_request(
+            {
+                "model": "gemini-3.1-pro-preview",
+                "messages": [{"role": "user", "content": "hello"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "save_secret",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "value": {"type": "string", "encrypted": True}
+                                },
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+        converted["model"] = "gemini-3.1-pro-preview"
+        normalized = await normalize_gemini_request(converted, mode="antigravity")
+
+        value_schema = normalized["tools"][0]["functionDeclarations"][0][
+            "parameters"
+        ]["properties"]["value"]
+        self.assertEqual(value_schema, {"type": "string"})
+
     def test_tool_call_drops_whitespace_only_content(self):
         response = {
             "candidates": [
