@@ -25,7 +25,7 @@ def get_geminicli_user_agent(model: str = "") -> str:
 GEMINICLI_USER_AGENT = get_geminicli_user_agent()
 
 # Antigravity CLI 客户端仿真常量
-ANTIGRAVITY_CLI_VERSION = "1.0.1"
+ANTIGRAVITY_CLI_VERSION = "1.1.12"
 ANTIGRAVITY_CLI_PLATFORM = "windows/amd64"
 ANTIGRAVITY_USER_AGENT = f"antigravity/cli/{ANTIGRAVITY_CLI_VERSION} {ANTIGRAVITY_CLI_PLATFORM}"
 
@@ -67,11 +67,6 @@ BASE_MODELS = [
 
 # ====================== Model Helper Functions ======================
 
-def is_fake_streaming_model(model_name: str) -> bool:
-    """Check if model name indicates fake streaming should be used."""
-    return model_name.startswith("假流式/")
-
-
 def is_anti_truncation_model(model_name: str) -> bool:
     """Check if model name indicates anti-truncation should be used."""
     return model_name.startswith("流式抗截断/")
@@ -80,9 +75,9 @@ def is_anti_truncation_model(model_name: str) -> bool:
 def get_base_model_from_feature_model(model_name: str) -> str:
     """Get base model name from feature model name."""
     # Remove feature prefixes
-    for prefix in ["假流式/", "流式抗截断/"]:
-        if model_name.startswith(prefix):
-            return model_name[len(prefix) :]
+    prefix = "流式抗截断/"
+    if model_name.startswith(prefix):
+        return model_name[len(prefix) :]
     return model_name
 
 
@@ -101,9 +96,6 @@ def get_available_models(router_type: str = "openai") -> List[str]:
     for base_model in BASE_MODELS:
         # 基础模型
         models.append(base_model)
-
-        # 假流式模型 (前缀格式)
-        models.append(f"假流式/{base_model}")
 
         # 流式抗截断模型 (流式和非流式都支持，前缀格式)
         models.append(f"流式抗截断/{base_model}")
@@ -128,19 +120,16 @@ def get_available_models(router_type: str = "openai") -> List[str]:
         # 1. 单独的 thinking 后缀
         for thinking_suffix in thinking_suffixes:
             models.append(f"{base_model}{thinking_suffix}")
-            models.append(f"假流式/{base_model}{thinking_suffix}")
             models.append(f"流式抗截断/{base_model}{thinking_suffix}")
 
         # 2. 单独的 search 后缀
         models.append(f"{base_model}{search_suffix}")
-        models.append(f"假流式/{base_model}{search_suffix}")
         models.append(f"流式抗截断/{base_model}{search_suffix}")
 
         # 3. thinking + search 组合后缀
         for thinking_suffix in thinking_suffixes:
             combined_suffix = f"{thinking_suffix}{search_suffix}"
             models.append(f"{base_model}{combined_suffix}")
-            models.append(f"假流式/{base_model}{combined_suffix}")
             models.append(f"流式抗截断/{base_model}{combined_suffix}")
 
     return models

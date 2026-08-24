@@ -1267,32 +1267,45 @@ class SQLiteManager:
         try:
             table_name = self._get_table_name(mode)
             async with aiosqlite.connect(self._db_path) as db:
-                # 条件写入：只有 error_codes 非空时才触发
-                await db.execute(f"""
-                    UPDATE {table_name}
-                    SET last_success = unixepoch(),
-                        error_codes   = '[]',
-                        error_messages = '{{}}',
-                        updated_at    = unixepoch()
+                async with db.execute(f"""
+                    SELECT error_codes, error_messages, model_cooldowns
+                    FROM {table_name}
                     WHERE filename = ?
-                      AND (error_codes IS NOT NULL AND error_codes != '[]' AND error_codes != '')
-                """, (filename,))
+                """, (filename,)) as cursor:
+                    row = await cursor.fetchone()
 
-                # 条件删除模型冷却：只有模型键存在时才写入
-                if model_name:
-                    async with db.execute(f"""
-                        SELECT model_cooldowns FROM {table_name} WHERE filename = ?
-                    """, (filename,)) as cursor:
-                        row = await cursor.fetchone()
-                        if row:
-                            cooldowns = json.loads(row[0] or '{}')
-                            if model_name in cooldowns:
-                                cooldowns.pop(model_name)
-                                await db.execute(f"""
-                                    UPDATE {table_name}
-                                    SET model_cooldowns = ?, updated_at = unixepoch()
-                                    WHERE filename = ?
-                                """, (json.dumps(cooldowns), filename))
+                if not row:
+                    return
+
+                error_codes, error_messages, cooldowns_json = row
+                has_errors = error_codes not in (None, "", "[]")
+                cooldowns = json.loads(cooldowns_json or "{}")
+                has_model_cooldown = bool(model_name and model_name in cooldowns)
+
+                # 大多数成功请求的状态本来就是干净的，不要为它们抢 SQLite 写锁。
+                if not has_errors and not has_model_cooldown:
+                    return
+
+                if has_errors:
+                    await db.execute(f"""
+                        UPDATE {table_name}
+                        SET last_success = unixepoch(),
+                            error_codes = '[]',
+                            error_messages = '{{}}',
+                            updated_at = unixepoch()
+                        WHERE filename = ?
+                          AND error_codes IS ?
+                          AND error_messages IS ?
+                    """, (filename, error_codes, error_messages))
+
+                if has_model_cooldown:
+                    cooldowns.pop(model_name)
+                    await db.execute(f"""
+                        UPDATE {table_name}
+                        SET model_cooldowns = ?, updated_at = unixepoch()
+                        WHERE filename = ?
+                          AND model_cooldowns = ?
+                    """, (json.dumps(cooldowns), filename, cooldowns_json))
 
                 await db.commit()
 

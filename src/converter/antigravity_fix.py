@@ -1,9 +1,10 @@
 """
-Gemini Format Utilities - 统一的 Gemini 格式处理和转换工具
-提供对 Gemini API 请求体和响应的标准化处理
+Antigravity Format Utilities - 独立的 Antigravity 请求处理和转换工具
+从 gemini_fix.py 中拆分出来，专供 src/router/antigravity 使用
 ────────────────────────────────────────────────────────────────
 """
 import json
+import uuid
 from typing import Any, Dict, Optional
 
 from log import log
@@ -12,9 +13,6 @@ from src.converter.thoughtSignature_fix import SKIP_THOUGHT_SIGNATURE_VALIDATOR
 
 # ==================== Gemini API 配置 ====================
 
-# ====================== Model Configuration ======================
-
-# Default Safety Settings for Google API
 DEFAULT_SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -35,6 +33,7 @@ LITE_SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
 ]
+
 
 def _append_schema_hint(schema: Dict[str, Any], hint: str) -> None:
     """Move fragile validation details into description instead of sending them raw."""
@@ -292,7 +291,7 @@ def _normalize_tools_for_internal_api(tools: Any) -> Any:
     return normalized_tools
 
 
-def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str, mode: str = "geminicli") -> Any:
+def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str, mode: str = "antigravity") -> Any:
     if not isinstance(tools, list):
         return tools
 
@@ -306,10 +305,12 @@ def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str, mode: str 
                 continue
 
             normalized_tool = tool.copy()
+
             schema = {"type": "object", "properties": {}}
             name = ""
             description = ""
 
+            # Extract schema from either format
             custom_tool = normalized_tool.get("custom")
             if isinstance(custom_tool, dict):
                 schema = custom_tool.get("input_schema") or custom_tool.get("inputSchema") or schema
@@ -318,26 +319,31 @@ def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str, mode: str 
             else:
                 declarations = normalized_tool.get("functionDeclarations") or normalized_tool.get("function_declarations")
                 if isinstance(declarations, list) and declarations and isinstance(declarations[0], dict):
-                    declaration = declarations[0]
+                    decl = declarations[0]
                     schema = (
-                        declaration.get("parametersJsonSchema")
-                        or declaration.get("parameters_json_schema")
-                        or declaration.get("parameters")
-                        or schema
+                        decl.get("parametersJsonSchema") or
+                        decl.get("parameters_json_schema") or
+                        decl.get("parameters") or schema
                     )
-                    name = declaration.get("name", "")
-                    description = declaration.get("description", "")
+                    name = decl.get("name", "")
+                    description = decl.get("description", "")
 
+            # For ALL Claude models, try outputting functionDeclarations with parameters!
+            # If Google's backend expects parameters to translate to input_schema, this will fix the Field required error.
             normalized_tools.append({
                 "functionDeclarations": [{
                     "name": name,
                     "description": description,
-                    "parameters": schema,
+                    "parameters": schema
                 }]
             })
 
         return normalized_tools
 
+    # 对于 Gemini 模型：
+    # 后端需要标准的 functionDeclarations 格式。
+    # 并且，必须只能使用 "parameters" 字段，如果使用了 "parametersJsonSchema"，
+    # 会报 "parameters_json_schema must not be set when parameters is set" 等冲突错误
     normalized_tools = []
     for tool in tools:
         if not isinstance(tool, dict):
@@ -345,20 +351,24 @@ def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str, mode: str 
             continue
 
         normalized_tool = tool.copy()
+
+        # 1. 如果包含 Anthropic 原生的 "custom" 工具格式，将其转换为 Gemini 的 functionDeclarations 格式
         custom_tool = normalized_tool.get("custom")
         if isinstance(custom_tool, dict):
             schema = custom_tool.get("input_schema") or custom_tool.get("inputSchema")
             if schema in (None, {}, []):
                 schema = {"type": "object", "properties": {}}
+            declaration = {
+                "name": custom_tool.get("name", ""),
+                "description": custom_tool.get("description", ""),
+                "parameters": schema
+            }
             normalized_tools.append({
-                "functionDeclarations": [{
-                    "name": custom_tool.get("name", ""),
-                    "description": custom_tool.get("description", ""),
-                    "parameters": schema,
-                }]
+                "functionDeclarations": [declaration]
             })
             continue
 
+        # 2. 如果包含标准的 functionDeclarations 格式，确保参数不为空且只使用 parameters 字段
         declarations = normalized_tool.get("functionDeclarations") or normalized_tool.get("function_declarations")
         if isinstance(declarations, list):
             normalized_declarations = []
@@ -368,17 +378,21 @@ def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str, mode: str 
                     continue
 
                 normalized_declaration = declaration.copy()
+                # 兼容不同字段格式并归一化到 parameters
                 schema = (
                     normalized_declaration.get("parameters")
                     or normalized_declaration.get("parametersJsonSchema")
                     or normalized_declaration.get("parameters_json_schema")
                 )
+
                 if schema in (None, {}, []):
                     schema = {"type": "object", "properties": {}}
 
+                # 只保留 parameters 字段，防止与 parametersJsonSchema 冲突
                 normalized_declaration["parameters"] = schema
                 normalized_declaration.pop("parametersJsonSchema", None)
                 normalized_declaration.pop("parameters_json_schema", None)
+
                 normalized_declarations.append(normalized_declaration)
 
             normalized_tool.pop("function_declarations", None)
@@ -410,174 +424,298 @@ def _normalize_part_thought_signature(part: Dict[str, Any], model_name: str) -> 
     return normalized
 
 
+def _ensure_tool_call_ids(contents: Any, model_name: str) -> Any:
+    """
+    确保 functionCall/functionResponse 携带 id 字段。
+
+    Antigravity 后端在目标模型为 Claude 时，会将 Gemini 的
+    functionCall/functionResponse 内部转换为 Anthropic 的
+    tool_use/tool_result，而后者的 id 是必填字段。原生 Gemini 请求
+    可能不带 id（Gemini API 本身不要求），因此这里按 name 补全缺失的 id，
+    保证同一次调用的 functionCall 与 functionResponse 使用相同 id。
+    """
+    if "claude" not in (model_name or "").lower():
+        return contents
+    if not isinstance(contents, list):
+        return contents
+
+    pending_ids_by_name: Dict[str, list] = {}
+
+    for content in contents:
+        if not isinstance(content, dict):
+            continue
+        for part in content.get("parts", []) or []:
+            if not isinstance(part, dict):
+                continue
+
+            fc = part.get("functionCall")
+            if isinstance(fc, dict) and not fc.get("id"):
+                new_id = f"toolu_{uuid.uuid4().hex}"
+                fc["id"] = new_id
+                pending_ids_by_name.setdefault(fc.get("name"), []).append(new_id)
+                continue
+
+            fr = part.get("functionResponse")
+            if isinstance(fr, dict) and not fr.get("id"):
+                name = fr.get("name")
+                queue = pending_ids_by_name.get(name)
+                if queue:
+                    fr["id"] = queue.pop(0)
+                else:
+                    fr["id"] = f"toolu_{uuid.uuid4().hex}"
+
+    return contents
+
+
 SUPPORTED_ASPECT_RATIOS = [
     (1, 1), (2, 3), (3, 2), (3, 4), (4, 3),
     (4, 5), (5, 4), (9, 16), (16, 9), (21, 9),
 ]
 
 
-def get_base_model_name(model_name: str) -> str:
-    """移除模型名称中的控制后缀，返回基础模型名。"""
-    suffixes = [
-        "-maxthinking", "-nothinking",
-        "-minimal", "-medium", "-search", "-think",
-        "-high", "-max", "-low",
-    ]
-    result = model_name
-    changed = True
-    while changed:
-        changed = False
-        for suffix in suffixes:
-            if result.endswith(suffix):
-                result = result[:-len(suffix)]
-                changed = True
-    return result
-
-
-def clamp_generation_config(generation_config: Dict[str, Any]) -> None:
-    temperature = generation_config.get("temperature")
-    if temperature is not None:
-        try:
-            generation_config["temperature"] = min(float(temperature), 1.0)
-        except (TypeError, ValueError):
-            generation_config.pop("temperature", None)
-
-
-def _thinking_config_enabled(thinking_config: Any) -> bool:
-    if not isinstance(thinking_config, dict):
-        return False
-
-    if thinking_config.get("thinkingLevel"):
-        return True
-
-    budget = thinking_config.get("thinkingBudget")
-    if budget is None:
-        return False
-    try:
-        return int(budget) > 0
-    except (TypeError, ValueError):
-        return False
-
-
-def _sanitize_thinking_config(generation_config: Dict[str, Any]) -> None:
-    thinking_config = generation_config.get("thinkingConfig")
-    if not isinstance(thinking_config, dict):
-        return
-
-    if (
-        (thinking_config.get("includeThoughts") is True or thinking_config.get("include_thoughts") is True)
-        and not _thinking_config_enabled(thinking_config)
-    ):
-        thinking_config.pop("includeThoughts", None)
-        thinking_config.pop("include_thoughts", None)
-
-    if not thinking_config:
-        generation_config.pop("thinkingConfig", None)
-
-
-def get_thinking_settings(model_name: str) -> tuple[Optional[int], Optional[str]]:
+def _parse_size_to_image_config(size_str: str) -> Dict[str, str]:
     """
-    根据模型名称获取思考配置
+    解析用户传入的 size 参数为 Gemini imageConfig 参数
 
-    支持两种模式:
-    1. CLI 模式思考预算 (Gemini 2.5 系列): -max, -high, -medium, -low, -minimal
-    2. CLI 模式思考等级 (Gemini 3 Preview 系列): -high, -medium, -low, -minimal (仅 3-flash)
-    3. 兼容旧模式: -maxthinking, -nothinking (不返回给用户)
+    支持格式: "1024x1536", "1024*1536", "1024X1536"
 
     Returns:
-        (thinking_budget, thinking_level): 思考预算和思考等级
+        包含 aspectRatio 和/或 imageSize 的字典
     """
-    base_model = get_base_model_name(model_name)
+    import re
 
-    # ========== 兼容旧模式 (不返回给用户) ==========
-    if "-nothinking" in model_name:
-        # nothinking 模式: 限制思考
-        if "flash" in base_model:
-            return 0, None
-        return 128, None
-    elif "-maxthinking" in model_name:
-        # maxthinking 模式: 最大思考预算
-        budget = 24576 if "flash" in base_model else 32768
-        if "gemini-3" in base_model:
-            # Gemini 3 系列不支持 thinkingBudget，返回 high 等级
-            return None, "high"
-        else:
-            return budget, None
+    config = {}
+    size_str = size_str.strip()
 
-    # ========== 新 CLI 模式: 基于思考预算/等级 ==========
+    match = re.match(r"^(\d+)\s*[xX*×]\s*(\d+)$", size_str)
+    if not match:
+        return config
 
-    # Gemini 3 Preview 系列: 使用 thinkingLevel
-    if "gemini-3" in base_model:
-        if "-high" in model_name:
-            return None, "high"
-        elif "-medium" in model_name:
-            # 仅 3-flash-preview 支持 medium
-            if "flash" in base_model:
-                return None, "medium"
-            # pro 系列不支持 medium，返回 Default
-            return None, None
-        elif "-low" in model_name:
-            return None, "low"
-        elif "-minimal" in model_name:
-            return None, None
-        else:
-            # Default: 不设置 thinking 配置
-            return None, None
+    width, height = int(match.group(1)), int(match.group(2))
 
-    # Gemini 2.5 系列: 使用 thinkingBudget
-    elif "gemini-2.5" in base_model:
-        if "-max" in model_name:
-            # 2.5-flash-max: 24576, 2.5-pro-max: 32768
-            budget = 24576 if "flash" in base_model else 32768
-            return budget, None
-        elif "-high" in model_name:
-            # 2.5-flash-high: 16000, 2.5-pro-high: 16000
-            return 16000, None
-        elif "-medium" in model_name:
-            # 2.5-flash-medium: 8192, 2.5-pro-medium: 8192
-            return 8192, None
-        elif "-low" in model_name:
-            # 2.5-flash-low: 1024, 2.5-pro-low: 1024
-            return 1024, None
-        elif "-minimal" in model_name:
-            # 2.5-flash-minimal: 0, 2.5-pro-minimal: 128
-            budget = 0 if "flash" in base_model else 128
-            return budget, None
-        else:
-            # Default: 不设置 thinking budget
-            return None, None
+    if width <= 0 or height <= 0:
+        return config
 
-    # 其他模型: 不设置 thinking 配置
-    return None, None
+    # 计算最接近的支持宽高比
+    target_ratio = width / height
+    best_ratio = None
+    best_diff = float("inf")
+    for w, h in SUPPORTED_ASPECT_RATIOS:
+        diff = abs(target_ratio - w / h)
+        if diff < best_diff:
+            best_diff = diff
+            best_ratio = f"{w}:{h}"
+    if best_ratio:
+        config["aspectRatio"] = best_ratio
+
+    # 根据最大边长确定 imageSize（使用最接近的档位）
+    max_dim = max(width, height)
+    if max_dim <= 1280:
+        config["imageSize"] = "1K"
+    elif max_dim <= 2560:
+        config["imageSize"] = "2K"
+    else:
+        config["imageSize"] = "4K"
+
+    return config
 
 
-def is_search_model(model_name: str) -> bool:
-    """检查是否为搜索模型"""
-    return "-search" in model_name
-
-
-# ==================== 统一的 Gemini 请求后处理 ====================
-
-def is_thinking_model(model_name: str) -> bool:
-    """检查是否为思考模型 (包含 -thinking 或 pro)"""
-    return "think" in model_name or "pro" in model_name.lower()
-
-
-async def normalize_gemini_request(
-    request: Dict[str, Any],
-    mode: str = "geminicli"
+def prepare_image_generation_request(
+    request_body: Dict[str, Any],
+    model: str
 ) -> Dict[str, Any]:
     """
-    规范化 Gemini 请求
+    图像生成模型请求体后处理
+
+    支持三种方式指定图片参数（优先级从高到低）:
+    1. size 参数: 如 "1024x1536"，自动计算 aspectRatio 和 imageSize
+    2. 模型名后缀: 如 -4k, -2k, -16x9, -1x1
+    3. 默认值: 不设置额外参数
+
+    Args:
+        request_body: 原始请求体
+        model: 模型名称
+
+    Returns:
+        处理后的请求体
+    """
+    request_body = request_body.copy()
+    model_lower = model.lower()
+
+    # 优先使用 size 参数
+    size_str = request_body.pop("size", None)
+    if size_str:
+        image_config = _parse_size_to_image_config(size_str)
+        log.debug(f"[IMAGE] 从 size 参数 '{size_str}' 解析: {image_config}")
+    else:
+        # 从模型名后缀解析
+        image_size = "4K" if "-4k" in model_lower else "2K" if "-2k" in model_lower else None
+
+        aspect_ratio = None
+        for suffix, ratio in [
+            ("-21x9", "21:9"), ("-16x9", "16:9"), ("-9x16", "9:16"),
+            ("-4x3", "4:3"), ("-3x4", "3:4"), ("-1x1", "1:1")
+        ]:
+            if suffix in model_lower:
+                aspect_ratio = ratio
+                break
+
+        image_config = {}
+        if aspect_ratio:
+            image_config["aspectRatio"] = aspect_ratio
+        if image_size:
+            image_config["imageSize"] = image_size
+
+    request_body["model"] = "gemini-3.1-flash-image"  # 统一使用基础模型名
+    request_body["generationConfig"] = {
+        "candidateCount": 1,
+        "imageConfig": image_config
+    }
+
+    # 移除不需要的字段
+    for key in ("systemInstruction", "tools", "toolConfig"):
+        request_body.pop(key, None)
+
+    return request_body
+
+
+# ==================== 模型特性辅助函数 ====================
+
+def is_thinking_model(model_name: str) -> bool:
+    """检查是否为思考模型 (模型名包含 think)"""
+    return "think" in model_name.lower()
+
+
+def _clamp_temperature(generation_config: Dict[str, Any]) -> None:
+    temperature = generation_config.get("temperature")
+    if temperature is None:
+        return
+    try:
+        generation_config["temperature"] = min(float(temperature), 1.0)
+    except (TypeError, ValueError):
+        generation_config.pop("temperature", None)
+
+
+def _normalize_antigravity_request(
+    result: Dict[str, Any],
+    model: str,
+    generation_config: Dict[str, Any],
+    return_thoughts: bool,
+) -> str:
+    """antigravity 模式专属处理，返回处理后的模型名"""
+    # 1. 思考模型处理：antigravity 模型名不带 -high/-low/-search 等后缀，
+    # 仅通过 "think" 是否出现在模型名中判断，命中则使用默认思考预算。
+    thinking = is_thinking_model(model)
+
+    # 针对 Gemini 模型：根据思考设置映射至真实的 Antigravity 后端模型 ID
+    if "gemini" in model.lower():
+        original_model = model
+
+        # 兼容旧的客户端别名：Antigravity 后端的 Gemini 3.1 Pro High
+        # 实际使用 gemini-pro-agent 作为模型 ID。
+        if model.lower() == "gemini-3.1-pro-high":
+            model = "gemini-pro-agent"
+            log.debug(f"[ANTIGRAVITY] 映射模型: {original_model} -> {model}")
+
+        # Antigravity uses the Gemini 3.x model route/name to select thinking depth.
+        # Do not send thinkingLevel/thinkingBudget because they can conflict with that route.
+        # Keep includeThoughts so reasoning is still returned to the frontend when enabled.
+        if "gemini-3" in original_model.lower():
+            thinking_config = generation_config.setdefault("thinkingConfig", {})
+            thinking_config.pop("thinkingBudget", None)
+            thinking_config.pop("thinkingLevel", None)
+            thinking_config["includeThoughts"] = return_thoughts
+        else:
+            # 对于 Gemini 2.5 系列，保留 thinkingConfig
+            if thinking:
+                if "thinkingConfig" not in generation_config:
+                    generation_config["thinkingConfig"] = {}
+                thinking_config = generation_config["thinkingConfig"]
+                thinking_config["thinkingBudget"] = 1024
+                thinking_config.pop("thinkingLevel", None)
+                thinking_config["includeThoughts"] = return_thoughts
+    else:
+        # 针对非 Gemini 模型（如 Claude）
+        if thinking:
+            # 直接设置 thinkingConfig，默认思考预算
+            if "thinkingConfig" not in generation_config:
+                generation_config["thinkingConfig"] = {}
+
+            thinking_config = generation_config["thinkingConfig"]
+            thinking_config["thinkingBudget"] = 1024
+            thinking_config.pop("thinkingLevel", None)
+            thinking_config["includeThoughts"] = return_thoughts
+
+        # 检查最后一个 assistant 消息是否以 thinking 块开始
+        contents = result.get("contents", [])
+
+        if "claude" in model.lower():
+            # 检测是否有工具调用（MCP场景）
+            has_tool_calls = any(
+                isinstance(content, dict) and
+                any(
+                    isinstance(part, dict) and ("functionCall" in part or "function_call" in part)
+                    for part in content.get("parts", [])
+                )
+                for content in contents
+            )
+
+            if has_tool_calls:
+                # MCP 场景：检测到工具调用，移除 thinkingConfig
+                log.warning(f"[ANTIGRAVITY] 检测到工具调用（MCP场景），移除 thinkingConfig 避免失效")
+                generation_config.pop("thinkingConfig", None)
+            else:
+                # 非 MCP 场景：填充思考块
+                # 找到最后一个 model 角色的 content
+                for i in range(len(contents) - 1, -1, -1):
+                    content = contents[i]
+                    if isinstance(content, dict) and content.get("role") == "model":
+                        # 在 parts 开头插入思考块（使用官方跳过验证的虚拟签名）
+                        parts = content.get("parts", [])
+                        thinking_part = {
+                            "text": "...",
+                            "thoughtSignature": "skip_thought_signature_validator"  # 官方文档推荐的虚拟签名
+                        }
+                        # 如果第一个 part 不是 thinking，则插入
+                        if not parts or not (isinstance(parts[0], dict) and ("thought" in parts[0] or "thoughtSignature" in parts[0])):
+                            content["parts"] = [thinking_part] + parts
+                            log.debug(f"[ANTIGRAVITY] 已在最后一个 assistant 消息开头插入思考块（含跳过验证签名）")
+                        break
+
+    if "claude" in model.lower():
+        # 2. Claude 模型关键词映射
+        # 使用关键词匹配而不是精确匹配，更灵活地处理各种变体
+        original_model = model
+        if "opus" in model.lower():
+            model = "claude-opus-4-6-thinking"
+        elif "sonnet" in model.lower():
+            model = "claude-sonnet-4-6"
+        elif "haiku" in model.lower():
+            model = "gemini-2.5-flash"
+        elif "claude" in model.lower():
+            # Claude 模型兜底：如果包含 claude 但不是 opus/sonnet/haiku
+            model = "claude-sonnet-4-6"
+
+        if original_model != model:
+            log.debug(f"[ANTIGRAVITY] 映射模型: {original_model} -> {model}")
+
+    return model
+
+
+async def normalize_antigravity_request(
+    request: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    规范化 Antigravity 请求
 
     处理逻辑:
-    1. 模型特性处理 (thinking config, search tools)
-    3. 参数范围限制 (maxOutputTokens, topK)
+    1. 模型特性处理 (thinking config)
+    2. 图片生成请求处理
+    3. 参数范围限制 (temperature, maxOutputTokens)
     4. 工具清理
 
     Args:
         request: 原始请求字典
-        mode: 保留兼容参数，仅处理 Gemini CLI
 
     Returns:
         规范化后的请求
@@ -588,79 +726,49 @@ async def normalize_gemini_request(
     result = request.copy()
     model = result.get("model", "")
     generation_config = (result.get("generationConfig") or {}).copy()  # 创建副本避免修改原对象
-    
     # 记录原始请求
-    if log.is_debug_enabled():
-        log.debug(f"[GEMINI_FIX] 原始请求 - 模型: {model}, mode: {mode}, generationConfig: {generation_config}")
+    log.debug(f"[ANTIGRAVITY_FIX] 原始请求 - 模型: {model}, generationConfig: {generation_config}")
 
     # 获取配置值
     return_thoughts = await get_return_thoughts_to_frontend()
 
-    # ========== Gemini CLI 处理 ==========
-    # 1. 思考设置
-    # 优先使用 get_thinking_settings 获取的思考预算和等级
-    thinking_budget, thinking_level = get_thinking_settings(model)
+    # 图片模型走独立的图片生成处理路径
+    if "image" in model.lower():
+        return prepare_image_generation_request(result, model)
 
-    # 其次使用传入的思考预算（如果未从模型名称获取）
-    if thinking_budget is None and thinking_level is None:
-        thinking_budget = generation_config.get("thinkingConfig", {}).get("thinkingBudget")
-        thinking_level = generation_config.get("thinkingConfig", {}).get("thinkingLevel")
+    model = _normalize_antigravity_request(result, model, generation_config, return_thoughts)
+    result["model"] = model
 
-    # 假如 is_thinking_model 为真或者思考预算/等级不为空，设置 thinkingConfig
-    if is_thinking_model(model) or thinking_budget is not None or thinking_level is not None:
-        # 确保 thinkingConfig 存在
-        if "thinkingConfig" not in generation_config:
-            generation_config["thinkingConfig"] = {}
+    # 这些模型不支持预填充：循环移除末尾的 model 消息，保证以用户消息结尾
+    no_prefill_models = [
+        "opus",
+        "sonnet",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+    ]
+    if any(keyword in model.lower() for keyword in no_prefill_models):
+        contents = result.get("contents", [])
+        removed_count = 0
+        while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
+            contents.pop()
+            removed_count += 1
+        if removed_count > 0:
+            log.warning(f"[ANTIGRAVITY] {model} 不支持预填充，移除了 {removed_count} 条末尾 model 消息")
+            result["contents"] = contents
 
-        thinking_config = generation_config["thinkingConfig"]
-
-        # 设置思考预算或等级（互斥）
-        if thinking_budget is not None:
-            thinking_config["thinkingBudget"] = thinking_budget
-            thinking_config.pop("thinkingLevel", None)  # 避免与 thinkingBudget 冲突
-        elif thinking_level is not None:
-            thinking_config["thinkingLevel"] = thinking_level
-            thinking_config.pop("thinkingBudget", None)  # 避免与 thinkingLevel 冲突
-
-        # includeThoughts 逻辑:
-        # 1. 如果是 pro 模型，为 return_thoughts
-        # 2. 如果不是 pro 模型，检查是否有思考预算或思考等级
-        base_model = get_base_model_name(model)
-        if "-nothinking" in model:
-            include_thoughts = False
-        elif "pro" in base_model:
-            include_thoughts = return_thoughts
-        elif "3-flash" in base_model:
-            if thinking_level is None:
-                include_thoughts = False
-            else:
-                include_thoughts = return_thoughts
-        else:
-            # 非 pro 模型: 有思考预算或等级才包含思考
-            # 注意: 思考预算为 0 时不包含思考
-            if thinking_budget is None or thinking_budget == 0:
-                include_thoughts = False
-            else:
-                include_thoughts = return_thoughts
-
-        thinking_config["includeThoughts"] = include_thoughts
-
-    # 2. 搜索模型添加 Google Search
-    if is_search_model(model):
-        result_tools = result.get("tools") or []
-        result["tools"] = result_tools
-        if not any(tool.get("googleSearch") for tool in result_tools if isinstance(tool, dict)):
-            result_tools.append({"googleSearch": {}})
-
-    # 3. 模型名称处理
-    result["model"] = get_base_model_name(model)
+    # 移除 antigravity 模式不支持的字段
+    generation_config.pop("presencePenalty", None)
+    generation_config.pop("frequencyPenalty", None)
+    generation_config.pop("stopSequences", None)
 
     # ========== 公共处理 ==========
 
     # 1. 安全设置覆盖
     if "tools" in result:
         result["tools"] = _normalize_tools_for_internal_api(result.get("tools"))
-        result["tools"] = _ensure_empty_tool_schema_for_claude(result.get("tools"), model, mode)
+        # 对于 Claude 模型：antigravity/Vertex AI 通道需要标准 functionDeclarations/parametersJsonSchema 格式
+        # 对于 Gemini 模型：统一转换为 functionDeclarations 并确保只使用 parameters 字段（移除 parametersJsonSchema 以防报错）
+        result["tools"] = _ensure_empty_tool_schema_for_claude(result.get("tools"), model, "antigravity")
 
     if "gemini-2.5-flash-lite" in model.lower():
         result["safetySettings"] = LITE_SAFETY_SETTINGS
@@ -668,12 +776,12 @@ async def normalize_gemini_request(
         result["safetySettings"] = DEFAULT_SAFETY_SETTINGS
 
     # 2. 参数范围限制
-    if generation_config:
-        clamp_generation_config(generation_config)
+    _clamp_temperature(generation_config)
     generation_config["maxOutputTokens"] = 64000
-    _sanitize_thinking_config(generation_config)
 
     if "contents" in result:
+        result["contents"] = _ensure_tool_call_ids(result["contents"], model)
+
         cleaned_contents = []
         for content in result["contents"]:
             if isinstance(content, dict) and "parts" in content:
@@ -682,7 +790,7 @@ async def normalize_gemini_request(
                 for part in content["parts"]:
                     if not isinstance(part, dict):
                         continue
-                    
+
                     # 检查 part 是否有有效的非空值
                     # 过滤掉空字典或所有值都为空的 part
                     has_valid_value = any(
@@ -690,7 +798,7 @@ async def normalize_gemini_request(
                         for key, value in part.items()
                         if key != "thought"  # thought 字段可以为空
                     )
-                    
+
                     if has_valid_value:
                         part = _normalize_part_thought_signature(part, model)
                         part = normalize_inline_image_part(part)
@@ -700,7 +808,9 @@ async def normalize_gemini_request(
                             text_value = part["text"]
                             if isinstance(text_value, list):
                                 # 如果是列表，合并为字符串
-                                log.warning(f"[GEMINI_FIX] text 字段是列表，自动合并: {text_value}")
+                                # 注意: list 中的元素可能是 dict（如 {"type":"text","text":"..."}），不能直接 str(dict)
+                                # 否则会产生 Python repr 字符串 "{'type': 'text', 'text': '...'}"，污染 model 历史
+                                log.warning(f"[ANTIGRAVITY_FIX] text 字段是列表，自动合并: {text_value}")
                                 text_parts = []
                                 for t in text_value:
                                     if isinstance(t, dict) and "text" in t:
@@ -715,23 +825,23 @@ async def normalize_gemini_request(
                                 part["text"] = text_value.rstrip()
                             else:
                                 # 其他类型转为字符串
-                                log.warning(f"[GEMINI_FIX] text 字段类型异常 ({type(text_value)}), 转为字符串: {text_value}")
+                                log.warning(f"[ANTIGRAVITY_FIX] text 字段类型异常 ({type(text_value)}), 转为字符串: {text_value}")
                                 part["text"] = str(text_value)
 
                         valid_parts.append(part)
                     else:
-                        log.warning(f"[GEMINI_FIX] 移除空的或无效的 part: {part}")
-                
+                        log.warning(f"[ANTIGRAVITY_FIX] 移除空的或无效的 part: {part}")
+
                 # 只添加有有效 parts 的 content
                 if valid_parts:
                     cleaned_content = content.copy()
                     cleaned_content["parts"] = valid_parts
                     cleaned_contents.append(cleaned_content)
                 else:
-                    log.warning(f"[GEMINI_FIX] 跳过没有有效 parts 的 content: {content.get('role')}")
+                    log.warning(f"[ANTIGRAVITY_FIX] 跳过没有有效 parts 的 content: {content.get('role')}")
             else:
                 cleaned_contents.append(content)
-        
+
         result["contents"] = cleaned_contents
 
     result["generationConfig"] = generation_config

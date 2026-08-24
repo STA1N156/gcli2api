@@ -1,11 +1,15 @@
 import unittest
 
 import config
+from src.converter.antigravity_fix import (
+    _ensure_empty_tool_schema_for_claude as ensure_antigravity_tool_schema,
+    normalize_antigravity_request,
+)
 from src.converter.gemini_fix import (
     DEFAULT_SAFETY_SETTINGS,
-    _ensure_empty_tool_schema_for_claude,
     normalize_gemini_request,
 )
+from src.utils import ANTIGRAVITY_CLI_VERSION
 
 
 class GeminiThinkingConfigTests(unittest.IsolatedAsyncioTestCase):
@@ -47,6 +51,60 @@ class GeminiThinkingConfigTests(unittest.IsolatedAsyncioTestCase):
 
 
 class UpstreamConverterRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_antigravity_gemini_3_high_mapping_preserves_thought_output(self):
+        old_return_thoughts = config.get_return_thoughts_to_frontend
+
+        async def enabled():
+            return True
+
+        config.get_return_thoughts_to_frontend = enabled
+        try:
+            normalized = await normalize_antigravity_request(
+                {
+                    "model": "gemini-3.1-pro-high",
+                    "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+                    "generationConfig": {
+                        "thinkingConfig": {
+                            "thinkingBudget": 1024,
+                            "thinkingLevel": "high",
+                        }
+                    },
+                }
+            )
+        finally:
+            config.get_return_thoughts_to_frontend = old_return_thoughts
+
+        self.assertEqual(normalized["model"], "gemini-pro-agent")
+        self.assertEqual(
+            normalized["generationConfig"]["thinkingConfig"],
+            {"includeThoughts": True},
+        )
+
+    async def test_antigravity_no_prefill_models_end_with_user_message(self):
+        for model in (
+            "claude-opus-4-6-thinking",
+            "claude-sonnet-4-6",
+            "gemini-3.6-flash",
+            "gemini-3.7-flash",
+        ):
+            with self.subTest(model=model):
+                normalized = await normalize_antigravity_request(
+                    {
+                        "model": model,
+                        "contents": [
+                            {"role": "user", "parts": [{"text": "hello"}]},
+                            {"role": "model", "parts": [{"text": "prefill"}]},
+                        ],
+                    }
+                )
+                self.assertEqual(
+                    normalized["contents"],
+                    [{"role": "user", "parts": [{"text": "hello"}]}],
+                )
+
+    def test_antigravity_cli_version_matches_upstream(self):
+        self.assertEqual(ANTIGRAVITY_CLI_VERSION, "1.1.12")
+
     async def test_normalization_forces_output_limit_without_inventing_top_k(self):
         old_return_thoughts = config.get_return_thoughts_to_frontend
 
@@ -55,13 +113,12 @@ class UpstreamConverterRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         config.get_return_thoughts_to_frontend = disabled
         try:
-            normalized = await normalize_gemini_request(
+            normalized = await normalize_antigravity_request(
                 {
                     "model": "gemini-3-flash",
                     "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
                     "generationConfig": {"temperature": 1},
-                },
-                mode="antigravity",
+                }
             )
         finally:
             config.get_return_thoughts_to_frontend = old_return_thoughts
@@ -85,7 +142,7 @@ class UpstreamConverterRegressionTests(unittest.IsolatedAsyncioTestCase):
             }
         ]
 
-        result = _ensure_empty_tool_schema_for_claude(
+        result = ensure_antigravity_tool_schema(
             tools, "claude-opus-4-6-thinking", "antigravity"
         )
         declaration = result[0]["functionDeclarations"][0]

@@ -3,7 +3,7 @@ import unittest
 
 import config
 from src.api.antigravity import wrap_cli_request
-from src.converter.gemini_fix import normalize_gemini_request
+from src.converter.antigravity_fix import normalize_antigravity_request
 from src.converter.openai2gemini import (
     convert_gemini_to_openai_response,
     convert_gemini_to_openai_stream,
@@ -33,9 +33,7 @@ class OpenAIToolConversionTests(unittest.IsolatedAsyncioTestCase):
         try:
             converted = await convert_openai_to_gemini_request(request)
             converted["model"] = request["model"]
-            normalized = await normalize_gemini_request(
-                converted, mode="antigravity"
-            )
+            normalized = await normalize_antigravity_request(converted)
         finally:
             config.get_return_thoughts_to_frontend = old_return_thoughts
 
@@ -119,7 +117,7 @@ class OpenAIToolConversionTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         converted["model"] = "gemini-3.1-pro-preview"
-        normalized = await normalize_gemini_request(converted, mode="antigravity")
+        normalized = await normalize_antigravity_request(converted)
 
         value_schema = normalized["tools"][0]["functionDeclarations"][0][
             "parameters"

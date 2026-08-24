@@ -187,7 +187,6 @@ ghcr.io/su-kaka/gcli2api:latest
 
 **Multiple Streaming Support**
 - True real-time streaming responses
-- Fake streaming mode (for compatibility)
 - Streaming anti-truncation feature (prevents answer truncation)
 - Asynchronous task management and timeout handling
 
@@ -282,9 +281,6 @@ All models have 1M context window capacity. Each credential file provides 1000 r
 - When no ratio is specified, the API automatically decides the aspect ratio
 
 ### 🌊 Special Feature Variants
-- **Fake Streaming Mode**: Add `-假流式` suffix to any model name
-  - Example: `gemini-2.5-pro-假流式`
-  - For scenarios requiring streaming responses but server doesn't support true streaming
 - **Streaming Anti-truncation Mode**: Add `流式抗截断/` prefix to model name
   - Example: `流式抗截断/gemini-2.5-pro`
   - Automatically detects response truncation and retries to ensure complete answers
