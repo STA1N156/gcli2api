@@ -1,4 +1,4 @@
-full_hash=d9ddc257a3f0a0a4afe7b64d88467d3d2ece5a9f
-short_hash=d9ddc25
-message=Fix encrypted Antigravity tool schema
-date=2026-08-08 17:01:58 +0800
+full_hash=59420d3de749f98c05dd7246b84394e8c73980f0
+short_hash=59420d3
+message=optimize streaming and remove fake streaming
+date=2026-08-24 20:50:33 +0800
