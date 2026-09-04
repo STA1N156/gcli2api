@@ -1,4 +1,4 @@
-full_hash=59420d3de749f98c05dd7246b84394e8c73980f0
-short_hash=59420d3
-message=optimize streaming and remove fake streaming
-date=2026-08-24 20:50:33 +0800
+full_hash=872b50ad598989ad5c6154cb038d83e29fdf55e5
+short_hash=872b50a
+message=shorten resource exhausted cooldown
+date=2026-09-04 12:37:31 +0800
