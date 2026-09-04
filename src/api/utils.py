@@ -393,7 +393,7 @@ async def collect_streaming_response(stream_generator) -> Response:
     )
 
 
-RESOURCE_EXHAUSTED_COOLDOWN_HOURS = 4  # RESOURCE_EXHAUSTED 错误的默认冷却时间（小时）
+RESOURCE_EXHAUSTED_COOLDOWN_SECONDS = 5 * 60  # RESOURCE_EXHAUSTED 错误的默认冷却时间（5分钟）
 
 
 def parse_quota_reset_timestamp(
@@ -451,10 +451,10 @@ def parse_quota_reset_timestamp(
 
                     return reset_dt.astimezone(timezone.utc).timestamp()
 
-        # 如果是 RESOURCE_EXHAUSTED 错误且消息完全匹配，设置默认4小时冷却时间
+        # 如果是 RESOURCE_EXHAUSTED 错误且消息完全匹配，设置默认5分钟冷却时间
         if is_generic_resource_exhausted:
             import time
-            cooldown_until = time.time() + RESOURCE_EXHAUSTED_COOLDOWN_HOURS * 3600
+            cooldown_until = time.time() + RESOURCE_EXHAUSTED_COOLDOWN_SECONDS
             return cooldown_until
 
         return None

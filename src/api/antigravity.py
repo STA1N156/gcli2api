@@ -37,6 +37,10 @@ from src.session_affinity import extract_cache_session_key
 from src.utils import ANTIGRAVITY_USER_AGENT
 
 
+_RESOURCE_EXHAUSTED_MESSAGE = "Resource has been exhausted (e.g. check quota)."
+_ANTIGRAVITY_CONTENT_POLICY_MESSAGE = "系统提示词中含有被标记内容，请清理后重试。"
+
+
 def _extract_first_user_text(request_payload: Dict[str, Any]) -> str:
     contents = request_payload.get("contents", [])
     if not isinstance(contents, list):
@@ -149,6 +153,46 @@ def _response_from_httpx(response) -> Response:
     )
 
 
+def _rewrite_resource_exhausted_response(response: Response) -> Response:
+    """把无具体重置时间的 Antigravity 429 改成更明确的提示。"""
+    if response.status_code != 429:
+        return response
+
+    try:
+        body = response.body or b""
+        payload = json.loads(body)
+        error = payload.get("error", {})
+        if (
+            not isinstance(error, dict)
+            or error.get("status") != "RESOURCE_EXHAUSTED"
+            or error.get("message") != _RESOURCE_EXHAUSTED_MESSAGE
+        ):
+            return response
+
+        details = error.get("details") or []
+        has_reset_time = any(
+            isinstance(detail, dict)
+            and isinstance(detail.get("metadata"), dict)
+            and detail["metadata"].get("quotaResetTimeStamp")
+            for detail in details
+        )
+        if has_reset_time:
+            return response
+
+        error["message"] = _ANTIGRAVITY_CONTENT_POLICY_MESSAGE
+        headers = dict(response.headers)
+        headers.pop("content-length", None)
+        headers.pop("content-encoding", None)
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            status_code=response.status_code,
+            headers=headers,
+            media_type="application/json",
+        )
+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        return response
+
+
 async def _record_response_error(
     filename: str,
     model_name: str,
@@ -253,10 +297,11 @@ async def stream_request(
                     await _record_response_error(
                         current_file, model_name, chunk.status_code, error_text
                     )
+                    client_chunk = _rewrite_resource_exhausted_response(chunk)
                     if success_recorded or not is_retryable_status(chunk.status_code):
-                        yield chunk
+                        yield client_chunk
                         return
-                    last_error = chunk
+                    last_error = client_chunk
                     retry_current = True
                     break
 
@@ -415,7 +460,9 @@ async def non_stream_request(
                         continue
 
             error_text = getattr(response, "text", "") or ""
-            last_error = _response_from_httpx(response)
+            last_error = _rewrite_resource_exhausted_response(
+                _response_from_httpx(response)
+            )
             log.warning(
                 f"[ANTIGRAVITY] 上游返回 {response.status_code}: "
                 f"credential={current_file}, model={model_name}, "

@@ -32,7 +32,7 @@ class ModelCooldownTests(unittest.TestCase):
             )
         )
 
-    def test_generic_resource_exhausted_uses_four_hour_cooldown(self):
+    def test_generic_resource_exhausted_uses_five_minute_cooldown(self):
         error = {
             "error": {
                 "status": "RESOURCE_EXHAUSTED",
@@ -43,9 +43,9 @@ class ModelCooldownTests(unittest.TestCase):
         with patch("time.time", return_value=1000):
             self.assertEqual(
                 parse_quota_reset_timestamp(error, mode="antigravity"),
-                15400,
+                1300,
             )
-            self.assertEqual(parse_quota_reset_timestamp(error), 15400)
+            self.assertEqual(parse_quota_reset_timestamp(error), 1300)
 
     def test_antigravity_cooldown_only_blocks_the_exact_claude_model(self):
         cooldowns = {"claude-sonnet-4-6": 2000}
