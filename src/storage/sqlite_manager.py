@@ -11,6 +11,13 @@ from typing import Any, Dict, List, Optional
 import aiosqlite
 
 from log import log
+from src.credential_status import (
+    add_status_stats,
+    credential_status_flags,
+    matches_cooldown_filter,
+    matches_status_filter,
+    new_status_stats,
+)
 
 
 class SQLiteManager:
@@ -743,10 +750,10 @@ class SQLiteManager:
         Args:
             offset: 跳过的记录数（默认0）
             limit: 返回的最大记录数（None表示返回所有）
-            status_filter: 状态筛选（all=全部, normal=正常, abnormal=异常）
+            status_filter: 状态筛选（all/normal/abnormal/claude_abnormal/gemini_abnormal）
             mode: 凭证模式 ("geminicli" 或 "antigravity")
             error_code_filter: 错误码筛选（格式如"400"或"403"，筛选包含该错误码的凭证）
-            cooldown_filter: 冷却状态筛选（"in_cooldown"=冷却中, "no_cooldown"=未冷却）
+            cooldown_filter: 冷却状态筛选（全部冷却、Claude冷却、Gemini冷却或未冷却）
             preview_filter: Preview筛选（"preview"=支持preview, "no_preview"=不支持preview，仅geminicli模式有效）
             tier_filter: tier筛选（"free", "pro", "ultra"）
 
@@ -760,7 +767,7 @@ class SQLiteManager:
             table_name = self._get_table_name(mode)
 
             async with aiosqlite.connect(self._db_path) as db:
-                global_stats = {"total": 0, "normal": 0, "abnormal": 0}
+                global_stats = new_status_stats()
 
                 filter_value = None
                 filter_int = None
@@ -812,13 +819,12 @@ class SQLiteManager:
                             }
 
                         error_codes = json.loads(error_codes_json)
-                        abnormal = bool(row[1] or error_codes or active_cooldowns)
-                        global_stats["total"] += 1
-                        global_stats["abnormal" if abnormal else "normal"] += 1
+                        flags = credential_status_flags(
+                            bool(row[1]), error_codes, active_cooldowns, mode
+                        )
+                        add_status_stats(global_stats, flags)
 
-                        if status_filter == "normal" and abnormal:
-                            continue
-                        if status_filter == "abnormal" and not abnormal:
+                        if not matches_status_filter(status_filter, flags):
                             continue
 
                         # 筛选无错误的凭证
@@ -874,16 +880,7 @@ class SQLiteManager:
                                 continue
 
                         # 应用冷却筛选
-                        if cooldown_filter == "in_cooldown":
-                            # 只保留有冷却的凭证
-                            if active_cooldowns:
-                                all_summaries.append(summary)
-                        elif cooldown_filter == "no_cooldown":
-                            # 只保留没有冷却的凭证
-                            if not active_cooldowns:
-                                all_summaries.append(summary)
-                        else:
-                            # 不筛选冷却状态
+                        if matches_cooldown_filter(cooldown_filter, active_cooldowns):
                             all_summaries.append(summary)
 
                     # 应用分页
@@ -908,7 +905,7 @@ class SQLiteManager:
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "abnormal": 0},
+                "stats": new_status_stats(),
             }
 
     async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:

@@ -77,7 +77,14 @@ function createCredsManager(type) {
         currentCooldownFilter: 'all',
         currentPreviewFilter: 'all',
         currentTierFilter: 'all',
-        statsData: { total: 0, normal: 0, abnormal: 0 },
+        refreshVersion: 0,
+        statsData: {
+            total: 0,
+            normal: 0,
+            abnormal: 0,
+            claude_abnormal: 0,
+            gemini_abnormal: 0
+        },
 
         // API端点
         getEndpoint: (action) => {
@@ -116,6 +123,7 @@ function createCredsManager(type) {
             const silent = options === true || (options && options.silent === true);
             const loading = document.getElementById(this.getElementId('CredsLoading'));
             const list = document.getElementById(this.getElementId('CredsList'));
+            const refreshVersion = ++this.refreshVersion;
 
             try {
                 loading.style.display = 'block';
@@ -132,6 +140,7 @@ function createCredsManager(type) {
                 );
 
                 const data = await response.json();
+                if (refreshVersion !== this.refreshVersion) return;
 
                 if (response.ok) {
                     this.data = {};
@@ -165,39 +174,70 @@ function createCredsManager(type) {
                     this.updatePagination();
 
                     let msg = `已加载 ${data.total} 个${type === 'antigravity' ? 'Antigravity' : ''}凭证文件`;
-                    if (this.currentStatusFilter !== 'all') {
-                        msg += ` (筛选: ${this.currentStatusFilter === 'normal' ? '正常' : '异常'})`;
+                    const statusLabels = {
+                        normal: '正常',
+                        abnormal: '全部异常',
+                        claude_abnormal: 'Claude 异常',
+                        gemini_abnormal: 'Gemini 异常'
+                    };
+                    if (statusLabels[this.currentStatusFilter]) {
+                        msg += ` (筛选: ${statusLabels[this.currentStatusFilter]})`;
                     }
                     if (!silent) showStatus(msg, 'success');
                 } else {
                     if (!silent) showStatus(`加载失败: ${data.detail || data.error || '未知错误'}`, 'error');
                 }
             } catch (error) {
-                if (!silent) showStatus(`网络错误: ${error.message}`, 'error');
+                if (refreshVersion === this.refreshVersion && !silent) {
+                    showStatus(`网络错误: ${error.message}`, 'error');
+                }
             } finally {
-                loading.style.display = 'none';
+                if (refreshVersion === this.refreshVersion) loading.style.display = 'none';
             }
         },
 
         // 计算统计数据（仅用于兼容旧版本后端）
         calculateStats() {
-            this.statsData = { total: this.totalCount, normal: 0, abnormal: 0 };
+            this.statsData = {
+                total: this.totalCount,
+                normal: 0,
+                abnormal: 0,
+                claude_abnormal: 0,
+                gemini_abnormal: 0
+            };
             Object.values(this.data).forEach(credInfo => {
                 const hasCooldown = Object.keys(credInfo.model_cooldowns || {}).length > 0;
                 const hasErrors = (credInfo.status.error_codes || []).length > 0;
-                if (credInfo.status.disabled || hasCooldown || hasErrors) {
+                const families = getCooldownFamilies(credInfo.model_cooldowns);
+                const abnormal = credInfo.status.disabled || hasCooldown || hasErrors;
+                const unscoped = credInfo.status.disabled || (hasErrors && families.size === 0);
+                if (abnormal) {
                     this.statsData.abnormal++;
                 } else {
                     this.statsData.normal++;
+                }
+                if (families.has('claude') || (this.type === 'antigravity' && unscoped)) {
+                    this.statsData.claude_abnormal++;
+                }
+                if (abnormal && (families.has('gemini') || this.type !== 'antigravity' || unscoped)) {
+                    this.statsData.gemini_abnormal++;
                 }
             });
         },
 
         // 更新统计显示
         updateStatsDisplay() {
-            document.getElementById(this.getElementId('StatTotal')).textContent = this.statsData.total;
-            document.getElementById(this.getElementId('StatNormal')).textContent = this.statsData.normal;
-            document.getElementById(this.getElementId('StatAbnormal')).textContent = this.statsData.abnormal;
+            const values = {
+                StatTotal: this.statsData.total,
+                StatNormal: this.statsData.normal,
+                StatAbnormal: this.statsData.abnormal,
+                StatClaudeAbnormal: this.statsData.claude_abnormal || 0,
+                StatGeminiAbnormal: this.statsData.gemini_abnormal || 0
+            };
+            Object.entries(values).forEach(([suffix, value]) => {
+                const element = document.getElementById(this.getElementId(suffix));
+                if (element) element.textContent = value;
+            });
         },
 
         // 渲染凭证列表
@@ -690,6 +730,17 @@ function getCooldownModelGroup(modelName, managerType = null) {
     return null;
 }
 
+
+function getCooldownFamilies(modelCooldowns) {
+    const families = new Set();
+    Object.keys(modelCooldowns || {}).forEach(modelName => {
+        const model = String(modelName).toLowerCase();
+        if (model.includes('claude')) families.add('claude');
+        if (model.includes('gemini')) families.add('gemini');
+    });
+    return families;
+}
+
 function getGroupedCooldowns(modelCooldowns, managerType = null) {
     const currentTime = Date.now() / 1000;
     const groups = {};
@@ -749,36 +800,25 @@ function createCredCard(credInfo, manager) {
     let statusBadges = '';
     statusBadges += status.disabled
         ? '<span class="status-badge disabled">已禁用</span>'
-        : '<span class="status-badge enabled">已启用</span>';
+        : '<span class="status-badge enabled">可用</span>';
 
     if (status.error_codes && status.error_codes.length > 0) {
         statusBadges += `<span class="error-codes">错误码: ${status.error_codes.join(', ')}</span>`;
-    } else {
-        statusBadges += '<span class="status-badge" style="background-color: #28a745; color: white;">无错误</span>';
     }
 
     // Preview状态显示 (仅对geminicli模式显示)
     if (managerType !== 'antigravity' && credInfo.preview !== undefined) {
-        if (credInfo.preview) {
-            statusBadges += '<span class="status-badge" style="background-color: #28a745; color: white;" title="该凭证支持Preview模型">Preview: ON</span>';
-        } else {
-            statusBadges += '<span class="status-badge" style="background-color: #8aa5a2; color: white;" title="该凭证不支持Preview模型">Preview: OFF</span>';
-        }
+        if (!credInfo.preview) statusBadges += '<span class="status-badge muted">Preview 关闭</span>';
     }
 
     // tier 状态显示 (geminicli 和 antigravity 都显示)
     const tier = (credInfo.tier || 'pro').toString().toLowerCase();
     const tierLabel = tier.toUpperCase();
-    const tierColor = tier === 'ultra' ? '#ff9800' : (tier === 'free' ? '#607d8b' : '#2e7d32');
-    statusBadges += `<span class="status-badge" style="background-color: ${tierColor}; color: white;" title="凭证等级: ${tierLabel}">Tier: ${tierLabel}</span>`;
+    statusBadges += `<span class="status-badge tier tier-${tier}" title="凭证等级: ${tierLabel}">${tierLabel}</span>`;
 
     // Credit 状态显示（仅 antigravity）
     if (managerType === 'antigravity') {
-        if (credInfo.enable_credit) {
-            statusBadges += '<span class="status-badge" style="background-color: #2e7d32; color: white;" title="当前已开启Credit模式">Credit: ON</span>';
-        } else {
-            statusBadges += '<span class="status-badge" style="background-color: #616161; color: white;" title="当前已关闭Credit模式">Credit: OFF</span>';
-        }
+        if (credInfo.enable_credit) statusBadges += '<span class="status-badge credit">Credit</span>';
     }
 
     // 模型级冷却状态
@@ -790,24 +830,29 @@ function createCredCard(credInfo, manager) {
     const pathId = (managerType === 'antigravity' ? 'ag_' : '') + btoa(encodeURIComponent(filename)).replace(/[+/=]/g, '_');
 
     // 操作按钮
+    const modeName = managerType === 'antigravity' ? 'Antigravity' : '';
     const actionButtons = `
-        ${status.disabled
-            ? `<button class="cred-btn enable" data-filename="${filename}" data-action="enable">启用</button>`
-            : `<button class="cred-btn disable" data-filename="${filename}" data-action="disable">禁用</button>`
-        }
-        <button class="cred-btn view" onclick="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}CredDetails('${pathId}')">查看内容</button>
-        <button class="cred-btn download" onclick="download${managerType === 'antigravity' ? 'Antigravity' : ''}Cred('${filename}')">下载</button>
-        <button class="cred-btn email" onclick="fetch${managerType === 'antigravity' ? 'Antigravity' : ''}UserEmail('${filename}')">查看账号邮箱</button>
-        ${managerType === 'antigravity' ? `<button class="cred-btn" onclick="toggleAntigravityQuotaDetails('${pathId}')" title="查看该凭证的额度信息">查看额度</button>` : ''}
-        ${managerType === 'antigravity' ? (credInfo.enable_credit
-            ? `<button class="cred-btn" data-filename="${filename}" data-action="disable_credit" title="关闭该凭证的Credit模式">关闭 Credit</button>`
-            : `<button class="cred-btn" data-filename="${filename}" data-action="enable_credit" title="开启该凭证的Credit模式">开启 Credit</button>`
-        ) : ''}
-        ${managerType !== 'antigravity' ? `<button class="cred-btn" onclick="configurePreviewChannel('${filename}')" title="配置Preview通道，启用实验性功能">设置预览</button>` : ''}
-        <button class="cred-btn" onclick="verify${managerType === 'antigravity' ? 'Antigravity' : ''}ProjectId('${filename}')" title="重新获取Project ID，可恢复403错误">检验</button>
-        <button class="cred-btn" onclick="test${managerType === 'antigravity' ? 'Antigravity' : ''}Credential('${filename}')" title="测试凭证是否可用">消息测试</button>
-        <button class="cred-btn" onclick="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}ErrorDetails('${pathId}')" title="查看该凭证的详细报错信息">查看报错</button>
-        <button class="cred-btn delete" data-filename="${filename}" data-action="delete">删除</button>
+        ${managerType === 'antigravity' ? `<button class="cred-btn primary" onclick="toggleAntigravityQuotaDetails('${pathId}')">额度</button>` : ''}
+        <button class="cred-btn primary" onclick="test${modeName}Credential('${filename}')">消息测试</button>
+        <button class="cred-btn" onclick="verify${modeName}ProjectId('${filename}')">检验</button>
+        <button class="cred-btn view" onclick="toggle${modeName}CredDetails('${pathId}')">详情</button>
+        <details class="cred-more">
+            <summary>更多</summary>
+            <div class="cred-more-menu">
+                <button class="cred-btn email" onclick="fetch${modeName}UserEmail('${filename}')">刷新邮箱</button>
+                <button class="cred-btn" onclick="toggle${modeName}ErrorDetails('${pathId}')">错误详情</button>
+                <button class="cred-btn download" onclick="download${modeName}Cred('${filename}')">下载凭证</button>
+                ${managerType === 'antigravity' ? (credInfo.enable_credit
+                    ? `<button class="cred-btn" data-filename="${filename}" data-action="disable_credit">关闭 Credit</button>`
+                    : `<button class="cred-btn" data-filename="${filename}" data-action="enable_credit">开启 Credit</button>`
+                ) : `<button class="cred-btn" onclick="configurePreviewChannel('${filename}')">设置预览</button>`}
+                ${status.disabled
+                    ? `<button class="cred-btn enable" data-filename="${filename}" data-action="enable">启用凭证</button>`
+                    : `<button class="cred-btn disable" data-filename="${filename}" data-action="disable">禁用凭证</button>`
+                }
+                <button class="cred-btn delete" data-filename="${filename}" data-action="delete">删除凭证</button>
+            </div>
+        </details>
     `;
 
     // 邮箱信息
@@ -819,7 +864,7 @@ function createCredCard(credInfo, manager) {
 
     div.innerHTML = `
         <div class="cred-header">
-            <div style="display: flex; align-items: center; gap: 10px;">
+            <div class="cred-identity">
                 <input type="checkbox" class="${checkboxClass}" data-filename="${filename}" onchange="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}FileSelection('${filename}')">
                 <div>
                     <div class="cred-filename">${filename}</div>
@@ -933,8 +978,6 @@ async function login() {
             document.getElementById('loginSection').classList.add('hidden');
             document.getElementById('mainSection').classList.remove('hidden');
             showStatus('登录成功', 'success');
-            // 显示面板后初始化滑块
-            requestAnimationFrame(() => initTabSlider());
         } else {
             showStatus(`登录失败: ${data.detail || data.error || '未知错误'}`, 'error');
         }
@@ -961,8 +1004,6 @@ async function autoLogin() {
             document.getElementById('loginSection').classList.add('hidden');
             document.getElementById('mainSection').classList.remove('hidden');
             showStatus('自动登录成功', 'success');
-            // 显示面板后初始化滑块
-            requestAnimationFrame(() => initTabSlider());
             return true;
         } else if (response.status === 401) {
             localStorage.removeItem('gcli2api_auth_token');
@@ -993,123 +1034,16 @@ function handlePasswordEnter(event) {
 // 标签页切换
 // =====================================================================
 
-// 更新滑块位置
-function updateTabSlider(targetTab, animate = true) {
-    const slider = document.querySelector('.tab-slider');
-    const tabs = document.querySelector('.tabs');
-    if (!slider || !tabs || !targetTab) return;
-
-    // 获取按钮位置和容器宽度
-    const tabLeft = targetTab.offsetLeft;
-    const tabWidth = targetTab.offsetWidth;
-    const tabsWidth = tabs.scrollWidth;
-
-    // 使用 left 和 right 同时控制，确保动画同步
-    const rightValue = tabsWidth - tabLeft - tabWidth;
-
-    if (animate) {
-        slider.style.left = `${tabLeft}px`;
-        slider.style.right = `${rightValue}px`;
-    } else {
-        // 首次加载时不使用动画
-        slider.style.transition = 'none';
-        slider.style.left = `${tabLeft}px`;
-        slider.style.right = `${rightValue}px`;
-        // 强制重绘后恢复过渡
-        slider.offsetHeight;
-        slider.style.transition = '';
-    }
-}
-
-// 初始化滑块位置
-function initTabSlider() {
-    const activeTab = document.querySelector('.tab.active');
-    if (activeTab) {
-        updateTabSlider(activeTab, false);
-    }
-}
-
-// 页面加载和窗口大小变化时初始化滑块
-document.addEventListener('DOMContentLoaded', initTabSlider);
-window.addEventListener('resize', () => {
-    const activeTab = document.querySelector('.tab.active');
-    if (activeTab) updateTabSlider(activeTab, false);
-});
-
-function switchTab(tabName) {
-    // 获取当前活动的内容区域
+function switchTab(tabName, targetTab = null) {
     const currentContent = document.querySelector('.tab-content.active');
     const targetContent = document.getElementById(tabName + 'Tab');
+    if (!targetContent || currentContent === targetContent) return;
 
-    // 如果点击的是当前标签页，不做任何操作
-    if (currentContent === targetContent) return;
-
-    // 找到目标标签按钮
-    const targetTab = event && event.target ? event.target :
-        document.querySelector(`.tab[onclick*="'${tabName}'"]`);
-
-    // 移除所有标签页的active状态
     document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-
-    // 添加当前点击标签的active状态
-    if (targetTab) {
-        targetTab.classList.add('active');
-        // 更新滑块位置（带动画）
-        updateTabSlider(targetTab, true);
-    }
-
-    // 淡出当前内容
-    if (currentContent) {
-        // 设置淡出过渡
-        currentContent.style.transition = 'opacity 0.18s ease-out, transform 0.18s ease-out';
-        currentContent.style.opacity = '0';
-        currentContent.style.transform = 'translateX(-12px)';
-
-        setTimeout(() => {
-            currentContent.classList.remove('active');
-            currentContent.style.transition = '';
-            currentContent.style.opacity = '';
-            currentContent.style.transform = '';
-
-            // 淡入新内容
-            if (targetContent) {
-                // 先设置初始状态（在添加 active 类之前）
-                targetContent.style.opacity = '0';
-                targetContent.style.transform = 'translateX(12px)';
-                targetContent.style.transition = 'none'; // 暂时禁用过渡
-
-                // 添加 active 类使元素可见
-                targetContent.classList.add('active');
-
-                // 使用双重 requestAnimationFrame 确保浏览器完成重绘
-                requestAnimationFrame(() => {
-                    requestAnimationFrame(() => {
-                        // 启用过渡并应用最终状态
-                        targetContent.style.transition = 'opacity 0.25s ease-out, transform 0.25s ease-out';
-                        targetContent.style.opacity = '1';
-                        targetContent.style.transform = 'translateX(0)';
-
-                        // 清理内联样式并执行数据加载
-                        setTimeout(() => {
-                            targetContent.style.transition = '';
-                            targetContent.style.opacity = '';
-                            targetContent.style.transform = '';
-
-                            // 动画完成后触发数据加载
-                            triggerTabDataLoad(tabName);
-                        }, 260);
-                    });
-                });
-            }
-        }, 180);
-    } else {
-        // 如果没有当前内容（首次加载），直接显示目标内容
-        if (targetContent) {
-            targetContent.classList.add('active');
-            // 直接触发数据加载
-            triggerTabDataLoad(tabName);
-        }
-    }
+    (targetTab || document.querySelector(`.tab[onclick*="'${tabName}'"]`))?.classList.add('active');
+    currentContent?.classList.remove('active');
+    targetContent.classList.add('active');
+    triggerTabDataLoad(tabName);
 }
 
 // 标签页数据加载（从动画中分离出来）

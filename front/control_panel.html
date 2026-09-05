@@ -229,40 +229,6 @@
             position: relative;
         }
 
-        /* 滑块指示器 */
-        .tab-slider {
-            position: absolute;
-            top: 6px;
-            left: 0;
-            right: 0;
-            height: calc(100% - 12px);
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1),
-                0 1px 3px rgba(0, 0, 0, 0.06),
-                inset 0 -1px 0 rgba(0, 0, 0, 0.02);
-            transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-                right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            z-index: 0;
-            pointer-events: none;
-        }
-
-        /* 滑块微光效果 */
-        .tab-slider::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 50%;
-            background: linear-gradient(180deg,
-                    rgba(255, 255, 255, 0.8) 0%,
-                    rgba(255, 255, 255, 0) 100%);
-            border-radius: 10px 10px 0 0;
-            pointer-events: none;
-            opacity: 0.5;
-        }
-
         .tabs::-webkit-scrollbar {
             height: 4px;
         }
@@ -1524,6 +1490,7 @@
             }
         }
     </style>
+    <link rel="stylesheet" href="./front/panel.css?v=20260905">
 </head>
 
 <body>
@@ -1540,35 +1507,33 @@
 
         <!-- 主界面 -->
         <div id="mainSection" class="hidden">
-            <div
-                style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;">
-                <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
-                    <h1 style="margin: 0;">GCLI2API 管理面板</h1>
-                    <span id="versionInfo" style="font-size: 12px; color: #666;">
+            <header class="app-header">
+                <div class="brand-block">
+                    <span class="brand-mark">G</span>
+                    <div>
+                        <h1>GCLI2API</h1>
+                        <p>凭证与服务控制台</p>
+                    </div>
+                    <span id="versionInfo" class="version-info">
                         <span id="versionText">加载中...</span>
                     </span>
-                    <button onclick="checkForUpdates()" id="checkUpdateBtn"
-                        style="padding: 4px 12px; background-color: #17a2b8; color: white; border: none; border-radius: 4px; font-size: 12px; cursor: pointer; white-space: nowrap;">
-                        检查更新
-                    </button>
                 </div>
-                <button onclick="logout()"
-                    style="padding: 8px 20px; background-color: #dc3545; color: white; border: none; border-radius: 5px; font-size: 14px; cursor: pointer;">
-                    退出登录
-                </button>
-            </div>
+                <div class="header-actions">
+                    <button onclick="checkForUpdates()" id="checkUpdateBtn" class="header-btn">检查更新</button>
+                    <button onclick="logout()" class="header-btn danger">退出</button>
+                </div>
+            </header>
 
             <!-- 标签页 -->
             <div class="tabs">
-                <div class="tab-slider"></div>
-                <button class="tab active" onclick="switchTab('oauth')">OAuth认证</button>
-                <button class="tab" onclick="switchTab('antigravity')">Antigravity认证</button>
-                <button class="tab" onclick="switchTab('upload')">批量上传</button>
-                <button class="tab" onclick="switchTab('manage')">GCLI凭证管理</button>
-                <button class="tab" onclick="switchTab('antigravity-manage')">Antigravity凭证管理</button>
-                <button class="tab" onclick="switchTab('config')">配置管理</button>
-                <button class="tab" onclick="switchTab('logs')">实时日志</button>
-                <button class="tab" onclick="switchTab('about')">项目信息</button>
+                <button class="tab active" onclick="switchTab('oauth', this)"><span>GCLI 认证</span><small>OAuth</small></button>
+                <button class="tab" onclick="switchTab('antigravity', this)"><span>Antigravity 认证</span><small>OAuth</small></button>
+                <button class="tab" onclick="switchTab('upload', this)"><span>导入凭证</span><small>JSON / ZIP</small></button>
+                <button class="tab" onclick="switchTab('manage', this)"><span>GCLI 凭证</span><small>状态与操作</small></button>
+                <button class="tab" onclick="switchTab('antigravity-manage', this)"><span>Antigravity</span><small>凭证与额度</small></button>
+                <button class="tab" onclick="switchTab('config', this)"><span>系统设置</span><small>服务配置</small></button>
+                <button class="tab" onclick="switchTab('logs', this)"><span>运行日志</span><small>实时排障</small></button>
+                <button class="tab" onclick="switchTab('about', this)"><span>关于</span><small>项目说明</small></button>
             </div>
 
             <!-- OAuth认证标签页 -->
@@ -1856,8 +1821,7 @@
             <div id="manageTab" class="tab-content">
                 <h3>GCLI凭证文件管理</h3>
                 <p>管理所有GCLI认证文件，查看状态和执行操作</p>
-                <div
-                    style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">
+                <div class="endpoint-card">
                     <strong>📡 API地址（点击复制）：</strong>
                     <table style="margin-top:6px;border-collapse:collapse;width:100%;">
                         <tr>
@@ -1886,20 +1850,23 @@
                 </div>
 
                 <!-- 检验功能说明 -->
-                <div class="status info" style="margin-bottom: 20px;">
-                    <strong>💡 检验功能说明：</strong>
-                    <p style="margin: 10px 0;">
-                        点击每个凭证的"检验"按钮可以重新获取Project ID, 并查看账号的tier(free/pro/ultra)。<br>
-                        <strong style="color: #0c5460;">✅ 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
-                        建议在遇到403错误时使用此功能。
-                    </p>
-                    <strong>💡 设置预览功能说明：</strong>
-                    <p style="margin: 10px 0;">
-                        点击每个凭证的"设置预览"按钮可以配置Preview通道。<br>
-                        <strong style="color: #0c5460;">✅ 设置预览可以解决部分凭证调用preview模型时404的问题</strong>。<br>
-                        建议在调用gemini-3-pro-preview等模型遇到404错误时使用此功能。
-                    </p>
-                </div>
+                <details class="help-panel">
+                    <summary>使用说明</summary>
+                    <div class="help-panel-body">
+                        <strong>检验功能</strong>
+                        <p>
+                            点击每个凭证的"检验"按钮可以重新获取Project ID, 并查看账号的tier(free/pro/ultra)。<br>
+                            <strong style="color: #0c5460;">✅ 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
+                            建议在遇到403错误时使用此功能。
+                        </p>
+                        <strong>设置预览</strong>
+                        <p>
+                            点击每个凭证的"设置预览"按钮可以配置Preview通道。<br>
+                            <strong style="color: #0c5460;">✅ 设置预览可以解决部分凭证调用preview模型时404的问题</strong>。<br>
+                            建议在调用gemini-3-pro-preview等模型遇到404错误时使用此功能。
+                        </p>
+                    </div>
+                </details>
 
                 <!-- 状态统计 -->
                 <div class="stats-container" id="statsContainer">
@@ -1911,9 +1878,13 @@
                         <span class="stat-number" id="statNormal">0</span>
                         <span class="stat-label">正常</span>
                     </div>
-                    <div class="stat-item abnormal">
-                        <span class="stat-number" id="statAbnormal">0</span>
-                        <span class="stat-label">异常</span>
+                    <div class="stat-item claude">
+                        <span class="stat-number" id="statClaudeAbnormal">0</span>
+                        <span class="stat-label">Claude 异常</span>
+                    </div>
+                    <div class="stat-item gemini">
+                        <span class="stat-number" id="statGeminiAbnormal">0</span>
+                        <span class="stat-label">Gemini 异常</span>
                     </div>
                 </div>
 
@@ -1924,7 +1895,7 @@
 
                 <!-- 批量操作控件 -->
                 <div class="batch-controls">
-                    <h4 style="margin-top: 0; margin-bottom: 10px;">批量操作</h4>
+                    <h4>批量操作</h4>
                     <div class="batch-actions">
                         <div class="checkbox-container">
                             <input type="checkbox" id="selectAllCheckbox" class="select-all-checkbox"
@@ -1936,17 +1907,22 @@
                             disabled>批量启用</button>
                         <button class="batch-btn batch-disable" id="batchDisableBtn" onclick="batchAction('disable')"
                             disabled>批量禁用</button>
-                        <button class="batch-btn batch-delete" id="batchDeleteBtn" onclick="batchAction('delete')"
-                            disabled>批量删除</button>
                         <button class="batch-btn" onclick="clearAllAbnormalStatus()">刷新异常状态</button>
-                        <button class="batch-btn" id="batchVerifyBtn" onclick="batchVerifyProjectIds()"
-                            disabled>批量检验</button>
-                        <button class="batch-btn" id="batchMessageVerifyBtn" onclick="batchVerifyMessageCredentials()"
-                            disabled>批量消息校验</button>
-                        <button class="batch-btn" id="batchPreviewBtn" onclick="batchConfigurePreview()"
-                            disabled>批量设置预览</button>
-                        <button class="batch-btn batch-email" onclick="refreshAllEmails()">刷新所有邮箱</button>
-                        <button class="batch-btn" onclick="deduplicateByEmail()">凭证一键去重</button>
+                        <details class="batch-more">
+                            <summary>更多批量操作</summary>
+                            <div class="batch-more-menu">
+                                <button class="batch-btn" id="batchVerifyBtn" onclick="batchVerifyProjectIds()"
+                                    disabled>批量检验</button>
+                                <button class="batch-btn" id="batchMessageVerifyBtn"
+                                    onclick="batchVerifyMessageCredentials()" disabled>批量消息校验</button>
+                                <button class="batch-btn" id="batchPreviewBtn" onclick="batchConfigurePreview()"
+                                    disabled>批量设置预览</button>
+                                <button class="batch-btn batch-email" onclick="refreshAllEmails()">刷新所有邮箱</button>
+                                <button class="batch-btn" onclick="deduplicateByEmail()">凭证一键去重</button>
+                                <button class="batch-btn batch-delete" id="batchDeleteBtn"
+                                    onclick="batchAction('delete')" disabled>批量删除</button>
+                            </div>
+                        </details>
                     </div>
                 </div>
 
@@ -1956,12 +1932,13 @@
                     <select id="statusFilter" class="filter-select" onchange="applyStatusFilter()">
                         <option value="all">全部凭证</option>
                         <option value="normal">正常凭证</option>
-                        <option value="abnormal">异常凭证</option>
+                        <option value="claude_abnormal">Claude 异常</option>
+                        <option value="gemini_abnormal">Gemini 异常</option>
                     </select>
 
                     <label for="errorCodeFilter" style="margin-left: 20px;">错误码：</label>
                     <select id="errorCodeFilter" class="filter-select" onchange="applyStatusFilter()">
-                        <option value="all">全部</option>
+                        <option value="all">全部错误</option>
                         <option value="none">无错误</option>
                         <option value="400">400</option>
                         <option value="403">403</option>
@@ -1971,9 +1948,11 @@
 
                     <label for="cooldownFilter" style="margin-left: 20px;">冷却状态：</label>
                     <select id="cooldownFilter" class="filter-select" onchange="applyStatusFilter()">
-                        <option value="all">全部</option>
-                        <option value="in_cooldown">CD中</option>
-                        <option value="no_cooldown">未CD</option>
+                        <option value="all">全部状态</option>
+                        <option value="claude_cooldown">Claude 冷却</option>
+                        <option value="gemini_cooldown">Gemini 冷却</option>
+                        <option value="in_cooldown">全部冷却</option>
+                        <option value="no_cooldown">未冷却</option>
                     </select>
 
                     <label for="previewFilter" style="margin-left: 20px;">Preview：</label>
@@ -2019,8 +1998,7 @@
             <div id="antigravity-manageTab" class="tab-content">
                 <h3>Antigravity凭证文件管理</h3>
                 <p>管理所有Antigravity认证文件，查看状态和执行操作</p>
-                <div
-                    style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">
+                <div class="endpoint-card">
                     <strong>📡 API地址（点击复制）：</strong>
                     <table style="margin-top:6px;border-collapse:collapse;width:100%;">
                         <tr>
@@ -2048,14 +2026,17 @@
                 </div>
 
                 <!-- 检验功能说明 -->
-                <div class="status info" style="margin-bottom: 20px;">
-                    <strong>💡 检验功能说明：</strong>
-                    <p style="margin: 10px 0;">
-                        点击每个凭证的"检验"按钮可以重新获取Project ID, 并查看账号的tier(free/pro/ultra)。<br>
-                        <strong style="color: #0c5460;">✅ 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
-                        建议在遇到403错误时使用此功能。
-                    </p>
-                </div>
+                <details class="help-panel">
+                    <summary>使用说明</summary>
+                    <div class="help-panel-body">
+                        <strong>检验功能</strong>
+                        <p>
+                            点击每个凭证的"检验"按钮可以重新获取Project ID, 并查看账号的tier(free/pro/ultra)。<br>
+                            <strong style="color: #0c5460;">✅ 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
+                            建议在遇到403错误时使用此功能。
+                        </p>
+                    </div>
+                </details>
 
                 <!-- 总额度统计 -->
                 <div class="quota-summary-card" id="antigravityCreditSummaryCard" aria-expanded="false">
@@ -2101,9 +2082,13 @@
                         <span class="stat-number" id="antigravityStatNormal">0</span>
                         <span class="stat-label">正常</span>
                     </div>
-                    <div class="stat-item abnormal">
-                        <span class="stat-number" id="antigravityStatAbnormal">0</span>
-                        <span class="stat-label">异常</span>
+                    <div class="stat-item claude">
+                        <span class="stat-number" id="antigravityStatClaudeAbnormal">0</span>
+                        <span class="stat-label">Claude 异常</span>
+                    </div>
+                    <div class="stat-item gemini">
+                        <span class="stat-number" id="antigravityStatGeminiAbnormal">0</span>
+                        <span class="stat-label">Gemini 异常</span>
                     </div>
                 </div>
 
@@ -2114,7 +2099,7 @@
 
                 <!-- 批量操作控件 -->
                 <div class="batch-controls">
-                    <h4 style="margin-top: 0; margin-bottom: 10px;">批量操作</h4>
+                    <h4>批量操作</h4>
                     <div class="batch-actions">
                         <div class="checkbox-container">
                             <input type="checkbox" id="selectAllAntigravityCheckbox" class="select-all-checkbox"
@@ -2126,20 +2111,27 @@
                             onclick="batchAntigravityAction('enable')" disabled>批量启用</button>
                         <button class="batch-btn batch-disable" id="antigravityBatchDisableBtn"
                             onclick="batchAntigravityAction('disable')" disabled>批量禁用</button>
-                        <button class="batch-btn batch-delete" id="antigravityBatchDeleteBtn"
-                            onclick="batchAntigravityAction('delete')" disabled>批量删除</button>
                         <button class="batch-btn"
                             onclick="clearAllAntigravityAbnormalStatus()">刷新异常状态</button>
-                        <button class="batch-btn" id="antigravityBatchEnableCreditBtn"
-                            onclick="batchAntigravityAction('enable_credit')" disabled>批量开启积分</button>
-                        <button class="batch-btn" id="antigravityBatchDisableCreditBtn"
-                            onclick="batchAntigravityAction('disable_credit')" disabled>批量关闭积分</button>
-                        <button class="batch-btn" id="antigravityBatchVerifyBtn"
-                            onclick="batchVerifyAntigravityProjectIds()" disabled>批量检验</button>
-                        <button class="batch-btn" id="antigravityBatchMessageVerifyBtn"
-                            onclick="batchVerifyAntigravityMessageCredentials()" disabled>批量消息校验</button>
-                        <button class="batch-btn batch-email" onclick="refreshAllAntigravityEmails()">刷新所有邮箱</button>
-                        <button class="batch-btn" onclick="deduplicateAntigravityByEmail()">凭证一键去重</button>
+                        <details class="batch-more">
+                            <summary>更多批量操作</summary>
+                            <div class="batch-more-menu">
+                                <button class="batch-btn" id="antigravityBatchEnableCreditBtn"
+                                    onclick="batchAntigravityAction('enable_credit')" disabled>批量开启积分</button>
+                                <button class="batch-btn" id="antigravityBatchDisableCreditBtn"
+                                    onclick="batchAntigravityAction('disable_credit')" disabled>批量关闭积分</button>
+                                <button class="batch-btn" id="antigravityBatchVerifyBtn"
+                                    onclick="batchVerifyAntigravityProjectIds()" disabled>批量检验</button>
+                                <button class="batch-btn" id="antigravityBatchMessageVerifyBtn"
+                                    onclick="batchVerifyAntigravityMessageCredentials()" disabled>批量消息校验</button>
+                                <button class="batch-btn batch-email"
+                                    onclick="refreshAllAntigravityEmails()">刷新所有邮箱</button>
+                                <button class="batch-btn"
+                                    onclick="deduplicateAntigravityByEmail()">凭证一键去重</button>
+                                <button class="batch-btn batch-delete" id="antigravityBatchDeleteBtn"
+                                    onclick="batchAntigravityAction('delete')" disabled>批量删除</button>
+                            </div>
+                        </details>
                     </div>
                 </div>
 
@@ -2150,13 +2142,14 @@
                         onchange="applyAntigravityStatusFilter()">
                         <option value="all">全部凭证</option>
                         <option value="normal">正常凭证</option>
-                        <option value="abnormal">异常凭证</option>
+                        <option value="claude_abnormal">Claude 异常</option>
+                        <option value="gemini_abnormal">Gemini 异常</option>
                     </select>
 
                     <label for="antigravityErrorCodeFilter" style="margin-left: 20px;">错误码：</label>
                     <select id="antigravityErrorCodeFilter" class="filter-select"
                         onchange="applyAntigravityStatusFilter()">
-                        <option value="all">全部</option>
+                        <option value="all">全部错误</option>
                         <option value="none">无错误</option>
                         <option value="400">400</option>
                         <option value="403">403</option>
@@ -2167,9 +2160,11 @@
                     <label for="antigravityCooldownFilter" style="margin-left: 20px;">冷却状态：</label>
                     <select id="antigravityCooldownFilter" class="filter-select"
                         onchange="applyAntigravityStatusFilter()">
-                        <option value="all">全部</option>
-                        <option value="in_cooldown">CD中</option>
-                        <option value="no_cooldown">未CD</option>
+                        <option value="all">全部状态</option>
+                        <option value="claude_cooldown">Claude 冷却</option>
+                        <option value="gemini_cooldown">Gemini 冷却</option>
+                        <option value="in_cooldown">全部冷却</option>
+                        <option value="no_cooldown">未冷却</option>
                     </select>
 
                     <label for="antigravityTierFilter" style="margin-left: 20px;">Tier：</label>
@@ -2635,19 +2630,15 @@
             <div id="statusSection"></div>
 
             <!-- 项目信息 -->
-            <div
-                style="background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 12px; margin-top: 30px; text-align: center; border-left: 4px solid #007bff;">
-                <p style="margin: 5px 0; font-size: 14px; color: #495057;">GitHub: <a
-                        href="https://github.com/su-kaka/gcli2api" target="_blank"
-                        style="color: #007bff; text-decoration: none;">https://github.com/su-kaka/gcli2api</a></p>
-                <p style="margin: 5px 0; font-size: 14px; color: #dc3545; font-weight: 500;">⚠️ 禁止商业用途和倒卖 - 仅供学习使用 ⚠️
-                </p>
+            <div class="app-footer">
+                <a href="https://github.com/su-kaka/gcli2api" target="_blank">GitHub</a>
+                <span>仅供学习使用，禁止商业用途和倒卖</span>
             </div>
         </div>
     </div>
 
     <!-- 引入公共JavaScript模块 -->
-    <script src="./front/common.js?v=cooldown-refresh-20260730"></script>
+    <script src="./front/common.js?v=ui-refresh-20260905"></script>
 
 </body>
 

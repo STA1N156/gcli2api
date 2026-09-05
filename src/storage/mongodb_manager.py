@@ -10,6 +10,13 @@ from typing import Any, Dict, List, Optional
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from log import log
+from src.credential_status import (
+    add_status_stats,
+    credential_status_flags,
+    matches_cooldown_filter,
+    matches_status_filter,
+    new_status_stats,
+)
 
 
 class MongoDBManager:
@@ -851,10 +858,10 @@ class MongoDBManager:
         Args:
             offset: 跳过的记录数（默认0）
             limit: 返回的最大记录数（None表示返回所有）
-            status_filter: 状态筛选（all=全部, normal=正常, abnormal=异常）
+            status_filter: 状态筛选（all/normal/abnormal/claude_abnormal/gemini_abnormal）
             mode: 凭证模式 ("geminicli" 或 "antigravity")
             error_code_filter: 错误码筛选（格式如"400"或"403"，筛选包含该错误码的凭证）
-            cooldown_filter: 冷却状态筛选（"in_cooldown"=冷却中, "no_cooldown"=未冷却）
+            cooldown_filter: 冷却状态筛选（全部冷却、Claude冷却、Gemini冷却或未冷却）
             preview_filter: Preview筛选（"preview"=支持preview, "no_preview"=不支持preview，仅geminicli模式有效）
             tier_filter: tier筛选（"free", "pro", "ultra"）
 
@@ -882,7 +889,7 @@ class MongoDBManager:
                     except ValueError:
                         filter_int = None
 
-            global_stats = {"total": 0, "normal": 0, "abnormal": 0}
+            global_stats = new_status_stats()
 
             # 获取所有匹配的文档（用于冷却筛选，因为需要在Python中判断）
             projection = {
@@ -921,15 +928,12 @@ class MongoDBManager:
                         error_codes = json.loads(error_codes)
                     except (TypeError, ValueError):
                         error_codes = []
-                abnormal = bool(
-                    doc.get("disabled") or error_codes or active_cooldowns
+                flags = credential_status_flags(
+                    bool(doc.get("disabled")), error_codes, active_cooldowns, mode
                 )
-                global_stats["total"] += 1
-                global_stats["abnormal" if abnormal else "normal"] += 1
+                add_status_stats(global_stats, flags)
 
-                if status_filter == "normal" and abnormal:
-                    continue
-                if status_filter == "abnormal" and not abnormal:
+                if not matches_status_filter(status_filter, flags):
                     continue
                 if filter_none and error_codes:
                     continue
@@ -967,16 +971,7 @@ class MongoDBManager:
                         continue
 
                 # 应用冷却筛选
-                if cooldown_filter == "in_cooldown":
-                    # 只保留有冷却的凭证
-                    if active_cooldowns:
-                        all_summaries.append(summary)
-                elif cooldown_filter == "no_cooldown":
-                    # 只保留没有冷却的凭证
-                    if not active_cooldowns:
-                        all_summaries.append(summary)
-                else:
-                    # 不筛选冷却状态
+                if matches_cooldown_filter(cooldown_filter, active_cooldowns):
                     all_summaries.append(summary)
 
             # 应用分页
@@ -1001,7 +996,7 @@ class MongoDBManager:
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "abnormal": 0},
+                "stats": new_status_stats(),
             }
 
     # ============ 粘性会话绑定 ============

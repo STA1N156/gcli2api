@@ -635,10 +635,14 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="offset 必须大于等于 0")
     if limit not in [20, 50, 100, 200, 500, 1000]:
         raise HTTPException(status_code=400, detail="limit 只能是 20、50、100、200、500 或 1000")
-    if status_filter not in ["all", "normal", "abnormal"]:
-        raise HTTPException(status_code=400, detail="status_filter 只能是 all、normal 或 abnormal")
-    if cooldown_filter and cooldown_filter not in ["all", "in_cooldown", "no_cooldown"]:
-        raise HTTPException(status_code=400, detail="cooldown_filter 只能是 all、in_cooldown 或 no_cooldown")
+    if status_filter not in {
+        "all", "normal", "abnormal", "claude_abnormal", "gemini_abnormal"
+    }:
+        raise HTTPException(status_code=400, detail="无效的凭证状态筛选")
+    if cooldown_filter and cooldown_filter not in {
+        "all", "in_cooldown", "claude_cooldown", "gemini_cooldown", "no_cooldown"
+    }:
+        raise HTTPException(status_code=400, detail="无效的冷却状态筛选")
     if preview_filter and preview_filter not in ["all", "preview", "no_preview"]:
         raise HTTPException(status_code=400, detail="preview_filter 只能是 all、preview 或 no_preview")
     if tier_filter and tier_filter not in ["all", "free", "pro", "ultra"]:
@@ -688,7 +692,13 @@ async def get_creds_status_common(
         "offset": offset,
         "limit": limit,
         "has_more": (offset + limit) < result["total"],
-        "stats": result.get("stats", {"total": 0, "normal": 0, "abnormal": 0}),
+        "stats": result.get("stats", {
+            "total": 0,
+            "normal": 0,
+            "abnormal": 0,
+            "claude_abnormal": 0,
+            "gemini_abnormal": 0,
+        }),
     })
 
 
@@ -1080,9 +1090,9 @@ async def get_creds_status(
     Args:
         offset: 跳过的记录数（默认0）
         limit: 每页返回的记录数（默认50，可选：20, 50, 100, 200, 500, 1000）
-        status_filter: 状态筛选（all=全部, normal=正常, abnormal=异常）
+        status_filter: 状态筛选（all/normal/abnormal/claude_abnormal/gemini_abnormal）
         error_code_filter: 错误码筛选（all=全部, 或具体错误码如"400", "403"）
-        cooldown_filter: 冷却状态筛选（all=全部, in_cooldown=冷却中, no_cooldown=未冷却）
+        cooldown_filter: 冷却状态筛选（all/in_cooldown/claude_cooldown/gemini_cooldown/no_cooldown）
         preview_filter: Preview筛选（all=全部, preview=支持preview, no_preview=不支持preview，仅geminicli模式有效）
         tier_filter: tier筛选（all=全部, free/pro/ultra）
         mode: 凭证模式（geminicli 或 antigravity）

@@ -11,6 +11,13 @@ from typing import Any, Dict, List, Optional
 import asyncpg
 
 from log import log
+from src.credential_status import (
+    add_status_stats,
+    credential_status_flags,
+    matches_cooldown_filter,
+    matches_status_filter,
+    new_status_stats,
+)
 
 
 class PSQLManager:
@@ -547,7 +554,7 @@ class PSQLManager:
             current_time = time.time()
 
             async with self._pool.acquire() as conn:
-                global_stats = {"total": 0, "normal": 0, "abnormal": 0}
+                global_stats = new_status_stats()
 
                 # 查询
                 if mode == "geminicli":
@@ -589,15 +596,12 @@ class PSQLManager:
                         if isinstance(value, (int, float)) and value > current_time
                     }
                     error_codes = json.loads(error_codes_json)
-                    abnormal = bool(
-                        row["disabled"] or error_codes or active_cooldowns
+                    flags = credential_status_flags(
+                        bool(row["disabled"]), error_codes, active_cooldowns, mode
                     )
-                    global_stats["total"] += 1
-                    global_stats["abnormal" if abnormal else "normal"] += 1
+                    add_status_stats(global_stats, flags)
 
-                    if status_filter == "normal" and abnormal:
-                        continue
-                    if status_filter == "abnormal" and not abnormal:
+                    if not matches_status_filter(status_filter, flags):
                         continue
 
                     # 筛选无错误的凭证
@@ -648,13 +652,7 @@ class PSQLManager:
                         if summary["tier"] != tier_filter:
                             continue
 
-                    if cooldown_filter == "in_cooldown":
-                        if active_cooldowns:
-                            all_summaries.append(summary)
-                    elif cooldown_filter == "no_cooldown":
-                        if not active_cooldowns:
-                            all_summaries.append(summary)
-                    else:
+                    if matches_cooldown_filter(cooldown_filter, active_cooldowns):
                         all_summaries.append(summary)
 
                 total_count = len(all_summaries)
@@ -678,7 +676,7 @@ class PSQLManager:
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "abnormal": 0},
+                "stats": new_status_stats(),
             }
 
     async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:
