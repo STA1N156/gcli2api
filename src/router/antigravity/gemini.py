@@ -16,7 +16,7 @@ import json
 
 # 第三方库
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 # 本地模块 - 配置和日志
 from config import get_anti_truncation_max_attempts
@@ -89,9 +89,9 @@ async def generate_content(
     use_anti_truncation = is_anti_truncation_model(model)
     real_model = get_base_model_from_feature_model(model)
 
-    # 对于抗截断模型的非流式请求，后端会使用流式抗截断并收集为非流式响应
+    # 对于抗截断模型的非流式请求，后端会使用工具正文抗截断并收集为非流式响应
     if use_anti_truncation:
-        log.info("非流式请求启用抗截断，将使用流式续写后收集为完整响应")
+        log.info("非流式请求启用抗截断，将收集工具正文后返回完整响应")
 
     # 更新模型名为真实模型名
     normalized_dict["model"] = real_model
@@ -170,65 +170,8 @@ async def stream_generate_content(
     # 更新模型名为真实模型名
     normalized_dict["model"] = real_model
 
-    # ========== 流式抗截断生成器 ==========
-    async def anti_truncation_generator():
-        from src.converter.antigravity_fix import normalize_antigravity_request
-        from src.converter.anti_truncation import AntiTruncationStreamProcessor
-        from src.converter.anti_truncation import apply_anti_truncation
-        from src.api.antigravity import stream_request
-        from fastapi import Response
-
-        # 先进行基础标准化
-        normalized_req = await normalize_antigravity_request(normalized_dict.copy())
-
-        # 准备API请求格式 - 提取model并将其他字段放入request中
-        api_request = {
-            "model": normalized_req.pop("model") if "model" in normalized_req else real_model,
-            "request": normalized_req,
-            "cache_session_key": cache_session_key
-        }
-
-        max_attempts = await get_anti_truncation_max_attempts()
-
-        # 首先对payload应用反截断指令
-        anti_truncation_payload = apply_anti_truncation(api_request)
-
-        first_attempt_stream = stream_request(body=anti_truncation_payload, native=False)
-        try:
-            first_chunk = await read_first_async_item(first_attempt_stream)
-        except StopAsyncIteration:
-            return
-
-        if isinstance(first_chunk, Response):
-            yield first_chunk
-            return
-
-        first_attempt_pending = True
-
-        async def stream_request_wrapper(payload):
-            nonlocal first_attempt_pending
-
-            if first_attempt_pending:
-                first_attempt_pending = False
-                stream_gen = prepend_async_item(first_chunk, first_attempt_stream)
-            else:
-                stream_gen = stream_request(body=payload, native=False)
-            return StreamingResponse(stream_gen, media_type="text/event-stream")
-
-        # 创建反截断处理器
-        processor = AntiTruncationStreamProcessor(
-            stream_request_wrapper,
-            anti_truncation_payload,
-            max_attempts,
-            enable_prefill_mode=("claude" not in str(api_request.get("model", "")).lower()),
-        )
-
-        # 迭代 process_stream() 生成器，仅在确实有 response 包装时才拆 JSON
-        async for chunk in processor.process_stream():
-            yield unwrap_gemini_response_sse_chunk(chunk)
-
-    # ========== 普通流式生成器 ==========
-    async def normal_stream_generator():
+    # 流式和非流式抗截断共用工具正文转换。
+    async def stream_generator():
         from src.converter.antigravity_fix import normalize_antigravity_request
         from src.api.antigravity import stream_request
         from fastapi import Response
@@ -243,7 +186,13 @@ async def stream_generate_content(
         }
 
         # 普通流式请求只在确实有 response 包装时才拆 JSON
-        stream_gen = stream_request(body=api_request, native=False)
+        if use_anti_truncation:
+            from src.router.anti_truncation import anti_truncation_gemini_stream
+
+            max_attempts = await get_anti_truncation_max_attempts()
+            stream_gen = anti_truncation_gemini_stream(api_request, stream_request, max_attempts)
+        else:
+            stream_gen = stream_request(body=api_request, native=False)
         try:
             first_chunk = await read_first_async_item(stream_gen)
         except StopAsyncIteration:
@@ -270,11 +219,7 @@ async def stream_generate_content(
 
             yield unwrap_gemini_response_sse_chunk(chunk)
 
-    # ========== 根据模式选择生成器 ==========
-    if use_anti_truncation:
-        log.info("启用流式抗截断功能")
-        return await build_streaming_response_or_error(anti_truncation_generator())
-    return await build_streaming_response_or_error(normal_stream_generator())
+    return await build_streaming_response_or_error(stream_generator())
 
 @router.post("/antigravity/v1beta/models/{model:path}:countTokens")
 @router.post("/antigravity/v1/models/{model:path}:countTokens")
@@ -445,7 +390,7 @@ if __name__ == "__main__":
     def test_anti_truncation_stream_request():
         """测试流式抗截断请求"""
         print("\n" + "=" * 80)
-        print("【测试5】流式抗截断请求 (POST /antigravity/v1/models/流式抗截断/gemini-2.5-flash:streamGenerateContent)")
+        print("【测试5】流式抗截断请求 (POST /antigravity/v1/models/抗截断/gemini-2.5-flash:streamGenerateContent)")
         print("=" * 80)
         print(f"请求体: {json.dumps(test_request_body, indent=2, ensure_ascii=False)}\n")
 
@@ -454,7 +399,7 @@ if __name__ == "__main__":
 
         with client.stream(
             "POST",
-            "/antigravity/v1/models/流式抗截断/gemini-2.5-flash:streamGenerateContent",
+            "/antigravity/v1/models/抗截断/gemini-2.5-flash:streamGenerateContent",
             json=test_request_body,
             params={"key": test_api_key}
         ) as response:

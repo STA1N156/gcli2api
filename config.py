@@ -215,7 +215,7 @@ async def get_empty_output_error_enabled() -> bool:
 
 async def get_anti_truncation_max_attempts() -> int:
     """
-    Get maximum attempts for anti-truncation continuation.
+    Get maximum total attempts for completely empty anti-truncation replies.
 
     Environment variable: ANTI_TRUNCATION_MAX_ATTEMPTS
     Database config key: anti_truncation_max_attempts

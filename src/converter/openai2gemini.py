@@ -1776,7 +1776,7 @@ def convert_gemini_to_openai_stream(
 
         # 获取 Gemini 的 finishReason
         gemini_finish_reason = candidate.get("finishReason")
-        finish_reason = _map_finish_reason(gemini_finish_reason)
+        finish_reason = _map_finish_reason(gemini_finish_reason) if gemini_finish_reason else None
         
         # 只有在正常停止（STOP）且有工具调用时才设为 tool_calls
         # 避免在 SAFETY、MAX_TOKENS 等情况下仍然返回 tool_calls 导致循环

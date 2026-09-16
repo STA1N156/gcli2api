@@ -1029,6 +1029,15 @@ async def gemini_stream_to_anthropic_stream(
             else:
                 response = data
 
+            if response.get("error"):
+                error = response["error"]
+                if not isinstance(error, dict):
+                    error = {"message": str(error)}
+                yield _sse_event("error", {
+                    "type": "error", "error": {"type": "api_error", **error},
+                })
+                return
+
             candidate = (response.get("candidates", []) or [{}])[0] or {}
             parts = (candidate.get("content", {}) or {}).get("parts", []) or []
 

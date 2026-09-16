@@ -184,7 +184,7 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                 or new_config["anti_truncation_max_attempts"] > 10
             ):
                 raise HTTPException(
-                    status_code=400, detail="抗截断最大重试次数必须是1-10之间的整数"
+                    status_code=400, detail="抗截断空回最大尝试次数必须是1-10之间的整数"
                 )
 
         if "compatibility_mode_enabled" in new_config:

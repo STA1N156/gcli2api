@@ -16,7 +16,7 @@ import json
 
 # 第三方库
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 # 本地模块 - 配置和日志
 from config import get_anti_truncation_max_attempts
@@ -83,9 +83,9 @@ async def chat_completions(
     # 获取流式标志
     is_streaming = bool(normalized_dict.get("stream", False))
 
-    # 对于抗截断模型的非流式请求，后端会使用流式抗截断并收集为非流式响应
+    # 对于抗截断模型的非流式请求，后端会使用工具正文抗截断并收集为非流式响应
     if use_anti_truncation and not is_streaming:
-        log.info("非流式请求启用抗截断，将使用流式续写后收集为完整响应")
+        log.info("非流式请求启用抗截断，将收集工具正文后返回完整响应")
 
     # 更新模型名为真实模型名
     normalized_dict["model"] = real_model
@@ -156,99 +156,20 @@ async def chat_completions(
 
     # ========== 流式请求 ==========
 
-    # ========== 流式抗截断生成器 ==========
-    async def anti_truncation_generator():
-        from src.converter.anti_truncation import AntiTruncationStreamProcessor
-        from src.api.antigravity import stream_request
-        from src.converter.anti_truncation import apply_anti_truncation
-        from fastapi import Response
-
-        max_attempts = await get_anti_truncation_max_attempts()
-
-        # 首先对payload应用反截断指令
-        anti_truncation_payload = apply_anti_truncation(api_request)
-
-        first_attempt_stream = stream_request(body=anti_truncation_payload, native=False)
-        try:
-            first_chunk = await read_first_async_item(first_attempt_stream)
-        except StopAsyncIteration:
-            return
-
-        if isinstance(first_chunk, Response):
-            yield first_chunk
-            return
-
-        first_attempt_pending = True
-
-        async def stream_request_wrapper(payload):
-            nonlocal first_attempt_pending
-
-            if first_attempt_pending:
-                first_attempt_pending = False
-                stream_gen = prepend_async_item(first_chunk, first_attempt_stream)
-            else:
-                stream_gen = stream_request(body=payload, native=False)
-
-            return StreamingResponse(stream_gen, media_type="text/event-stream")
-
-        # 创建反截断处理器
-        processor = AntiTruncationStreamProcessor(
-            stream_request_wrapper,
-            anti_truncation_payload,
-            max_attempts,
-            enable_prefill_mode=("claude" not in str(api_request.get("model", "")).lower()),
-        )
-
-        # 转换为 OpenAI 格式
-        import uuid
-        response_id = str(uuid.uuid4())
-
-        # 直接迭代 process_stream() 生成器，并转换为 OpenAI 格式
-        async for chunk in processor.process_stream():
-            if not chunk:
-                continue
-
-            # 解析 Gemini SSE 格式
-            chunk_str = chunk.decode('utf-8') if isinstance(chunk, bytes) else chunk
-
-            # 跳过空行
-            if not chunk_str.strip():
-                continue
-
-            # 处理 [DONE] 标记
-            if chunk_str.strip() == "data: [DONE]":
-                yield "data: [DONE]\n\n".encode('utf-8')
-                return
-
-            # 解析 "data: {...}" 格式
-            if chunk_str.startswith("data: "):
-                try:
-                    # 转换为 OpenAI 格式
-                    from src.converter.openai2gemini import convert_gemini_to_openai_stream
-                    openai_chunk_str = convert_gemini_to_openai_stream(
-                        chunk_str,
-                        real_model,
-                        response_id
-                    )
-
-                    if openai_chunk_str:
-                        yield openai_chunk_str.encode('utf-8')
-
-                except Exception as e:
-                    log.error(f"Failed to convert chunk: {e}")
-                    continue
-
-        # 发送结束标记
-        yield "data: [DONE]\n\n".encode('utf-8')
-
-    # ========== 普通流式生成器 ==========
-    async def normal_stream_generator():
+    # 流式和非流式抗截断共用工具正文转换。
+    async def stream_generator():
         from src.api.antigravity import stream_request
         from fastapi import Response
         import uuid
 
         # 调用 API 层的流式请求（不使用 native 模式）
-        stream_gen = stream_request(body=api_request, native=False)
+        if use_anti_truncation:
+            from src.router.anti_truncation import anti_truncation_gemini_stream
+
+            max_attempts = await get_anti_truncation_max_attempts()
+            stream_gen = anti_truncation_gemini_stream(api_request, stream_request, max_attempts)
+        else:
+            stream_gen = stream_request(body=api_request, native=False)
         try:
             first_chunk = await read_first_async_item(stream_gen)
         except StopAsyncIteration:
@@ -314,11 +235,7 @@ async def chat_completions(
         # 发送结束标记
         yield "data: [DONE]\n\n".encode('utf-8')
 
-    # ========== 根据模式选择生成器 ==========
-    if use_anti_truncation:
-        log.info("启用流式抗截断功能")
-        return await build_streaming_response_or_error(anti_truncation_generator())
-    return await build_streaming_response_or_error(normal_stream_generator())
+    return await build_streaming_response_or_error(stream_generator())
 
 
 # ==================== 测试代码 ====================

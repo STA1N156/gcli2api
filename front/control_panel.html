@@ -2449,19 +2449,20 @@
                             <h4>抗截断配置</h4>
 
                             <div class="form-group">
-                                <label for="antiTruncationMaxAttempts">抗截断最大重试次数:</label>
+                                <label for="antiTruncationMaxAttempts">抗截断空回最大尝试次数:</label>
                                 <input type="number" id="antiTruncationMaxAttempts" class="config-input" min="1"
                                     max="10" />
-                                <small class="config-note">当检测到输出截断时的最大续传尝试次数</small>
+                                <small class="config-note">包含首次请求；仅完全没有正文、思考或工具调用时重试。有输出或其他报错后不自动续写。</small>
                             </div>
 
                             <div class="form-group">
                                 <div class="config-info">
                                     <strong>注意：</strong>抗截断功能现在通过模型名控制：
                                     <ul style="margin: 5px 0; padding-left: 20px;">
-                                        <li>选择带有 "-流式抗截断" 后缀的模型即可启用</li>
+                                        <li>选择带有 "抗截断/" 前缀的模型即可启用</li>
+                                        <li>参考 RP-Hub，通过内部工具传递正文，再还原成普通回复</li>
                                         <li>流式和非流式请求都会生效，非流式会在后端收集完整结果后返回</li>
-                                        <li>例如: "gemini-2.5-pro-流式抗截断"</li>
+                                        <li>例如: "抗截断/gemini-2.5-pro"</li>
                                     </ul>
                                 </div>
                             </div>

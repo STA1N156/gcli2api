@@ -281,9 +281,9 @@ All models have 1M context window capacity. Each credential file provides 1000 r
 - When no ratio is specified, the API automatically decides the aspect ratio
 
 ### 🌊 Special Feature Variants
-- **Streaming Anti-truncation Mode**: Add `流式抗截断/` prefix to model name
-  - Example: `流式抗截断/gemini-2.5-pro`
-  - Automatically detects response truncation and retries to ensure complete answers
+- **Streaming Anti-truncation Mode**: Add `抗截断/` prefix to model name
+  - Example: `抗截断/gemini-2.5-pro`
+  - Uses RP-Hub-style reply-tool output, restored to normal text for streaming and non-streaming clients. Only completely empty replies are retried within the configured limit; no automatic continuation.
 
 ### 🔧 Automatic Model Feature Detection
 - System automatically recognizes feature identifiers in model names
@@ -824,7 +824,7 @@ Response will include separated thinking content:
 **Streaming Anti-truncation Usage**
 ```json
 {
-  "model": "流式抗截断/gemini-2.5-pro",
+  "model": "抗截断/gemini-2.5-pro",
   "messages": [
     {"role": "user", "content": "Write a long article"}
   ],
