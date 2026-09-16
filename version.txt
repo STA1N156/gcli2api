@@ -1,4 +1,4 @@
-full_hash=ea7601666cc951c7548e3bdb35d06cae44d94cda
-short_hash=ea76016
-message=refactor panel credential status filters
-date=2026-09-05 15:35:24 +0800
+full_hash=25ee793388ee9c90b90810f527ab4d6258f3ffa5
+short_hash=25ee793
+message=refactor anti-truncation to RP-Hub reply tools
+date=2026-09-16 15:32:17 +0800
