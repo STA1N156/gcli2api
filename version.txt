@@ -1,4 +1,4 @@
-full_hash=25ee793388ee9c90b90810f527ab4d6258f3ffa5
-short_hash=25ee793
-message=refactor anti-truncation to RP-Hub reply tools
-date=2026-09-16 15:32:17 +0800
+full_hash=5b86ac9cc8906757f954d04a9f1055422faca6ce
+short_hash=5b86ac9
+message=fix anti-truncation fallback to ordinary reply text
+date=2026-09-19 20:39:01 +0800
