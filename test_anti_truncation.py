@@ -167,7 +167,6 @@ class AntiTruncationTests(unittest.IsolatedAsyncioTestCase):
             [event([reply("")], "STOP")],
             [event([{"functionCall": {"name": "output_reply", "args": {"content": 1}}}], "STOP")],
             [event([reply("a"), reply("b")], "STOP")],
-            [event([reply("a"), {"functionCall": {"name": "lookup", "args": {}}}], "STOP")],
             [event(reason="SAFETY")],
             [JSONResponse({"error": {"code": 400, "message": "bad request"}}, status_code=400)],
             [JSONResponse({"error": {"code": 429, "message": "quota"}}, status_code=429)],
@@ -181,6 +180,48 @@ class AntiTruncationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(self.calls), 1)
                 self.assertIsInstance(chunks[-1], Response)
                 self.assertGreaterEqual(chunks[-1].status_code, 400)
+                self.assertNotIn(b"INVALID_TOOL_REPLY", chunks[-1].body)
+
+    async def test_unrecognized_reply_falls_back_to_all_plain_text_without_retry(self):
+        tool = {"functionCall": {"name": "lookup", "id": "call_123", "args": {"q": "query"}},
+                "thoughtSignature": "signature"}
+        cases = [
+            [event([{"functionCall": {"name": "output_reply", "args": {"content": 1}}}])],
+            [event([{"functionCall": {"name": "output_reply", "args": {"content": "工具正文", "extra": 1}}}])],
+            [event([reply("第一份")]), event([reply("第二份")])],
+            [event([reply("工具正文"), tool])],
+            [event([reply("工具正文")]), event(reason="SAFETY")],
+            ['data: {"promptFeedback":{"blockReason":"SAFETY"}}\n\n'],
+            ['data: {invalid json}\n\n'],
+            [event([None, {"text": None}, {"functionCall": "invalid"}])],
+        ]
+        for middle in cases:
+            with self.subTest(middle=middle):
+                self.calls.clear()
+                chunks = await self.run_stream([[
+                    event([{"text": "第一段\n"}]), *middle,
+                    event([{"text": "第二段"}], "STOP", {"promptTokenCount": 9}),
+                ]])
+                self.assertFalse(any(isinstance(chunk, Response) for chunk in chunks))
+                data = [item.get("response", item) for item in unpack(chunks)]
+                parts = [part for item in data for candidate in item["candidates"]
+                         for part in candidate["content"]["parts"]]
+                self.assertEqual("".join(part.get("text", "") for part in parts), "第一段\n第二段")
+                self.assertFalse(any(part.get("functionCall", {}).get("name") == "output_reply" for part in parts))
+                if any("call_123" in entry for entry in middle):
+                    self.assertIn(tool, parts)
+                self.assertEqual(data[-1]["usageMetadata"]["promptTokenCount"], 9)
+                self.assertEqual(len(self.calls), 1)
+
+    async def test_unrecognized_tool_without_plain_text_only_reports_empty_output(self):
+        for parts in ([reply("a"), reply("b")],
+                      [{"functionCall": {"name": "output_reply", "args": {"content": 1}}}]):
+            with self.subTest(parts=parts):
+                self.calls.clear()
+                chunks = await self.run_stream([[event(parts, "STOP")]])
+                self.assertEqual(chunks[-1].status_code, 461)
+                self.assertEqual(json.loads(chunks[-1].body)["error"]["status"], "EMPTY_MODEL_OUTPUT")
+                self.assertEqual(len(self.calls), 1)
 
     async def test_nonstream_uses_same_body_reasoning_and_usage(self):
         async def upstream(**kwargs):
@@ -266,7 +307,8 @@ class AntiTruncationRouteTests(unittest.IsolatedAsyncioTestCase):
                                     if line.startswith("data: ") and line != "data: [DONE]"]
                             self.assertIn("完整正文", json.dumps(data, ensure_ascii=False))
                             if protocol == "openai":
-                                self.assertIsNone(data[0]["choices"][0]["finish_reason"])
+                                for chunk in data[:-1]:
+                                    self.assertIsNone(chunk["choices"][0]["finish_reason"])
                                 self.assertEqual(data[-1]["choices"][0]["finish_reason"], "stop")
                         else:
                             self.assertIn("完整正文", response.text)
@@ -292,7 +334,29 @@ class AntiTruncationRouteTests(unittest.IsolatedAsyncioTestCase):
                     event([{"functionCall": {"name": "output_reply", "args": {"content": 1}}}], "STOP"),
                 ])
                 self.assertIn("error", response.text)
+                self.assertIn("EMPTY_MODEL_OUTPUT", response.text)
                 self.assertEqual(len(calls), 1)
+
+    async def test_all_routes_return_plain_text_on_invalid_tool_output(self):
+        for backend in ("geminicli", "antigravity"):
+            for protocol in ("openai", "anthropic", "gemini"):
+                for streaming in (False, True):
+                    with self.subTest(backend=backend, protocol=protocol, streaming=streaming):
+                        response, calls = await self.request_route(backend, protocol, streaming, [
+                            event([{"text": "思考", "thought": True}]),
+                            event([{"text": "普通正文"}]),
+                            event([{"functionCall": {"name": "output_reply", "args": {"content": 1}}}],
+                                  "STOP", {"promptTokenCount": 8, "candidatesTokenCount": 5}),
+                        ])
+                        self.assertEqual(response.status_code, 200, response.text)
+                        data = [json.loads(line[6:]) for line in response.text.splitlines()
+                                if line.startswith("data: ") and line != "data: [DONE]"] if streaming else response.json()
+                        decoded = json.dumps(data, ensure_ascii=False)
+                        self.assertEqual(decoded.count("普通正文"), 1)
+                        self.assertIn("思考", decoded)
+                        self.assertNotIn('"error"', decoded)
+                        self.assertNotIn("output_reply", decoded)
+                        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":

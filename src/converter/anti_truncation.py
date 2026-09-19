@@ -98,13 +98,14 @@ class ReplyToolStream:
         })
         self.usage.update(response.get("usageMetadata") or {})
         if (response.get("promptFeedback") or {}).get("blockReason"):
-            raise ValueError("API 已停止工具输出")
+            self.has_activity = True
 
         outgoing = []
         for position, candidate in enumerate(response.get("candidates") or []):
             index = candidate.get("index", position)
             state = self.candidates.setdefault(index, {
-                "plain": [], "tools": [], "reply": False, "reply_output": False,
+                "plain": [], "tools": [], "reply": [], "reply_seen": False,
+                "invalid_reply": False,
                 "candidate": {"index": index},
             })
             state["candidate"].update({
@@ -112,25 +113,32 @@ class ReplyToolStream:
             })
             reason = candidate.get("finishReason")
             if reason and reason not in ("STOP", "MAX_TOKENS", "FINISH_REASON_UNSPECIFIED"):
-                raise ValueError(f"API 已停止工具输出：{reason}")
+                self.has_activity = True
+                state["invalid_reply"] = True
 
             parts = []
             for part in (candidate.get("content") or {}).get("parts") or []:
+                if not isinstance(part, dict):
+                    self.has_activity = True
+                    continue
                 call = part.get("functionCall")
+                if call is not None and not isinstance(call, dict):
+                    self.has_activity = True
+                    continue
                 if call is not None and call.get("name") == REPLY_TOOL_NAME:
                     self.has_activity = True
                     args = call.get("args")
-                    if (state["reply"] or not isinstance(args, dict)
+                    if (state["reply_seen"] or not isinstance(args, dict)
                             or set(args) != {"content"} or not isinstance(args["content"], str)):
-                        raise ValueError("输出正文工具的参数格式错误，应为仅含 content 字符串的 JSON 对象")
-                    state["reply"] = True
-                    if args["content"].strip():
-                        self.has_output = state["reply_output"] = True
-                        # This transport-only call and signature are not client tools.
-                        parts.append({"text": args["content"]})
+                        state["invalid_reply"] = True
+                    elif args["content"].strip():
+                        state["reply"].append({"text": args["content"]})
+                    state["reply_seen"] = True
                 elif call is not None:
                     self.has_activity = self.has_output = True
                     state["tools"].append(part)
+                elif "text" in part and not isinstance(part["text"], str):
+                    self.has_activity = True
                 elif "text" in part and not part.get("thought"):
                     state["plain"].append(part)
                     self.has_activity |= bool(part["text"].strip())
@@ -141,8 +149,6 @@ class ReplyToolStream:
                         "inlineData", "fileData", "executableCode", "codeExecutionResult",
                     )):
                         self.has_activity = self.has_output = True
-            if state["reply"] and state["tools"]:
-                raise ValueError("API 混用了正文工具和其他工具，请重新尝试")
             if parts:
                 outgoing.append({"index": index, "content": {"role": "model", "parts": parts}})
         if outgoing:
@@ -150,10 +156,12 @@ class ReplyToolStream:
         return None
 
     def finish(self):
-        """Only use ordinary text as a fallback after the reply tool is ruled out."""
+        """Choose one body after validation, so later malformed calls cannot duplicate it."""
         candidates = []
         for state in self.candidates.values():
-            parts = [] if state["reply_output"] else state["plain"]
+            parts = state["reply"] if (
+                state["reply"] and not state["invalid_reply"] and not state["tools"]
+            ) else state["plain"]
             parts = [*parts, *state["tools"]]
             self.has_output |= any(part.get("text", "").strip() for part in parts)
             candidates.append({

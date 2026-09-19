@@ -40,22 +40,22 @@ async def anti_truncation_gemini_stream(
         processor = ReplyToolStream()
         error_response = None
         done = False
-        try:
-            async with aclosing(stream_request_func(body=payload, native=False)) as stream:
-                async for chunk in stream:
-                    if isinstance(chunk, Response):
-                        error_response = chunk
+        async with aclosing(stream_request_func(body=payload, native=False)) as stream:
+            async for chunk in stream:
+                if isinstance(chunk, Response):
+                    error_response = chunk
+                    break
+                text = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+                for line in text.splitlines():
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        done = True
                         break
-                    text = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
-                    for line in text.splitlines():
-                        if not line.startswith("data:"):
-                            continue
-                        raw = line[5:].strip()
-                        if raw == "[DONE]":
-                            done = True
-                            break
-                        if not raw:
-                            continue
+                    if not raw:
+                        continue
+                    try:
                         data = json.loads(raw)
                         response = data.get("response", data)
                         if response.get("error"):
@@ -66,37 +66,35 @@ async def anti_truncation_gemini_stream(
                         converted = processor.process(data)
                         if converted is not None:
                             yield _sse(converted)
-                    if done or error_response is not None:
-                        break
-            # Close the upstream connection before handing an HTTP error to a
-            # router, which may return immediately after reading this item.
-            if error_response is not None and (
-                error_response.status_code != EMPTY_MODEL_OUTPUT_STATUS_CODE or processor.has_activity
-            ):
-                yield error_response
-                return
-            final = processor.finish()
-            if processor.has_output:
-                response = final.get("response", final)
-                usage = response["usageMetadata"]
-                for key, value in previous_usage.items():
-                    usage[key] = usage.get(key, 0) + value
-                yield _sse(final)
-                yield b"data: [DONE]\n\n"
-                return
-            # Thinking, tool calls or any body text rule out an empty-reply retry.
-            if processor.has_activity or attempt + 1 >= attempt_limit:
-                yield error_response or build_empty_model_output_response()
-                return
-            for key, value in processor.usage.items():
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    previous_usage[key] = previous_usage.get(key, 0) + value
-        except (ValueError, TypeError, AttributeError) as exc:
-            yield JSONResponse(
-                {"error": {"code": 502, "message": str(exc), "status": "INVALID_TOOL_REPLY"}},
-                status_code=502,
-            )
+                    except (ValueError, TypeError, AttributeError):
+                        # An unreadable event must not discard ordinary text from
+                        # earlier or later events, or restart a partial response.
+                        processor.has_activity = True
+                if done or error_response is not None:
+                    break
+        # Close the upstream connection before handing an HTTP error to a
+        # router, which may return immediately after reading this item.
+        if error_response is not None and (
+            error_response.status_code != EMPTY_MODEL_OUTPUT_STATUS_CODE or processor.has_activity
+        ):
+            yield error_response
             return
+        final = processor.finish()
+        if processor.has_output:
+            response = final.get("response", final)
+            usage = response["usageMetadata"]
+            for key, value in previous_usage.items():
+                usage[key] = usage.get(key, 0) + value
+            yield _sse(final)
+            yield b"data: [DONE]\n\n"
+            return
+        # Thinking, tool calls or any body text rule out an empty-reply retry.
+        if processor.has_activity or attempt + 1 >= attempt_limit:
+            yield error_response or build_empty_model_output_response()
+            return
+        for key, value in processor.usage.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                previous_usage[key] = previous_usage.get(key, 0) + value
 
 
 async def collect_anti_truncation_response(
