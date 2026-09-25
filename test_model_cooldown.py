@@ -32,7 +32,7 @@ class ModelCooldownTests(unittest.TestCase):
             )
         )
 
-    def test_generic_resource_exhausted_uses_one_minute_cooldown(self):
+    def test_generic_resource_exhausted_cooldown_depends_on_backend(self):
         error = {
             "error": {
                 "status": "RESOURCE_EXHAUSTED",
@@ -43,9 +43,22 @@ class ModelCooldownTests(unittest.TestCase):
         with patch("time.time", return_value=1000):
             self.assertEqual(
                 parse_quota_reset_timestamp(error, mode="antigravity"),
-                1060,
+                1020,
             )
             self.assertEqual(parse_quota_reset_timestamp(error), 1060)
+
+    def test_explicit_reset_time_overrides_generic_resource_exhausted_default(self):
+        error = {"error": {
+            "status": "RESOURCE_EXHAUSTED",
+            "message": "Resource has been exhausted (e.g. check quota).",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "metadata": {"quotaResetTimeStamp": "1970-01-01T01:00:00Z"},
+            }],
+        }}
+        with patch("time.time", return_value=1000):
+            for mode in ("antigravity", "geminicli"):
+                self.assertEqual(parse_quota_reset_timestamp(error, mode=mode), 3600)
 
     def test_antigravity_cooldown_only_blocks_the_exact_claude_model(self):
         cooldowns = {"claude-sonnet-4-6": 2000}

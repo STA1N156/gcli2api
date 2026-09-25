@@ -393,7 +393,8 @@ async def collect_streaming_response(stream_generator) -> Response:
     )
 
 
-RESOURCE_EXHAUSTED_COOLDOWN_SECONDS = 60  # 未提供恢复时间时默认冷却1分钟
+RESOURCE_EXHAUSTED_COOLDOWN_SECONDS = 60  # GCLI 未提供恢复时间时冷却1分钟
+ANTIGRAVITY_RESOURCE_EXHAUSTED_COOLDOWN_SECONDS = 20
 
 
 def parse_quota_reset_timestamp(
@@ -453,9 +454,9 @@ def parse_quota_reset_timestamp(
 
         # 精准匹配且没有恢复时间时，使用短暂默认冷却
         if is_generic_resource_exhausted:
-            import time
-            cooldown_until = time.time() + RESOURCE_EXHAUSTED_COOLDOWN_SECONDS
-            return cooldown_until
+            seconds = (ANTIGRAVITY_RESOURCE_EXHAUSTED_COOLDOWN_SECONDS
+                       if mode == "antigravity" else RESOURCE_EXHAUSTED_COOLDOWN_SECONDS)
+            return time.time() + seconds
 
         return None
 

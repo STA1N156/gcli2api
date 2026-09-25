@@ -154,7 +154,7 @@ def _response_from_httpx(response) -> Response:
 
 
 def _rewrite_resource_exhausted_response(response: Response) -> Response:
-    """把无具体重置时间的 Antigravity 429 改成更明确的提示。"""
+    """对客户端将匹配的无恢复时间 429 转为 400；内部仍按 429 冷却和重试。"""
     if response.status_code != 429:
         return response
 
@@ -179,13 +179,15 @@ def _rewrite_resource_exhausted_response(response: Response) -> Response:
         if has_reset_time:
             return response
 
+        error["code"] = 400
+        error["status"] = "INVALID_ARGUMENT"
         error["message"] = _ANTIGRAVITY_CONTENT_POLICY_MESSAGE
         headers = dict(response.headers)
         headers.pop("content-length", None)
         headers.pop("content-encoding", None)
         return Response(
             content=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            status_code=response.status_code,
+            status_code=400,
             headers=headers,
             media_type="application/json",
         )
