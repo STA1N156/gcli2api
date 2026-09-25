@@ -1,4 +1,4 @@
-full_hash=5b86ac9cc8906757f954d04a9f1055422faca6ce
-short_hash=5b86ac9
-message=fix anti-truncation fallback to ordinary reply text
-date=2026-09-19 20:39:01 +0800
+full_hash=29877bb4961821a5a22e0aad51edb34ef9f26866
+short_hash=29877bb
+message=fix antigravity content error status and shorten cooldown
+date=2026-09-26 02:58:52 +0800
