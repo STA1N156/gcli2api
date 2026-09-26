@@ -1,4 +1,4 @@
-full_hash=29877bb4961821a5a22e0aad51edb34ef9f26866
-short_hash=29877bb
-message=fix antigravity content error status and shorten cooldown
-date=2026-09-26 02:58:52 +0800
+full_hash=97247bf46bcaef8f699043aaf5bb4340c8dc49ed
+short_hash=97247bf
+message=fix empty output errors to HTTP 400 and remove test files
+date=2026-09-27 03:56:35 +0800
