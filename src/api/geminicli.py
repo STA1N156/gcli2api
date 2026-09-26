@@ -10,6 +10,8 @@ from fastapi import Response
 from config import get_code_assist_endpoint, get_empty_output_error_enabled
 from log import log
 from src.api.empty_output import (
+    EMPTY_MODEL_OUTPUT_MESSAGE,
+    EMPTY_MODEL_OUTPUT_STATUS_CODE,
     build_empty_model_output_response,
     is_empty_model_output,
     stream_chunk_has_visible_output,
@@ -237,10 +239,10 @@ async def stream_request(
                     await record_api_call_error(
                         credential_manager,
                         current_file,
-                        461,
+                        EMPTY_MODEL_OUTPUT_STATUS_CODE,
                         mode="geminicli",
                         model_name=model_name,
-                        error_message="模型输出为空，请检查是否含有敏感内容",
+                        error_message=EMPTY_MODEL_OUTPUT_MESSAGE,
                     )
                     yield build_empty_model_output_response()
                 return
@@ -311,10 +313,10 @@ async def non_stream_request(
                     await record_api_call_error(
                         credential_manager,
                         current_file,
-                        461,
+                        EMPTY_MODEL_OUTPUT_STATUS_CODE,
                         mode="geminicli",
                         model_name=model_name,
-                        error_message="模型输出为空，请检查是否含有敏感内容",
+                        error_message=EMPTY_MODEL_OUTPUT_MESSAGE,
                     )
                     return build_empty_model_output_response()
                 await record_api_call_success(

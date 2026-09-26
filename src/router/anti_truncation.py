@@ -5,7 +5,7 @@ from typing import Any, AsyncIterator, Callable, Dict
 from fastapi import Response
 from fastapi.responses import JSONResponse
 
-from src.api.empty_output import build_empty_model_output_response, EMPTY_MODEL_OUTPUT_STATUS_CODE
+from src.api.empty_output import build_empty_model_output_response, is_empty_model_output_error
 from src.api.utils import collect_streaming_response
 from src.converter.anti_truncation import ReplyToolStream, apply_anti_truncation
 
@@ -75,7 +75,7 @@ async def anti_truncation_gemini_stream(
         # Close the upstream connection before handing an HTTP error to a
         # router, which may return immediately after reading this item.
         if error_response is not None and (
-            error_response.status_code != EMPTY_MODEL_OUTPUT_STATUS_CODE or processor.has_activity
+            not is_empty_model_output_error(error_response) or processor.has_activity
         ):
             yield error_response
             return

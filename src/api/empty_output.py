@@ -9,7 +9,7 @@ from src.converter.thoughtSignature_fix import (
 )
 
 
-EMPTY_MODEL_OUTPUT_STATUS_CODE = 461
+EMPTY_MODEL_OUTPUT_STATUS_CODE = 400
 EMPTY_MODEL_OUTPUT_MESSAGE = "模型输出为空，请检查是否含有敏感内容"
 EMPTY_MODEL_OUTPUT_STATUS = "EMPTY_MODEL_OUTPUT"
 
@@ -44,6 +44,18 @@ def build_empty_model_output_response() -> Response:
         status_code=EMPTY_MODEL_OUTPUT_STATUS_CODE,
         media_type="application/json",
     )
+
+
+def is_empty_model_output_error(response: Response) -> bool:
+    """区分空回 400 和普通请求错误，避免把其他 400 当成空回重试。"""
+    if response.status_code != EMPTY_MODEL_OUTPUT_STATUS_CODE:
+        return False
+    try:
+        payload = json.loads(response.body)
+    except (TypeError, ValueError):
+        return False
+    error = payload.get("error") if isinstance(payload, dict) else None
+    return isinstance(error, dict) and error.get("status") == EMPTY_MODEL_OUTPUT_STATUS
 
 
 def is_empty_model_output(raw_content: Any) -> bool:

@@ -202,7 +202,7 @@ async def get_session_affinity_ttl_seconds() -> int:
 
 
 async def get_empty_output_error_enabled() -> bool:
-    """Whether empty model output should be converted to HTTP 461."""
+    """Whether empty model output should be converted to HTTP 400."""
     env_value = os.getenv("EMPTY_OUTPUT_ERROR_ENABLED")
     if env_value:
         return env_value.lower() in ("true", "1", "yes", "on")
