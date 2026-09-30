@@ -33,6 +33,7 @@ from src.api.utils import (
     retry_limit_reached,
 )
 from src.credential_manager import credential_manager
+from src.converter.anti_truncation import move_system_to_first_user
 from src.httpx_client import post_async, stream_post_async
 from src.models import Model, model_to_dict
 from src.session_affinity import extract_cache_session_key
@@ -305,6 +306,11 @@ async def stream_request(
                     if success_recorded or not is_retryable_status(chunk.status_code):
                         yield client_chunk
                         return
+                    if body.get("_anti_truncation") and client_chunk is not chunk:
+                        moved_request = move_system_to_first_user(final_payload["request"])
+                        if moved_request is not final_payload["request"]:
+                            final_payload["request"] = moved_request
+                            log.info("[ANTIGRAVITY] 抗截断重试：已将系统提示词移至首条用户消息")
                     last_error = client_chunk
                     retry_current = True
                     break

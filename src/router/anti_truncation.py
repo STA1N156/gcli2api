@@ -21,8 +21,11 @@ async def anti_truncation_gemini_stream(
 ) -> AsyncIterator[Any]:
     """Force a reply tool; retry only a completely empty response, within the limit."""
     payload = apply_anti_truncation(api_request)
+    passthrough = payload is api_request
+    # Internal retry hint; API clients build upstream bodies without this field.
+    payload = {**payload, "_anti_truncation": True}
     # Existing/explicit client tool choices are passed through, never swallowed.
-    if payload is api_request:
+    if passthrough:
         error_response = None
         async with aclosing(stream_request_func(body=payload, native=False)) as stream:
             async for chunk in stream:

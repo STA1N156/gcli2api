@@ -69,6 +69,24 @@ def apply_anti_truncation(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def move_system_to_first_user(request: Dict[str, Any]) -> Dict[str, Any]:
+    """Move system parts for this retry only, without changing caller-owned messages."""
+    system_parts = (request.get("systemInstruction") or {}).get("parts") or []
+    if not system_parts:
+        return request
+    contents = list(request.get("contents") or [])
+    for index, content in enumerate(contents):
+        if content.get("role") == "user":
+            contents[index] = {
+                **content,
+                "parts": [*system_parts, {"text": "\n\n"}, *(content.get("parts") or [])],
+            }
+            moved = {**request, "contents": contents}
+            moved.pop("systemInstruction")
+            return moved
+    return request
+
+
 class ReplyToolStream:
     """Convert native Gemini reply-tool parts to text; keep real tools intact.
 
