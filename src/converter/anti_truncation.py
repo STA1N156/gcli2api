@@ -5,8 +5,8 @@ from typing import Any, Dict
 
 REPLY_TOOL_NAME = "output_reply"
 REPLY_TOOL_INSTRUCTION = (
-    "本次回复的正文必须通过 output_reply 工具的 content 字段提交，"
-    "保留原有格式，不要在普通消息中重复输出。"
+    "（本次回复的全部内容必须通过 output_reply 工具的 content 字段提交，"
+    "保留原有格式，不要在普通消息中重复输出，不要在正文提及这个工具。）"
 )
 REPLY_TOOL_DESCRIPTION = (
     "将本次回复交给聊天界面显示。遵守现有输出规则，"
@@ -58,10 +58,21 @@ def apply_anti_truncation(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not any(REPLY_TOOL_INSTRUCTION in part.get("text", "") for part in system_parts):
         system_parts.append({"text": REPLY_TOOL_INSTRUCTION})
     system_instruction["parts"] = system_parts
+    contents = list(request.get("contents") or [])
+    reminder = f"{REPLY_TOOL_INSTRUCTION}\n"
+    for index in range(len(contents) - 1, -1, -1):
+        content = contents[index]
+        parts = content.get("parts") or []
+        if content.get("role") != "user" or (parts and all("functionResponse" in part for part in parts)):
+            continue
+        if not parts or not (parts[0].get("text") or "").startswith(reminder):
+            contents[index] = {**content, "parts": [{"text": reminder}, *parts]}
+        break
     return {
         **payload,
         "request": {
             **request,
+            "contents": contents,
             "systemInstruction": system_instruction,
             "tools": [*tools, {"functionDeclarations": [reply_tool]}],
             "toolConfig": {**config, "functionCallingConfig": function_config},
