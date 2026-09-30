@@ -1,4 +1,4 @@
-full_hash=d5e472f7ab28e1d2945b1add6f43cf2dbffb4e39
-short_hash=d5e472f
-message=fix credential retry for exact 131072 input token limit error
-date=2026-10-01 04:45:49 +0800
+full_hash=220c6cd64ba643be4f70e899dd3e2dcd0fc41b68
+short_hash=220c6cd
+message=strengthen anti-truncation instructions in system and latest user input
+date=2026-10-01 05:12:41 +0800
