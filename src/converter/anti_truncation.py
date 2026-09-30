@@ -98,6 +98,29 @@ def move_system_to_first_user(request: Dict[str, Any]) -> Dict[str, Any]:
     return request
 
 
+def move_continue_hint(request: Dict[str, Any], hint: dict, *, to_start: bool) -> Dict[str, Any]:
+    """Move only our own retry hint; preserve user text, tool results and reminders."""
+    contents = list(request.get("contents") or [])
+    for index in range(len(contents) - 1, -1, -1):
+        content = contents[index]
+        parts = content.get("parts") or []
+        if content.get("role") != "user" or (parts and all("functionResponse" in part for part in parts)):
+            continue
+        parts = [part for part in parts if part is not hint]
+        if to_start:
+            # Keep the anti-truncation reminder before the latest user input.
+            position = next((
+                i + 1 for i, part in enumerate(parts)
+                if part.get("text") == f"{REPLY_TOOL_INSTRUCTION}\n"
+            ), 0)
+            parts.insert(position, hint)
+        else:
+            parts.append(hint)
+        contents[index] = {**content, "parts": parts}
+        return {**request, "contents": contents}
+    return request
+
+
 class ReplyToolStream:
     """Convert native Gemini reply-tool parts to text; keep real tools intact.
 
@@ -111,7 +134,6 @@ class ReplyToolStream:
         self.metadata = {}
         self.usage = {}
         self.wrapper = None
-        self.has_activity = False
         self.has_output = False
 
     def _wrap(self, response):
@@ -126,9 +148,6 @@ class ReplyToolStream:
             if key not in ("candidates", "usageMetadata")
         })
         self.usage.update(response.get("usageMetadata") or {})
-        if (response.get("promptFeedback") or {}).get("blockReason"):
-            self.has_activity = True
-
         outgoing = []
         for position, candidate in enumerate(response.get("candidates") or []):
             index = candidate.get("index", position)
@@ -142,20 +161,16 @@ class ReplyToolStream:
             })
             reason = candidate.get("finishReason")
             if reason and reason not in ("STOP", "MAX_TOKENS", "FINISH_REASON_UNSPECIFIED"):
-                self.has_activity = True
                 state["invalid_reply"] = True
 
             parts = []
             for part in (candidate.get("content") or {}).get("parts") or []:
                 if not isinstance(part, dict):
-                    self.has_activity = True
                     continue
                 call = part.get("functionCall")
                 if call is not None and not isinstance(call, dict):
-                    self.has_activity = True
                     continue
                 if call is not None and call.get("name") == REPLY_TOOL_NAME:
-                    self.has_activity = True
                     args = call.get("args")
                     if (state["reply_seen"] or not isinstance(args, dict)
                             or set(args) != {"content"} or not isinstance(args["content"], str)):
@@ -164,20 +179,18 @@ class ReplyToolStream:
                         state["reply"].append({"text": args["content"]})
                     state["reply_seen"] = True
                 elif call is not None:
-                    self.has_activity = self.has_output = True
+                    self.has_output = True
                     state["tools"].append(part)
                 elif "text" in part and not isinstance(part["text"], str):
-                    self.has_activity = True
+                    continue
                 elif "text" in part and not part.get("thought"):
                     state["plain"].append(part)
-                    self.has_activity |= bool(part["text"].strip())
                 else:
                     parts.append(part)
-                    self.has_activity |= bool(part.get("text", "").strip())
                     if any(key in part for key in (
                         "inlineData", "fileData", "executableCode", "codeExecutionResult",
                     )):
-                        self.has_activity = self.has_output = True
+                        self.has_output = True
             if parts:
                 outgoing.append({"index": index, "content": {"role": "model", "parts": parts}})
         if outgoing:

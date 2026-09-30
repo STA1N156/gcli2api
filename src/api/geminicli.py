@@ -9,6 +9,7 @@ from fastapi import Response
 
 from config import get_code_assist_endpoint, get_empty_output_error_enabled
 from log import log
+from src.api.empty_retry import retry_empty_response, retry_empty_stream
 from src.api.empty_output import (
     EMPTY_MODEL_OUTPUT_MESSAGE,
     EMPTY_MODEL_OUTPUT_STATUS_CODE,
@@ -139,6 +140,7 @@ async def _record_response_error(
     )
 
 
+@retry_empty_stream
 async def stream_request(
     body: Dict[str, Any],
     native: bool = False,
@@ -273,6 +275,7 @@ async def stream_request(
             return
 
 
+@retry_empty_response
 async def non_stream_request(
     body: Dict[str, Any],
     headers: Optional[Dict[str, str]] = None,

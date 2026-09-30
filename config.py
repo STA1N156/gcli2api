@@ -38,7 +38,6 @@ ENV_MAPPINGS = {
     "SESSION_AFFINITY_ENABLED": "session_affinity_enabled",
     "SESSION_AFFINITY_TTL_SECONDS": "session_affinity_ttl_seconds",
     "EMPTY_OUTPUT_ERROR_ENABLED": "empty_output_error_enabled",
-    "ANTI_TRUNCATION_MAX_ATTEMPTS": "anti_truncation_max_attempts",
     "COMPATIBILITY_MODE": "compatibility_mode_enabled",
     "RETURN_THOUGHTS_TO_FRONTEND": "return_thoughts_to_frontend",
     "ANTIGRAVITY_STREAM2NOSTREAM": "antigravity_stream2nostream",
@@ -211,24 +210,6 @@ async def get_empty_output_error_enabled() -> bool:
     if isinstance(value, str):
         return value.lower() in ("true", "1", "yes", "on")
     return bool(value)
-
-
-async def get_anti_truncation_max_attempts() -> int:
-    """
-    Get maximum total attempts for completely empty anti-truncation replies.
-
-    Environment variable: ANTI_TRUNCATION_MAX_ATTEMPTS
-    Database config key: anti_truncation_max_attempts
-    Default: 3
-    """
-    env_value = os.getenv("ANTI_TRUNCATION_MAX_ATTEMPTS")
-    if env_value:
-        try:
-            return int(env_value)
-        except ValueError:
-            pass
-
-    return int(await get_config_value("anti_truncation_max_attempts", 3))
 
 
 # Server Configuration

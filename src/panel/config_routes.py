@@ -74,7 +74,6 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["empty_output_error_enabled"] = await config.get_empty_output_error_enabled()
         current_config["request_capture_status"] = await get_request_capture_status()
         # 抗截断配置
-        current_config["anti_truncation_max_attempts"] = await config.get_anti_truncation_max_attempts()
 
         # 兼容性配置
         current_config["compatibility_mode_enabled"] = await config.get_compatibility_mode_enabled()
@@ -176,16 +175,6 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         if "empty_output_error_enabled" in new_config:
             if not isinstance(new_config["empty_output_error_enabled"], bool):
                 raise HTTPException(status_code=400, detail="空回报错开关必须是布尔值")
-
-        if "anti_truncation_max_attempts" in new_config:
-            if (
-                not isinstance(new_config["anti_truncation_max_attempts"], int)
-                or new_config["anti_truncation_max_attempts"] < 1
-                or new_config["anti_truncation_max_attempts"] > 10
-            ):
-                raise HTTPException(
-                    status_code=400, detail="抗截断空回最大尝试次数必须是1-10之间的整数"
-                )
 
         if "compatibility_mode_enabled" in new_config:
             if not isinstance(new_config["compatibility_mode_enabled"], bool):

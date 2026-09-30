@@ -19,7 +19,6 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from fastapi.responses import JSONResponse
 
 # 本地模块 - 配置和日志
-from config import get_anti_truncation_max_attempts
 from log import log
 from src.converter.image_input import ImageInputError
 
@@ -114,8 +113,7 @@ async def generate_content(
         from src.api.antigravity import stream_request
         from src.router.anti_truncation import collect_anti_truncation_response
 
-        max_attempts = await get_anti_truncation_max_attempts()
-        response = await collect_anti_truncation_response(api_request, stream_request, max_attempts)
+        response = await collect_anti_truncation_response(api_request, stream_request)
     else:
         # 调用 API 层的非流式请求
         from src.api.antigravity import non_stream_request
@@ -189,8 +187,7 @@ async def stream_generate_content(
         if use_anti_truncation:
             from src.router.anti_truncation import anti_truncation_gemini_stream
 
-            max_attempts = await get_anti_truncation_max_attempts()
-            stream_gen = anti_truncation_gemini_stream(api_request, stream_request, max_attempts)
+            stream_gen = anti_truncation_gemini_stream(api_request, stream_request)
         else:
             stream_gen = stream_request(body=api_request, native=False)
         try:

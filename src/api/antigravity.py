@@ -17,6 +17,7 @@ from config import (
     get_empty_output_error_enabled,
 )
 from log import log
+from src.api.empty_retry import retry_empty_response, retry_empty_stream
 from src.api.empty_output import (
     EMPTY_MODEL_OUTPUT_MESSAGE,
     EMPTY_MODEL_OUTPUT_STATUS_CODE,
@@ -214,6 +215,7 @@ async def _record_response_error(
     )
 
 
+@retry_empty_stream
 async def stream_request(
     body: Dict[str, Any],
     native: bool = False,
@@ -308,9 +310,14 @@ async def stream_request(
                         return
                     if body.get("_anti_truncation") and client_chunk is not chunk:
                         moved_request = move_system_to_first_user(final_payload["request"])
-                        if moved_request is not final_payload["request"]:
-                            final_payload["request"] = moved_request
-                            log.info("[ANTIGRAVITY] 抗截断重试：已将系统提示词移至首条用户消息")
+                        if moved_request is final_payload["request"]:
+                            # This prompt adjustment gets one extra attempt, not another rotation loop.
+                            yield client_chunk
+                            return
+                        final_payload["request"] = moved_request
+                        # Preserve this move if the outer anti-truncation loop retries an empty body.
+                        body["request"] = move_system_to_first_user(body["request"])
+                        log.info("[ANTIGRAVITY] 抗截断重试：已将系统提示词移至首条用户消息")
                     last_error = client_chunk
                     retry_current = True
                     break
@@ -382,6 +389,7 @@ async def stream_request(
         final_payload["requestId"] = _generate_request_id(model_name)
 
 
+@retry_empty_response
 async def non_stream_request(
     body: Dict[str, Any],
     headers: Optional[Dict[str, str]] = None,
