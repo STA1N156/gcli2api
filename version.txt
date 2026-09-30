@@ -1,4 +1,4 @@
-full_hash=220c6cd64ba643be4f70e899dd3e2dcd0fc41b68
-short_hash=220c6cd
-message=strengthen anti-truncation instructions in system and latest user input
-date=2026-10-01 05:12:41 +0800
+full_hash=c1c6ff3de37ef11a527c5f4ecd4be05f615d3d06
+short_hash=c1c6ff3
+message=chore: bump Antigravity CLI version to 1.2.12
+date=2026-10-01 05:16:35 +0800
