@@ -22,10 +22,21 @@ from src.credential_manager import CredentialManager
 
 
 RETRYABLE_STATUS_CODES = {401, 402, 403, 404, 408, 429, 500, 502, 503, 504}
+_RETRYABLE_INPUT_TOKEN_LIMIT_MESSAGE = "The input token count exceeds the maximum number of tokens allowed 131072."
 
 
-def is_retryable_status(status_code: int) -> bool:
-    return status_code in RETRYABLE_STATUS_CODES
+def is_retryable_status(status_code: int, error_text: str = "") -> bool:
+    if status_code != 400:
+        return status_code in RETRYABLE_STATUS_CODES
+    # 仅放行这条完整错误信息，不匹配其他上限、附加内容或普通 400。
+    if error_text == _RETRYABLE_INPUT_TOKEN_LIMIT_MESSAGE:
+        return True
+    try:
+        payload = json.loads(error_text)
+    except (TypeError, ValueError):
+        return False
+    error = payload.get("error") if isinstance(payload, dict) else None
+    return isinstance(error, dict) and error.get("message") == _RETRYABLE_INPUT_TOKEN_LIMIT_MESSAGE
 
 
 # ==================== 重试配置获取 ====================
