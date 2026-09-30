@@ -1,4 +1,4 @@
-full_hash=97247bf46bcaef8f699043aaf5bb4340c8dc49ed
-short_hash=97247bf
-message=fix empty output errors to HTTP 400 and remove test files
-date=2026-09-27 03:56:35 +0800
+full_hash=d64bed3bf6416023c03ad3974a141b33b54c21c5
+short_hash=d64bed3
+message=fix anti-truncation retry by relocating flagged system prompt
+date=2026-10-01 03:51:39 +0800
