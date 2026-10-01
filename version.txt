@@ -1,4 +1,4 @@
-full_hash=c1c6ff3de37ef11a527c5f4ecd4be05f615d3d06
-short_hash=c1c6ff3
-message=chore: bump Antigravity CLI version to 1.2.12
-date=2026-10-01 05:16:35 +0800
+full_hash=b15632bbdd6b9861b99e0c77fa360aeabdc6ebcd
+short_hash=b15632b
+message=fix: retry empty replies with trailing then leading continuation hints
+date=2026-10-01 08:06:04 +0800
