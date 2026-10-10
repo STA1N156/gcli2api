@@ -11,7 +11,6 @@ REPLY_TOOL_INSTRUCTION = (
 REPLY_TOOL_DESCRIPTION = (
     "将本次回复交给聊天界面显示。遵守现有输出规则，"
     "正文及需要附带的全部内容等全部放入 content。"
-    "检索工具返回结果后，只传新增回复内容。"
 )
 
 
@@ -152,7 +151,7 @@ class ReplyToolStream:
         for position, candidate in enumerate(response.get("candidates") or []):
             index = candidate.get("index", position)
             state = self.candidates.setdefault(index, {
-                "plain": [], "tools": [], "reply": [], "reply_seen": False,
+                "tools": [], "reply": [], "reply_seen": False,
                 "invalid_reply": False,
                 "candidate": {"index": index},
             })
@@ -184,7 +183,8 @@ class ReplyToolStream:
                 elif "text" in part and not isinstance(part["text"], str):
                     continue
                 elif "text" in part and not part.get("thought"):
-                    state["plain"].append(part)
+                    parts.append(part)
+                    self.has_output |= bool(part["text"].strip())
                 else:
                     parts.append(part)
                     if any(key in part for key in (
@@ -198,12 +198,12 @@ class ReplyToolStream:
         return None
 
     def finish(self):
-        """Choose one body after validation, so later malformed calls cannot duplicate it."""
+        """Finalize validated tool content without replaying streamed plain text."""
         candidates = []
         for state in self.candidates.values():
             parts = state["reply"] if (
                 state["reply"] and not state["invalid_reply"] and not state["tools"]
-            ) else state["plain"]
+            ) else []
             parts = [*parts, *state["tools"]]
             self.has_output |= any(part.get("text", "").strip() for part in parts)
             candidates.append({

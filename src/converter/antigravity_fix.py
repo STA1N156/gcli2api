@@ -686,14 +686,9 @@ def _normalize_antigravity_request(
         # 2. Claude 模型关键词映射
         # 使用关键词匹配而不是精确匹配，更灵活地处理各种变体
         original_model = model
-        if "opus" in model.lower():
+        if "claude-opus-4-6" in model.lower():
             model = "claude-opus-4-6-thinking"
-        elif "sonnet" in model.lower():
-            model = "claude-sonnet-4-6"
-        elif "haiku" in model.lower():
-            model = "gemini-2.5-flash"
-        elif "claude" in model.lower():
-            # Claude 模型兜底：如果包含 claude 但不是 opus/sonnet/haiku
+        elif "claude-sonnet-4-6-thinking" in model.lower():
             model = "claude-sonnet-4-6"
 
         if original_model != model:
@@ -738,23 +733,6 @@ async def normalize_antigravity_request(
 
     model = _normalize_antigravity_request(result, model, generation_config, return_thoughts)
     result["model"] = model
-
-    # 这些模型不支持预填充：循环移除末尾的 model 消息，保证以用户消息结尾
-    no_prefill_models = [
-        "opus",
-        "sonnet",
-        "gemini-3.6-flash",
-        "gemini-3.7-flash",
-    ]
-    if any(keyword in model.lower() for keyword in no_prefill_models):
-        contents = result.get("contents", [])
-        removed_count = 0
-        while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
-            contents.pop()
-            removed_count += 1
-        if removed_count > 0:
-            log.warning(f"[ANTIGRAVITY] {model} 不支持预填充，移除了 {removed_count} 条末尾 model 消息")
-            result["contents"] = contents
 
     # 移除 antigravity 模式不支持的字段
     generation_config.pop("presencePenalty", None)
@@ -843,6 +821,25 @@ async def normalize_antigravity_request(
                 cleaned_contents.append(content)
 
         result["contents"] = cleaned_contents
+
+    # 清理空消息后再处理预填充，避免末尾空 user 被删除后重新露出 model。
+    no_prefill_models = [
+        "claude",
+        "opus",
+        "sonnet",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.8-flash",
+    ]
+    if any(keyword in model.lower() for keyword in no_prefill_models):
+        contents = result.get("contents", [])
+        removed_count = 0
+        while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
+            contents.pop()
+            removed_count += 1
+        if removed_count > 0:
+            log.warning(f"[ANTIGRAVITY] {model} 不支持预填充，移除了 {removed_count} 条末尾 model 消息")
+            result["contents"] = contents
 
     result["generationConfig"] = generation_config
 
