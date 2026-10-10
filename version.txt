@@ -1,4 +1,4 @@
-full_hash=b15632bbdd6b9861b99e0c77fa360aeabdc6ebcd
-short_hash=b15632b
-message=fix: retry empty replies with trailing then leading continuation hints
-date=2026-10-01 08:06:04 +0800
+full_hash=af9e8695dc6419ddbde37dc0348555329a7fd189
+short_hash=af9e869
+message=fix: stream plain replies and update Antigravity model compatibility
+date=2026-10-11 00:36:54 +0800
