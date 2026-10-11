@@ -955,41 +955,40 @@ class PSQLManager:
         self,
         filename: str,
         model_name: Optional[str] = None,
-        mode: str = "geminicli"
+        mode: str = "geminicli",
+        observed_at: Optional[float] = None,
     ) -> None:
         """成功调用后的条件写入"""
         self._ensure_initialized()
         filename = os.path.basename(filename)
+        observed_at = time.time() if observed_at is None else observed_at
 
         try:
             table_name = self._get_table_name(mode)
             async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"SELECT error_codes, error_messages, model_cooldowns, updated_at "
+                    f"FROM {table_name} WHERE filename = $1", filename,
+                )
+                if not row or (row["updated_at"] is not None and row["updated_at"] > observed_at):
+                    return
+                cooldowns = json.loads(row["model_cooldowns"] or "{}")
+                has_errors = row["error_codes"] not in (None, "", "[]")
+                has_model_cooldown = bool(model_name and model_name in cooldowns)
+                if not has_errors and not has_model_cooldown:
+                    return
+                if has_model_cooldown:
+                    cooldowns.pop(model_name)
                 await conn.execute(f"""
                     UPDATE {table_name}
-                    SET last_success = EXTRACT(EPOCH FROM NOW()),
-                        error_codes = '[]',
-                        error_messages = '{{}}',
-                        updated_at = EXTRACT(EPOCH FROM NOW())
-                    WHERE filename = $1
-                      AND (error_codes IS NOT NULL AND error_codes != '[]' AND error_codes != '')
-                """, filename)
-
-                if model_name:
-                    row = await conn.fetchrow(
-                        f"SELECT model_cooldowns FROM {table_name} WHERE filename = $1", filename
-                    )
-                    if row:
-                        cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                        if model_name in cooldowns:
-                            cooldowns.pop(model_name)
-                            await conn.execute(
-                                f"""
-                                UPDATE {table_name}
-                                SET model_cooldowns = $1, updated_at = EXTRACT(EPOCH FROM NOW())
-                                WHERE filename = $2
-                                """,
-                                json.dumps(cooldowns), filename
-                            )
+                    SET last_success = $1, error_codes = '[]', error_messages = '{{}}',
+                        model_cooldowns = $2, updated_at = EXTRACT(EPOCH FROM NOW())
+                    WHERE filename = $3 AND updated_at IS NOT DISTINCT FROM $4
+                      AND error_codes IS NOT DISTINCT FROM $5
+                      AND error_messages IS NOT DISTINCT FROM $6
+                      AND model_cooldowns IS NOT DISTINCT FROM $7
+                """, observed_at, json.dumps(cooldowns), filename, row["updated_at"],
+                     row["error_codes"], row["error_messages"], row["model_cooldowns"])
 
         except Exception as e:
             log.error(f"Error recording success for {filename}: {e}")

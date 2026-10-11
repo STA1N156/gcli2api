@@ -506,7 +506,8 @@ class CredentialManager:
         cooldown_until: Optional[float] = None,
         mode: str = "geminicli",
         model_name: Optional[str] = None,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
+        observed_at: Optional[float] = None,
     ):
         """
         记录API调用结果
@@ -523,10 +524,10 @@ class CredentialManager:
         await self._ensure_initialized()
         try:
             if success:
-                # 存储层只在有错误/冷却时写入；这里等待完成，避免旧成功结果
-                # 在新冷却之后才落库并把冷却误删。
+                # 存储层按成功发生时间和状态版本校验，旧成功不能清除新错误。
                 await self._storage_adapter._backend.record_success(
-                    credential_name, model_name=model_name, mode=mode
+                    credential_name, model_name=model_name, mode=mode,
+                    observed_at=observed_at,
                 )
 
             elif error_code:

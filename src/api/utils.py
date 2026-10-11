@@ -19,6 +19,7 @@ from config import (
 from log import log
 from src.api.empty_output import build_empty_model_output_response, is_empty_model_output_payload
 from src.credential_manager import CredentialManager
+from src.task_manager import create_managed_task
 
 
 RETRYABLE_STATUS_CODES = {401, 402, 403, 404, 408, 429, 500, 502, 503, 504}
@@ -63,7 +64,8 @@ async def record_api_call_success(
     credential_manager: CredentialManager,
     credential_name: str,
     mode: str = "geminicli",
-    model_name: Optional[str] = None
+    model_name: Optional[str] = None,
+    observed_at: Optional[float] = None,
 ) -> None:
     """
     记录API调用成功
@@ -76,8 +78,20 @@ async def record_api_call_success(
     """
     if credential_manager and credential_name:
         await credential_manager.record_api_call_result(
-            credential_name, True, mode=mode, model_name=model_name
+            credential_name, True, mode=mode, model_name=model_name,
+            observed_at=observed_at,
         )
+
+
+def record_api_call_success_later(credential_manager, credential_name, *, mode, model_name):
+    """Record the first output without blocking streaming; retain its event time."""
+    return create_managed_task(
+        record_api_call_success(
+            credential_manager, credential_name, mode=mode, model_name=model_name,
+            observed_at=time.time(),
+        ),
+        name="record-credential-success",
+    )
 
 
 async def record_api_call_error(

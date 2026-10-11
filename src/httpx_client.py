@@ -85,7 +85,7 @@ class HttpxClientManager:
 
     @asynccontextmanager
     async def get_streaming_client(
-        self, timeout: float = None, **kwargs
+        self, timeout: float = 1200.0, **kwargs
     ) -> AsyncGenerator[httpx.AsyncClient, None]:
         yield await self._get_or_create_client(timeout=timeout, **kwargs)
 
@@ -127,7 +127,7 @@ async def post_async(
     data: Any = None,
     json: Any = None,
     headers: Optional[Dict[str, str]] = None,
-    timeout: float = 900.0,
+    timeout: float = 1200.0,
     **kwargs,
 ) -> httpx.Response:
     client_kwargs, request_kwargs = _split_httpx_kwargs(kwargs)

@@ -31,6 +31,7 @@ from src.api.utils import (
     is_retryable_status,
     record_api_call_error,
     record_api_call_success,
+    record_api_call_success_later,
     retry_limit_reached,
 )
 from src.credential_manager import credential_manager
@@ -255,6 +256,7 @@ async def stream_request(
 
     while True:
         success_recorded = False
+        success_task = None
         retry_current = False
         retry_same = False
         buffered_chunks = []
@@ -266,6 +268,8 @@ async def stream_request(
                 headers=auth_headers,
             ):
                 if isinstance(chunk, Response):
+                    if success_task is not None:
+                        await asyncio.shield(success_task)
                     error_text = (
                         chunk.body.decode("utf-8", errors="replace")
                         if isinstance(chunk.body, bytes)
@@ -327,7 +331,7 @@ async def stream_request(
                         buffered_chunks.append(chunk)
                         if not stream_chunk_has_visible_output(chunk):
                             continue
-                    await record_api_call_success(
+                    success_task = record_api_call_success_later(
                         credential_manager,
                         current_file,
                         mode="antigravity",
@@ -363,6 +367,9 @@ async def stream_request(
             log.warning(
                 f"[ANTIGRAVITY STREAM] 请求异常，切换凭证: {current_file}: {exc}"
             )
+        finally:
+            if success_task is not None:
+                await asyncio.shield(success_task)
 
         if retry_limit_reached(retry_config, len(attempted)):
             yield last_error or Response(
@@ -435,7 +442,6 @@ async def non_stream_request(
                 url=target_url,
                 json=final_payload,
                 headers=auth_headers,
-                timeout=300.0,
             )
             if response.status_code == 200:
                 if empty_output_error_enabled and is_empty_model_output(

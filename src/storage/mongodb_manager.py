@@ -1347,7 +1347,8 @@ class MongoDBManager:
         self,
         filename: str,
         model_name: Optional[str] = None,
-        mode: str = "geminicli"
+        mode: str = "geminicli",
+        observed_at: Optional[float] = None,
     ) -> None:
         """
         成功调用后的条件写入：
@@ -1361,29 +1362,36 @@ class MongoDBManager:
         try:
             collection_name = self._get_collection_name(mode)
             collection = self._db[collection_name]
-            now = time.time()
-
-            # 条件写入：只有 error_codes 非空时才触发，避免无意义的写 IO
-            await collection.update_one(
-                {"filename": filename, "error_codes": {"$ne": []}},
-                {"$set": {
-                    "last_success": now,
-                    "error_codes": [],
-                    "error_messages": {},
-                    "updated_at": now,
-                }}
+            observed_at = time.time() if observed_at is None else observed_at
+            escaped = self._escape_model_name(model_name) if model_name else None
+            dirty = [{"error_codes": {"$ne": []}}]
+            updates = {"$set": {
+                "last_success": observed_at,
+                "error_codes": [],
+                "error_messages": {},
+                "updated_at": time.time(),
+            }}
+            if escaped:
+                dirty.append({f"model_cooldowns.{escaped}": {"$exists": True}})
+                updates["$unset"] = {f"model_cooldowns.{escaped}": ""}
+            # 时间条件和状态清理在同一次原子更新中检查，避免晚到的成功覆盖新错误。
+            previous = await collection.find_one_and_update(
+                {"filename": filename, "$and": [
+                    {"$or": dirty},
+                    {"$or": [{"updated_at": {"$lte": observed_at}},
+                             {"updated_at": {"$exists": False}}]},
+                ]},
+                updates,
+                projection={"model_cooldowns": 1},
             )
-
-            # 条件删除模型冷却：只有该键存在时才写入
-            if model_name:
-                escaped = self._escape_model_name(model_name)
-                await collection.update_one(
-                    {"filename": filename, f"model_cooldowns.{escaped}": {"$exists": True}},
-                    {"$unset": {f"model_cooldowns.{escaped}": ""}, "$set": {"updated_at": now}}
+            old_cooldown = (previous.get("model_cooldowns") or {}).get(escaped) if previous else None
+            if self._redis_enabled and old_cooldown is not None:
+                # Redis 也只删除旧值；更新期间写入的新冷却必须保留。
+                await self._redis.eval(
+                    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                    "return redis.call('del', KEYS[1]) end return 0",
+                    1, self._rk_cd(mode, filename, escaped), str(old_cooldown),
                 )
-                # 同步删除 Redis 冷却 key
-                if self._redis_enabled:
-                    await self._redis.delete(self._rk_cd(mode, filename, escaped))
 
         except Exception as e:
             log.error(f"Error recording success for {filename}: {e}")

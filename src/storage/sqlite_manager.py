@@ -541,7 +541,8 @@ class SQLiteManager:
                 log.info("[DB] 没有需要更新的状态字段")
                 return True
 
-            set_clauses.append("updated_at = unixepoch()")
+            set_clauses.append("updated_at = ?")
+            values.append(time.time())
             values.append(filename)
 
             log.debug(f"[DB] SQL参数: set_clauses={set_clauses}, values={values}")
@@ -1201,9 +1202,9 @@ class SQLiteManager:
                     await db.execute(f"""
                         UPDATE {table_name}
                         SET model_cooldowns = ?,
-                            updated_at = unixepoch()
+                            updated_at = ?
                         WHERE filename = ?
-                    """, (json.dumps(model_cooldowns), filename))
+                    """, (json.dumps(model_cooldowns), time.time(), filename))
                     await db.commit()
 
                     log.debug(f"Set model cooldown: {filename}, model_name={model_name}, cooldown_until={cooldown_until}")
@@ -1250,7 +1251,8 @@ class SQLiteManager:
         self,
         filename: str,
         model_name: Optional[str] = None,
-        mode: str = "geminicli"
+        mode: str = "geminicli",
+        observed_at: Optional[float] = None,
     ) -> None:
         """
         成功调用后的条件写入：
@@ -1260,12 +1262,13 @@ class SQLiteManager:
         """
         self._ensure_initialized()
         filename = os.path.basename(filename)
+        observed_at = time.time() if observed_at is None else observed_at
 
         try:
             table_name = self._get_table_name(mode)
             async with aiosqlite.connect(self._db_path) as db:
                 async with db.execute(f"""
-                    SELECT error_codes, error_messages, model_cooldowns
+                    SELECT error_codes, error_messages, model_cooldowns, updated_at
                     FROM {table_name}
                     WHERE filename = ?
                 """, (filename,)) as cursor:
@@ -1274,7 +1277,9 @@ class SQLiteManager:
                 if not row:
                     return
 
-                error_codes, error_messages, cooldowns_json = row
+                error_codes, error_messages, cooldowns_json, updated_at = row
+                if updated_at is not None and updated_at > observed_at:
+                    return
                 has_errors = error_codes not in (None, "", "[]")
                 cooldowns = json.loads(cooldowns_json or "{}")
                 has_model_cooldown = bool(model_name and model_name in cooldowns)
@@ -1283,27 +1288,16 @@ class SQLiteManager:
                 if not has_errors and not has_model_cooldown:
                     return
 
-                if has_errors:
-                    await db.execute(f"""
-                        UPDATE {table_name}
-                        SET last_success = unixepoch(),
-                            error_codes = '[]',
-                            error_messages = '{{}}',
-                            updated_at = unixepoch()
-                        WHERE filename = ?
-                          AND error_codes IS ?
-                          AND error_messages IS ?
-                    """, (filename, error_codes, error_messages))
-
                 if has_model_cooldown:
                     cooldowns.pop(model_name)
-                    await db.execute(f"""
-                        UPDATE {table_name}
-                        SET model_cooldowns = ?, updated_at = unixepoch()
-                        WHERE filename = ?
-                          AND model_cooldowns = ?
-                    """, (json.dumps(cooldowns), filename, cooldowns_json))
-
+                await db.execute(f"""
+                    UPDATE {table_name}
+                    SET last_success = ?, error_codes = '[]', error_messages = '{{}}',
+                        model_cooldowns = ?, updated_at = ?
+                    WHERE filename = ? AND updated_at IS ?
+                      AND error_codes IS ? AND error_messages IS ? AND model_cooldowns IS ?
+                """, (observed_at, json.dumps(cooldowns), time.time(), filename,
+                      updated_at, error_codes, error_messages, cooldowns_json))
                 await db.commit()
 
         except Exception as e:
