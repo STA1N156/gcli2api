@@ -697,6 +697,21 @@ def _normalize_antigravity_request(
     return model
 
 
+def _strip_model_prefill(request: Dict[str, Any]) -> Dict[str, Any]:
+    """统一禁用 Gemini/Claude 的末尾预填充，不改动调用方的消息列表。"""
+    model = request.get("model", "")
+    if any(keyword in model.lower() for keyword in ("gemini", "claude", "opus", "sonnet")):
+        contents = list(request.get("contents") or [])
+        original_count = len(contents)
+        while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
+            contents.pop()
+        removed_count = original_count - len(contents)
+        if removed_count:
+            log.warning(f"[ANTIGRAVITY] {model} 已禁用预填充，移除了 {removed_count} 条末尾 model 消息")
+            request["contents"] = contents
+    return request
+
+
 async def normalize_antigravity_request(
     request: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -729,7 +744,7 @@ async def normalize_antigravity_request(
 
     # 图片模型走独立的图片生成处理路径
     if "image" in model.lower():
-        return prepare_image_generation_request(result, model)
+        return _strip_model_prefill(prepare_image_generation_request(result, model))
 
     model = _normalize_antigravity_request(result, model, generation_config, return_thoughts)
     result["model"] = model
@@ -822,25 +837,7 @@ async def normalize_antigravity_request(
 
         result["contents"] = cleaned_contents
 
-    # 清理空消息后再处理预填充，避免末尾空 user 被删除后重新露出 model。
-    no_prefill_models = [
-        "claude",
-        "opus",
-        "sonnet",
-        "gemini-3.6-flash",
-        "gemini-3.7-flash",
-        "gemini-3.8-flash",
-    ]
-    if any(keyword in model.lower() for keyword in no_prefill_models):
-        contents = result.get("contents", [])
-        removed_count = 0
-        while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
-            contents.pop()
-            removed_count += 1
-        if removed_count > 0:
-            log.warning(f"[ANTIGRAVITY] {model} 不支持预填充，移除了 {removed_count} 条末尾 model 消息")
-            result["contents"] = contents
-
     result["generationConfig"] = generation_config
 
-    return result
+    # 清理空消息后再处理预填充，避免末尾空 user 被删除后重新露出 model。
+    return _strip_model_prefill(result)
