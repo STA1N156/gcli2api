@@ -697,18 +697,14 @@ def _normalize_antigravity_request(
     return model
 
 
-def _strip_model_prefill(request: Dict[str, Any]) -> Dict[str, Any]:
-    """统一禁用 Gemini/Claude 的末尾预填充，不改动调用方的消息列表。"""
+def _ensure_user_ending(request: Dict[str, Any]) -> Dict[str, Any]:
+    """保留 Gemini/Claude 的末尾模型消息，并补一条用户续写指令。"""
     model = request.get("model", "")
     if any(keyword in model.lower() for keyword in ("gemini", "claude", "opus", "sonnet")):
-        contents = list(request.get("contents") or [])
-        original_count = len(contents)
-        while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
-            contents.pop()
-        removed_count = original_count - len(contents)
-        if removed_count:
-            log.warning(f"[ANTIGRAVITY] {model} 已禁用预填充，移除了 {removed_count} 条末尾 model 消息")
-            request["contents"] = contents
+        contents = request.get("contents") or []
+        if contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
+            request["contents"] = [*contents, {"role": "user", "parts": [{"text": "继续"}]}]
+            log.debug(f"[ANTIGRAVITY] {model} 保留末尾 model 消息并追加用户续写指令")
     return request
 
 
@@ -744,7 +740,7 @@ async def normalize_antigravity_request(
 
     # 图片模型走独立的图片生成处理路径
     if "image" in model.lower():
-        return _strip_model_prefill(prepare_image_generation_request(result, model))
+        return _ensure_user_ending(prepare_image_generation_request(result, model))
 
     model = _normalize_antigravity_request(result, model, generation_config, return_thoughts)
     result["model"] = model
@@ -839,5 +835,5 @@ async def normalize_antigravity_request(
 
     result["generationConfig"] = generation_config
 
-    # 清理空消息后再处理预填充，避免末尾空 user 被删除后重新露出 model。
-    return _strip_model_prefill(result)
+    # 清理空消息后再补续写指令，避免末尾空 user 被删除后重新露出 model。
+    return _ensure_user_ending(result)
