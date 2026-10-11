@@ -1,4 +1,4 @@
-full_hash=af9e8695dc6419ddbde37dc0348555329a7fd189
-short_hash=af9e869
-message=fix: stream plain replies and update Antigravity model compatibility
-date=2026-10-11 00:36:54 +0800
+full_hash=a276f68afb2ddd338790796e0f23682409d27d9f
+short_hash=a276f68
+message=fix: strip trailing model turns for all Antigravity Gemini models
+date=2026-10-11 08:32:50 +0800
