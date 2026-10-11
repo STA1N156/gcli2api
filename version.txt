@@ -1,4 +1,4 @@
-full_hash=a276f68afb2ddd338790796e0f23682409d27d9f
-short_hash=a276f68
-message=fix: strip trailing model turns for all Antigravity Gemini models
-date=2026-10-11 08:32:50 +0800
+full_hash=709d5a4b24b0eb3734dbdafb17952ff7b3e14c57
+short_hash=709d5a4
+message=fix: preserve trailing AI messages with a continuation prompt
+date=2026-10-11 11:21:00 +0800
