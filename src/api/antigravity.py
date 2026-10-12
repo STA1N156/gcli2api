@@ -33,6 +33,7 @@ from src.api.utils import (
     record_api_call_success,
     record_api_call_success_later,
     retry_limit_reached,
+    rewrite_input_token_limit_response,
 )
 from src.credential_manager import credential_manager
 from src.converter.anti_truncation import move_system_to_first_user
@@ -308,7 +309,9 @@ async def stream_request(
                     await _record_response_error(
                         current_file, model_name, chunk.status_code, error_text
                     )
-                    client_chunk = _rewrite_resource_exhausted_response(chunk)
+                    client_chunk = rewrite_input_token_limit_response(
+                        _rewrite_resource_exhausted_response(chunk)
+                    )
                     if success_recorded or not is_retryable_status(chunk.status_code):
                         yield client_chunk
                         return
@@ -484,8 +487,8 @@ async def non_stream_request(
                         continue
 
             error_text = getattr(response, "text", "") or ""
-            last_error = _rewrite_resource_exhausted_response(
-                _response_from_httpx(response)
+            last_error = rewrite_input_token_limit_response(
+                _rewrite_resource_exhausted_response(_response_from_httpx(response))
             )
             log.warning(
                 f"[ANTIGRAVITY] 上游返回 {response.status_code}: "

@@ -29,6 +29,31 @@ def is_retryable_status(status_code: int) -> bool:
     return status_code in RETRYABLE_STATUS_CODES
 
 
+def rewrite_input_token_limit_response(response: Response) -> Response:
+    """只替换指定 400 的客户端提示，保留上游错误码和其他信息。"""
+    if response.status_code != 400:
+        return response
+    try:
+        payload = json.loads(response.body)
+    except (TypeError, ValueError):
+        return response
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict) or error.get("message") != (
+        "The input token count exceeds the maximum number of tokens allowed 131072."
+    ):
+        return response
+    error["message"] = "输入内容或系统提示词被谷歌安全审查模型拦截，请自行排查。"
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    headers.pop("content-encoding", None)
+    return Response(
+        content=json.dumps(payload, ensure_ascii=False),
+        status_code=400,
+        headers=headers,
+        media_type="application/json",
+    )
+
+
 # ==================== 重试配置获取 ====================
 
 async def get_retry_config() -> Dict[str, Any]:

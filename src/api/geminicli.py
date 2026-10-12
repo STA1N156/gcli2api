@@ -24,6 +24,7 @@ from src.api.utils import (
     record_api_call_success,
     record_api_call_success_later,
     retry_limit_reached,
+    rewrite_input_token_limit_response,
 )
 from src.credential_manager import credential_manager
 from src.httpx_client import post_async, stream_post_async
@@ -209,7 +210,7 @@ async def stream_request(
                         current_file, model_name, chunk.status_code, error_text
                     )
                     if success_recorded or not is_retryable_status(chunk.status_code):
-                        yield chunk
+                        yield rewrite_input_token_limit_response(chunk)
                         return
                     last_error = chunk
                     retry_current = True
@@ -351,7 +352,7 @@ async def non_stream_request(
                     continue
 
             error_text = getattr(response, "text", "") or ""
-            last_error = _response_from_httpx(response)
+            last_error = rewrite_input_token_limit_response(_response_from_httpx(response))
             await _record_response_error(
                 current_file, model_name, response.status_code, error_text
             )
