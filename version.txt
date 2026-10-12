@@ -1,4 +1,4 @@
-full_hash=d18b5e22a74edcde691b322d1235745049ae0a5a
-short_hash=d18b5e2
-message=fix: sync Antigravity hub identity and tool enum compatibility
-date=2026-10-13 02:31:27 +0800
+full_hash=fe9fa3c8d0866ff170834297c4678755fa02f908
+short_hash=fe9fa3c
+message=fix: rewrite exact input token limit error message
+date=2026-10-13 06:27:39 +0800
