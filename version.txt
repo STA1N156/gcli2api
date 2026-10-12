@@ -1,4 +1,4 @@
-full_hash=b9a8238da0eb8e03f44319468c574ada8d019e50
-short_hash=b9a8238
-message=fix: stop retrying input token limit errors
-date=2026-10-13 00:58:27 +0800
+full_hash=d18b5e22a74edcde691b322d1235745049ae0a5a
+short_hash=d18b5e2
+message=fix: sync Antigravity hub identity and tool enum compatibility
+date=2026-10-13 02:31:27 +0800
