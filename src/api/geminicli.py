@@ -208,7 +208,7 @@ async def stream_request(
                     await _record_response_error(
                         current_file, model_name, chunk.status_code, error_text
                     )
-                    if success_recorded or not is_retryable_status(chunk.status_code, error_text):
+                    if success_recorded or not is_retryable_status(chunk.status_code):
                         yield chunk
                         return
                     last_error = chunk
@@ -355,7 +355,7 @@ async def non_stream_request(
             await _record_response_error(
                 current_file, model_name, response.status_code, error_text
             )
-            if not is_retryable_status(response.status_code, error_text):
+            if not is_retryable_status(response.status_code):
                 return last_error
         except Exception as exc:
             log.warning(

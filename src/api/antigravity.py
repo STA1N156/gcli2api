@@ -309,7 +309,7 @@ async def stream_request(
                         current_file, model_name, chunk.status_code, error_text
                     )
                     client_chunk = _rewrite_resource_exhausted_response(chunk)
-                    if success_recorded or not is_retryable_status(chunk.status_code, error_text):
+                    if success_recorded or not is_retryable_status(chunk.status_code):
                         yield client_chunk
                         return
                     if body.get("_anti_truncation") and client_chunk is not chunk:
@@ -495,7 +495,7 @@ async def non_stream_request(
             await _record_response_error(
                 current_file, model_name, response.status_code, error_text
             )
-            if not is_retryable_status(response.status_code, error_text):
+            if not is_retryable_status(response.status_code):
                 return last_error
         except Exception as exc:
             log.warning(
