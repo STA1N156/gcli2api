@@ -37,6 +37,7 @@ from src.api.utils import (
 )
 from src.credential_manager import credential_manager
 from src.converter.anti_truncation import move_system_to_first_user
+from src.converter.antigravity_fix import ensure_user_ending
 from src.httpx_client import post_async, stream_post_async
 from src.models import Model, model_to_dict
 from src.session_affinity import extract_cache_session_key
@@ -79,7 +80,7 @@ async def wrap_cli_request(
     model: str,
     project_id: str,
 ) -> Tuple[Dict[str, Any], str]:
-    inner = dict(gemini_request)
+    inner = ensure_user_ending(dict(gemini_request), model)
     inner.pop("safetySettings", None)
     inner.setdefault("sessionId", _generate_stable_session_id(inner))
 

@@ -699,12 +699,12 @@ def _normalize_antigravity_request(
     return model
 
 
-def _ensure_user_ending(request: Dict[str, Any]) -> Dict[str, Any]:
+def ensure_user_ending(request: Dict[str, Any], model: str = "") -> Dict[str, Any]:
     """保留 Gemini/Claude 的末尾模型消息，并补一条用户续写指令。"""
-    model = request.get("model", "")
+    model = model or request.get("model", "")
     if any(keyword in model.lower() for keyword in ("gemini", "claude", "opus", "sonnet")):
         contents = request.get("contents") or []
-        if contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
+        if contents and isinstance(contents[-1], dict) and contents[-1].get("role") in ("model", "assistant"):
             request["contents"] = [*contents, {"role": "user", "parts": [{"text": "继续"}]}]
             log.debug(f"[ANTIGRAVITY] {model} 保留末尾 model 消息并追加用户续写指令")
     return request
@@ -742,7 +742,7 @@ async def normalize_antigravity_request(
 
     # 图片模型走独立的图片生成处理路径
     if "image" in model.lower():
-        return _ensure_user_ending(prepare_image_generation_request(result, model))
+        return ensure_user_ending(prepare_image_generation_request(result, model))
 
     model = _normalize_antigravity_request(result, model, generation_config, return_thoughts)
     result["model"] = model
@@ -782,43 +782,37 @@ async def normalize_antigravity_request(
                     if not isinstance(part, dict):
                         continue
 
-                    # 检查 part 是否有有效的非空值
-                    # 过滤掉空字典或所有值都为空的 part
+                    # 先清理文字，再判断是否为空，避免空白 user 掩盖末尾 model。
+                    part = part.copy()
+                    if "text" in part:
+                        text_value = part["text"]
+                        if isinstance(text_value, list):
+                            text_parts = []
+                            for t in text_value:
+                                if isinstance(t, dict) and "text" in t:
+                                    text_parts.append(str(t["text"]))
+                                elif isinstance(t, str):
+                                    text_parts.append(t)
+                                elif t is not None:
+                                    text_parts.append(str(t))
+                            part["text"] = " ".join(text_parts)
+                        elif text_value not in (None, "", {}, []):
+                            part["text"] = str(text_value)
+                        if isinstance(part["text"], str):
+                            part["text"] = part["text"].rstrip()
+
                     has_valid_value = any(
                         value not in (None, "", {}, [])
                         for key, value in part.items()
-                        if key != "thought"  # thought 字段可以为空
+                        if key != "thought" and (
+                            key not in ("thoughtSignature", "thought_signature")
+                            or content.get("role") in ("model", "assistant")
+                        )
                     )
 
                     if has_valid_value:
                         part = _normalize_part_thought_signature(part, model)
                         part = normalize_inline_image_part(part)
-
-                        # 修复 text 字段：确保是字符串而不是列表
-                        if "text" in part:
-                            text_value = part["text"]
-                            if isinstance(text_value, list):
-                                # 如果是列表，合并为字符串
-                                # 注意: list 中的元素可能是 dict（如 {"type":"text","text":"..."}），不能直接 str(dict)
-                                # 否则会产生 Python repr 字符串 "{'type': 'text', 'text': '...'}"，污染 model 历史
-                                log.warning(f"[ANTIGRAVITY_FIX] text 字段是列表，自动合并: {text_value}")
-                                text_parts = []
-                                for t in text_value:
-                                    if isinstance(t, dict) and "text" in t:
-                                        text_parts.append(str(t["text"]))
-                                    elif isinstance(t, str):
-                                        text_parts.append(t)
-                                    elif t is not None:
-                                        text_parts.append(str(t))
-                                part["text"] = " ".join(text_parts)
-                            elif isinstance(text_value, str):
-                                # 清理尾随空格
-                                part["text"] = text_value.rstrip()
-                            else:
-                                # 其他类型转为字符串
-                                log.warning(f"[ANTIGRAVITY_FIX] text 字段类型异常 ({type(text_value)}), 转为字符串: {text_value}")
-                                part["text"] = str(text_value)
-
                         valid_parts.append(part)
                     else:
                         log.warning(f"[ANTIGRAVITY_FIX] 移除空的或无效的 part: {part}")
@@ -826,6 +820,8 @@ async def normalize_antigravity_request(
                 # 只添加有有效 parts 的 content
                 if valid_parts:
                     cleaned_content = content.copy()
+                    if cleaned_content.get("role") == "assistant":
+                        cleaned_content["role"] = "model"
                     cleaned_content["parts"] = valid_parts
                     cleaned_contents.append(cleaned_content)
                 else:
@@ -838,4 +834,4 @@ async def normalize_antigravity_request(
     result["generationConfig"] = generation_config
 
     # 清理空消息后再补续写指令，避免末尾空 user 被删除后重新露出 model。
-    return _ensure_user_ending(result)
+    return ensure_user_ending(result)
