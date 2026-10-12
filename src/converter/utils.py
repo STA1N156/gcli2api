@@ -6,6 +6,17 @@ from src.converter.thoughtSignature_fix import (
 )
 
 
+def normalize_schema_enum(schema: Dict[str, Any]) -> None:
+    """按上游规则适配 Gemini 的字符串枚举限制。"""
+    values = schema.get("enum")
+    if not isinstance(values, list):
+        return
+    if schema.get("type") in ("boolean", "BOOLEAN") or any(isinstance(value, bool) for value in values):
+        schema.pop("enum", None)
+    else:
+        schema["enum"] = [str(value) for value in values]
+
+
 def extract_content_and_reasoning(parts: list) -> tuple:
     """从Gemini响应部件中提取内容和推理内容
 

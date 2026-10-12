@@ -17,7 +17,7 @@ from src.converter.thoughtSignature_fix import (
     SKIP_THOUGHT_SIGNATURE_VALIDATOR,
 )
 from src.converter.image_input import image_url_to_inline_data
-from src.converter.utils import merge_system_messages
+from src.converter.utils import merge_system_messages, normalize_schema_enum
 
 from log import log
 
@@ -561,7 +561,8 @@ def _clean_schema_for_gemini(schema: Any, root_schema: Optional[Dict[str, Any]] 
     # 10. 去重 required 数组
     if "required" in result and isinstance(result["required"], list):
         result["required"] = list(dict.fromkeys(result["required"]))  # 保持顺序去重
-    
+
+    normalize_schema_enum(result)
     return result
 
 
@@ -748,6 +749,7 @@ def _clean_schema_for_parameters_json_schema(
         else:
             result.pop("required", None)
 
+    normalize_schema_enum(result)
     return result
 
 

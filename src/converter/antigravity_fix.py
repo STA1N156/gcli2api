@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from log import log
 from src.converter.image_input import normalize_inline_image_part
 from src.converter.thoughtSignature_fix import SKIP_THOUGHT_SIGNATURE_VALIDATOR
+from src.converter.utils import normalize_schema_enum
 
 # ==================== Gemini API 配置 ====================
 
@@ -242,6 +243,7 @@ def _clean_parameters_json_schema(
         else:
             result.pop("required", None)
 
+    normalize_schema_enum(result)
     return result
 
 
