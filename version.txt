@@ -1,4 +1,4 @@
-full_hash=fe9fa3c8d0866ff170834297c4678755fa02f908
-short_hash=fe9fa3c
-message=fix: rewrite exact input token limit error message
-date=2026-10-13 06:27:39 +0800
+full_hash=a95876c27b50f33694d4a607f7d013678d0fbfa8
+short_hash=a95876c
+message=fix: handle blank and assistant-prefill message endings
+date=2026-10-13 06:58:58 +0800
