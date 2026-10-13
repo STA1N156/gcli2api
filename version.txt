@@ -1,4 +1,4 @@
-full_hash=62b10434d0c0db386d5c2e8f6eead515ed1d594b
-short_hash=62b1043
-message=fix: support Gemini 4 output and thoughts and preserve image settings
-date=2026-10-14 00:02:32 +0800
+full_hash=113f5fbd40df2bbb8480c1b0c72fcb1c4e22129c
+short_hash=113f5fb
+message=feat: add 5h and 7d quotas and streamline dashboard
+date=2026-10-14 03:43:00 +0800
