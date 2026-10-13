@@ -1389,6 +1389,20 @@ async def convert_openai_to_gemini_request(openai_request: Dict[str, Any]) -> Di
     # 构建生成配置
     generation_config = {}
     model = openai_request.get("model", "")
+
+    if "image" in model.lower():
+        modalities = openai_request.get("modalities")
+        if isinstance(modalities, list):
+            generation_config["responseModalities"] = [
+                modality.upper() for modality in modalities if modality in ("text", "image")
+            ]
+        image_config = openai_request.get("image_config")
+        if isinstance(image_config, dict):
+            generation_config["imageConfig"] = {
+                target: image_config[source]
+                for source, target in (("aspect_ratio", "aspectRatio"), ("image_size", "imageSize"))
+                if source in image_config
+            }
     
     # 基础参数映射
     if "temperature" in openai_request:
