@@ -608,26 +608,59 @@ def _normalize_antigravity_request(
     return_thoughts: bool,
 ) -> str:
     """antigravity 模式专属处理，返回处理后的模型名"""
-    # Gemini 3/4 由模型名选择思考档位；其他模型通过 think 后缀启用预算配置。
+    # 客户端参数优先，模型后缀只提供默认思考等级。
     thinking = is_thinking_model(model)
+    supports_thinking_level = (
+        model.lower().startswith(("gemini-3", "gemini-4")) or "claude" in model.lower()
+    )
+    if supports_thinking_level and model.lower().endswith("-max"):
+        model = model[:-3] + "high"
+    legacy_claude_thinking = model.lower() in {
+        "claude-opus-4-6-thinking", "claude-sonnet-4-6-thinking"
+    }
+    suffix = model.lower().rsplit("-", 1)[-1]
+    if "claude" in model.lower() and suffix == "thinking":
+        suffix = "high"
+    thinking_config = generation_config.get("thinkingConfig", {})
+    if legacy_claude_thinking:
+        # 4.6 的旧 thinking 通道靠预算开启思考，不能只发送等级。
+        thinking_config = generation_config.setdefault("thinkingConfig", {})
+        thinking_config.pop("thinkingLevel", None)
+        if thinking_config.get("thinkingBudget") is None:
+            thinking_config["thinkingBudget"] = 8192
+    if str(thinking_config.get("thinkingLevel", "")).lower() == "max":
+        thinking_config["thinkingLevel"] = "HIGH"
+    client_thinking = bool(thinking_config.get("thinkingLevel")) or thinking_config.get("thinkingBudget") is not None
+    if (
+        supports_thinking_level and not client_thinking
+        and suffix in {"minimal", "low", "medium", "high"}
+    ):
+        generation_config.setdefault("thinkingConfig", {})["thinkingLevel"] = suffix.upper()
+    thinking_config = generation_config.get("thinkingConfig", {})
+    if thinking_config.get("thinkingLevel"):
+        thinking_config.pop("thinkingBudget", None)
 
     # 针对 Gemini 模型：根据思考设置映射至真实的 Antigravity 后端模型 ID
     if "gemini" in model.lower():
         original_model = model
 
+        # Flash Lite 的等级别名只用于接收请求，上游使用基础型号。
+        if (
+            suffix in {"low", "medium", "high"}
+            and original_model.lower().rsplit("-", 1)[0] in {"gemini-3.1-flash-lite", "gemini-3.5-flash-lite"}
+        ):
+            model = original_model.lower().rsplit("-", 1)[0]
+
         # 兼容旧的客户端别名：Antigravity 后端的 Gemini 3.1 Pro High
         # 实际使用 gemini-pro-agent 作为模型 ID。
-        if model.lower() == "gemini-3.1-pro-high":
+        elif model.lower() == "gemini-3.1-pro-high":
             model = "gemini-pro-agent"
             log.debug(f"[ANTIGRAVITY] 映射模型: {original_model} -> {model}")
 
-        # Antigravity uses the Gemini 3/4 model route/name to select thinking depth.
-        # Do not send thinkingLevel/thinkingBudget because they can conflict with that route.
-        # Keep includeThoughts so reasoning is still returned to the frontend when enabled.
+        # Gemini 3/4 使用思考等级，不与旧式预算混传。
         if original_model.lower().startswith(("gemini-3", "gemini-4")):
             thinking_config = generation_config.setdefault("thinkingConfig", {})
             thinking_config.pop("thinkingBudget", None)
-            thinking_config.pop("thinkingLevel", None)
             thinking_config["includeThoughts"] = return_thoughts
         else:
             # 对于 Gemini 2.5 系列，保留 thinkingConfig
@@ -635,19 +668,17 @@ def _normalize_antigravity_request(
                 if "thinkingConfig" not in generation_config:
                     generation_config["thinkingConfig"] = {}
                 thinking_config = generation_config["thinkingConfig"]
-                thinking_config["thinkingBudget"] = 1024
-                thinking_config.pop("thinkingLevel", None)
+                if not thinking_config.get("thinkingLevel"):
+                    thinking_config["thinkingBudget"] = 1024
                 thinking_config["includeThoughts"] = return_thoughts
     else:
         # 针对非 Gemini 模型（如 Claude）
-        if thinking:
-            # 直接设置 thinkingConfig，默认思考预算
+        if thinking or ("claude" in model.lower() and thinking_config.get("thinkingLevel")):
+            # 只控制思考内容是否返回，不替客户端固定思考预算。
             if "thinkingConfig" not in generation_config:
                 generation_config["thinkingConfig"] = {}
 
             thinking_config = generation_config["thinkingConfig"]
-            thinking_config["thinkingBudget"] = 1024
-            thinking_config.pop("thinkingLevel", None)
             thinking_config["includeThoughts"] = return_thoughts
 
         # 检查最后一个 assistant 消息是否以 thinking 块开始
@@ -664,11 +695,7 @@ def _normalize_antigravity_request(
                 for content in contents
             )
 
-            if has_tool_calls:
-                # MCP 场景：检测到工具调用，移除 thinkingConfig
-                log.warning(f"[ANTIGRAVITY] 检测到工具调用（MCP场景），移除 thinkingConfig 避免失效")
-                generation_config.pop("thinkingConfig", None)
-            else:
+            if not has_tool_calls:
                 # 非 MCP 场景：填充思考块
                 # 找到最后一个 model 角色的 content
                 for i in range(len(contents) - 1, -1, -1):
