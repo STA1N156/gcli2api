@@ -9,7 +9,6 @@ import os
 import time
 import uuid
 import zipfile
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response
@@ -23,11 +22,16 @@ from src.models import (
 )
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
-from src.api.antigravity import fetch_quota_info
+from src.antigravity_quota import (
+    get_account_quota,
+    summarize_accounts,
+    QUOTA_CONCURRENCY,
+    QUOTA_CACHE_SECONDS,
+)
+from src.task_manager import create_managed_task
 from src.google_oauth_api import (
     Credentials,
     enable_required_apis,
-    fetch_credit_amount,
     fetch_project_id_and_tier,
     get_user_projects,
     select_default_project,
@@ -38,20 +42,6 @@ from .utils import validate_mode
 
 # 创建路由器
 router = APIRouter(prefix="/creds", tags=["credentials"])
-
-ANTIGRAVITY_CREDIT_SUMMARY_CONCURRENCY = 70
-ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD = 0.0002  # 0.02%
-_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS: Dict[str, Any] = {
-    "run_id": None,
-    "running": False,
-    "total": 0,
-    "completed": 0,
-    "failed": 0,
-    "started_at": None,
-    "updated_at": None,
-}
-_ANTIGRAVITY_CREDIT_SUMMARY_LAST_WRITE_AT = 0.0
-_ANTIGRAVITY_CREDIT_SUMMARY_WRITE_INTERVAL = 0.25
 
 
 # =============================================================================
@@ -148,35 +138,6 @@ async def clear_credential_abnormal_status(
     return bool(state_cleared and cooldowns_cleared)
 
 
-def _quota_remaining_float(quota_data: Any) -> Optional[float]:
-    if not isinstance(quota_data, dict):
-        return None
-
-    try:
-        return float(quota_data.get("remaining"))
-    except (TypeError, ValueError):
-        return None
-
-
-def _quota_model_base_name(model_name: Any) -> str:
-    normalized = str(model_name or "").strip().replace("-thinking", "")
-    suffixes = (
-        "-maxthinking", "-nothinking",
-        "-minimal", "-medium", "-search", "-think",
-        "-high", "-max", "-low",
-    )
-
-    changed = True
-    while changed:
-        changed = False
-        for suffix in suffixes:
-            if normalized.endswith(suffix):
-                normalized = normalized[:-len(suffix)]
-                changed = True
-
-    return normalized
-
-
 def _active_model_cooldowns_from_state(state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     cooldowns = (state or {}).get("model_cooldowns") or {}
     if not isinstance(cooldowns, dict):
@@ -192,117 +153,6 @@ def _active_model_cooldowns_from_state(state: Optional[Dict[str, Any]]) -> Dict[
             continue
 
     return active
-
-
-def _quota_reset_timestamp(quota_data: Any) -> Optional[float]:
-    if not isinstance(quota_data, dict):
-        return None
-
-    reset_time_raw = quota_data.get("resetTimeRaw")
-    if not reset_time_raw:
-        return None
-
-    try:
-        reset_dt = datetime.fromisoformat(str(reset_time_raw).replace("Z", "+00:00"))
-        if reset_dt.tzinfo is None:
-            reset_dt = reset_dt.replace(tzinfo=timezone.utc)
-        reset_timestamp = reset_dt.astimezone(timezone.utc).timestamp()
-        if reset_timestamp > time.time():
-            return reset_timestamp
-    except (TypeError, ValueError):
-        return None
-
-    return None
-
-
-async def sync_model_cooldowns_from_quota(
-    storage_adapter: Any,
-    filename: str,
-    mode: str,
-    models: Dict[str, Any],
-    credential_state: Optional[Dict[str, Any]] = None,
-) -> None:
-    if mode != "antigravity" or not isinstance(models, dict) or not models:
-        return
-
-    parsed_count = 0
-    available_count = 0
-    available_model_keys = set()
-    group_counts: Dict[str, Dict[str, int]] = {}
-    exhausted_model_cooldowns = []
-
-    for model_name, quota_data in models.items():
-        remaining = _quota_remaining_float(quota_data)
-        if remaining is None:
-            continue
-
-        parsed_count += 1
-        group_name = _antigravity_quota_model_group(model_name)
-        if group_name:
-            group_counts.setdefault(group_name, {"total": 0, "available": 0})
-            group_counts[group_name]["total"] += 1
-
-        if remaining > ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD:
-            available_count += 1
-            available_model_keys.add(str(model_name))
-            available_model_keys.add(_quota_model_base_name(model_name))
-            if group_name:
-                group_counts[group_name]["available"] += 1
-        else:
-            cooldown_until = _quota_reset_timestamp(quota_data) or (time.time() + 4 * 3600)
-            exhausted_model_cooldowns.append((str(model_name), cooldown_until))
-
-    for model_name, cooldown_until in exhausted_model_cooldowns:
-        try:
-            await storage_adapter._backend.set_model_cooldown(
-                filename, model_name, cooldown_until, mode=mode
-            )
-        except Exception as e:
-            log.warning(
-                f"设置耗尽模型CD失败: {filename}, model={model_name}, "
-                f"mode={mode}, error={e}"
-            )
-
-    if available_count <= 0:
-        return
-
-    if credential_state is None:
-        try:
-            credential_state = await storage_adapter.get_credential_state(filename, mode=mode)
-        except Exception as e:
-            log.warning(f"获取凭证CD状态失败: {filename} (mode={mode}), error={e}")
-            credential_state = None
-
-    active_cooldowns = _active_model_cooldowns_from_state(credential_state)
-    if not active_cooldowns:
-        return
-
-    available_groups = {
-        group_name
-        for group_name, counts in group_counts.items()
-        if counts["total"] > 0 and counts["available"] == counts["total"]
-    }
-
-    if parsed_count > 0 and available_count == parsed_count:
-        await clear_all_model_cooldowns_for_credential(storage_adapter, filename, mode)
-        return
-
-    for model_name in active_cooldowns:
-        model_group = _antigravity_quota_model_group(model_name)
-        if (
-            model_name in available_model_keys
-            or _quota_model_base_name(model_name) in available_model_keys
-            or model_group in available_groups
-        ):
-            try:
-                await storage_adapter._backend.set_model_cooldown(
-                    filename, model_name, None, mode=mode
-                )
-            except Exception as e:
-                log.warning(
-                    f"清空可用模型CD失败: {filename}, model={model_name}, "
-                    f"mode={mode}, error={e}"
-                )
 
 
 async def record_credential_validation_error(
@@ -323,177 +173,82 @@ async def record_credential_validation_error(
     )
 
 
-def _normalize_credit_amount(value: Any) -> Optional[float]:
-    """Return a numeric credit amount when the provider sends one."""
-    if value is None:
+def _quota_snapshot_path():
+    return os.path.join(os.getenv("CREDENTIALS_DIR") or "./creds", ".antigravity_quota_summary.json")
+
+
+def _read_quota_snapshot():
+    try:
+        with open(_quota_snapshot_path(), encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {"success": True, "running": False}
+
+
+def _write_quota_snapshot(snapshot):
+    path = _quota_snapshot_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary = f"{path}.{os.getpid()}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(snapshot, handle, ensure_ascii=False)
+    os.replace(temporary, path)
+
+
+def _lock_quota_refresh():
+    # OS locks are shared across Workers and released even if a Worker exits.
+    path = _quota_snapshot_path() + ".lock"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    handle = open(path, "a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0)
+            if not handle.read(1):
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return handle
+    except OSError:
+        handle.close()
         return None
 
+
+async def _refresh_quota_summary(storage, states, snapshot, lock, force):
+    filenames = iter(name for name, state in states.items() if not state.get("disabled"))
+    results = []
+    last_write = 0.0
+
+    async def worker():
+        nonlocal last_write
+        for filename in filenames:
+            result = await get_account_quota(storage, filename, force=force)
+            results.append(result)
+            snapshot.update(
+                completed=len(results),
+                failed=snapshot["failed"] + int(not result.get("success")),
+                updated_at=time.time(),
+            )
+            if time.monotonic() - last_write >= 0.5:
+                last_write = time.monotonic()
+                snapshot["result"] = summarize_accounts(results, snapshot["total"], snapshot["started_at"])
+                await asyncio.to_thread(_write_quota_snapshot, dict(snapshot))
+
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        await asyncio.gather(*(worker() for _ in range(min(QUOTA_CONCURRENCY, snapshot["total"]))))
+        snapshot["result"] = summarize_accounts(results, snapshot["total"], snapshot["started_at"])
+    except Exception as exc:
+        log.warning(f"[ANTIGRAVITY QUOTA] Summary failed: {type(exc).__name__}")
+        snapshot["error"] = "额度刷新失败，请重试"
+    finally:
+        snapshot.update(running=False, updated_at=time.time())
         try:
-            return float(str(value).replace(",", "").strip())
-        except (TypeError, ValueError):
-            return None
-
-
-def _average_quota_remaining(models: Dict[str, Any]) -> Optional[float]:
-    """Average model remaining fractions for one credential."""
-    remaining_values: List[float] = []
-
-    for quota_data in models.values():
-        remaining_float = _quota_remaining_float(quota_data)
-        if remaining_float is None:
-            continue
-
-        remaining_values.append(max(0.0, min(1.0, remaining_float)))
-
-    if not remaining_values:
-        return None
-
-    return sum(remaining_values) / len(remaining_values)
-
-
-def _antigravity_quota_model_group(model_name: Any) -> Optional[str]:
-    model = str(model_name or "").lower()
-    if "gemini" in model:
-        return "Gemini 模型"
-    if "claude" in model:
-        return "Claude 模型"
-    return None
-
-
-def _group_antigravity_quota_models(models: Dict[str, Any]) -> Dict[str, Any]:
-    grouped_values: Dict[str, List[float]] = {
-        "Gemini 模型": [],
-        "Claude 模型": [],
-    }
-
-    for model_name, quota_data in (models or {}).items():
-        group_name = _antigravity_quota_model_group(model_name)
-        if not group_name:
-            continue
-
-        remaining = _quota_remaining_float(quota_data)
-        if remaining is None:
-            continue
-
-        grouped_values[group_name].append(max(0.0, min(1.0, remaining)))
-
-    grouped_models: Dict[str, Any] = {}
-    for group_name in ("Gemini 模型", "Claude 模型"):
-        values = grouped_values[group_name]
-        if not values:
-            continue
-
-        average_remaining = sum(values) / len(values)
-        grouped_models[group_name] = {
-            "remaining_fraction": average_remaining,
-            "remaining_percent": round(average_remaining * 100, 2),
-        }
-
-    return grouped_models
-
-
-def _antigravity_credit_summary_progress_path() -> str:
-    credentials_dir = os.getenv("CREDENTIALS_DIR") or "./creds"
-    return os.path.join(credentials_dir, ".antigravity_credit_summary_progress.json")
-
-
-def _write_antigravity_credit_summary_progress(*, force: bool = False) -> None:
-    global _ANTIGRAVITY_CREDIT_SUMMARY_LAST_WRITE_AT
-
-    now = time.time()
-    if (
-        not force
-        and now - _ANTIGRAVITY_CREDIT_SUMMARY_LAST_WRITE_AT
-        < _ANTIGRAVITY_CREDIT_SUMMARY_WRITE_INTERVAL
-    ):
-        return
-
-    path = _antigravity_credit_summary_progress_path()
-    try:
-        dir_name = os.path.dirname(path)
-        if dir_name:
-            os.makedirs(dir_name, exist_ok=True)
-
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                current = json.load(f)
-            current_started_at = float(current.get("started_at") or 0)
-            local_started_at = float(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("started_at") or 0)
-            if (
-                current.get("run_id") != _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("run_id")
-                and current_started_at > local_started_at
-            ):
-                return
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
-
-        temp_path = f"{path}.{os.getpid()}.tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS, f, ensure_ascii=False)
-        os.replace(temp_path, path)
-        _ANTIGRAVITY_CREDIT_SUMMARY_LAST_WRITE_AT = now
-    except Exception as e:
-        log.debug(f"[ANTIGRAVITY SUMMARY] Failed to persist progress: {e}")
-
-
-def _read_antigravity_credit_summary_progress() -> Dict[str, Any]:
-    path = _antigravity_credit_summary_progress_path()
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            return data
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        log.debug(f"[ANTIGRAVITY SUMMARY] Failed to read progress: {e}")
-    return dict(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS)
-
-
-def _reset_antigravity_credit_summary_progress(total: int) -> str:
-    now = time.time()
-    run_id = uuid.uuid4().hex
-    _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.update({
-        "run_id": run_id,
-        "running": total > 0,
-        "total": total,
-        "completed": 0,
-        "failed": 0,
-        "started_at": now,
-        "updated_at": now,
-    })
-    _write_antigravity_credit_summary_progress(force=True)
-    return run_id
-
-
-def _update_antigravity_credit_summary_progress(run_id: str, *, failed: bool = False) -> None:
-    if _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("run_id") != run_id:
-        return
-
-    _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["completed"] = min(
-        int(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("completed") or 0) + 1,
-        int(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("total") or 0),
-    )
-    if failed:
-        _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["failed"] = (
-            int(_ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("failed") or 0) + 1
-        )
-    _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["updated_at"] = time.time()
-    _write_antigravity_credit_summary_progress()
-
-
-def _finish_antigravity_credit_summary_progress(run_id: str) -> None:
-    if _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS.get("run_id") != run_id:
-        return
-
-    _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["running"] = False
-    _ANTIGRAVITY_CREDIT_SUMMARY_PROGRESS["updated_at"] = time.time()
-    _write_antigravity_credit_summary_progress(force=True)
+            await asyncio.to_thread(_write_quota_snapshot, snapshot)
+        finally:
+            lock.close()
 
 
 async def upload_credentials_common(
@@ -1608,307 +1363,55 @@ async def get_credential_errors(
 async def get_credential_quota(
     filename: str,
     token: str = Depends(verify_panel_token),
-    mode: str = "antigravity"
+    mode: str = "antigravity",
+    force: bool = False,
 ):
-    """
-    获取指定凭证的额度信息（仅支持 antigravity 模式）
-    """
-    try:
-        mode = validate_mode(mode)
-        # 验证文件名
-        if not filename.endswith(".json"):
-            raise HTTPException(status_code=400, detail="无效的文件名")
-
-
-        storage_adapter = await get_storage_adapter()
-
-        # 获取凭证数据
-        credential_data = await storage_adapter.get_credential(filename, mode=mode)
-        if not credential_data:
-            raise HTTPException(status_code=404, detail="凭证不存在")
-
-        # 使用 Credentials 对象自动处理 token 刷新
-        from src.google_oauth_api import Credentials
-
-        creds = Credentials.from_dict(credential_data)
-
-        # 自动刷新 token（如果需要）
-        await creds.refresh_if_needed()
-
-        # 如果 token 被刷新了，更新存储
-        updated_data = creds.to_dict()
-        if updated_data != credential_data:
-            log.info(f"Token已自动刷新: {filename}")
-            await storage_adapter.store_credential(filename, updated_data, mode=mode)
-            credential_data = updated_data
-
-        # 获取访问令牌
-        access_token = credential_data.get("access_token") or credential_data.get("token")
-        if not access_token:
-            raise HTTPException(status_code=400, detail="凭证中没有访问令牌")
-
-        # 获取额度信息
-        quota_info = await fetch_quota_info(access_token)
-
-        if quota_info.get("success"):
-            models = quota_info.get("models", {}) or {}
-            await sync_model_cooldowns_from_quota(
-                storage_adapter, filename, mode, models
-            )
-            return JSONResponse(content={
-                "success": True,
-                "filename": filename,
-                "models": models
-            })
-        else:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "filename": filename,
-                    "error": quota_info.get("error", "未知错误")
-                }
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        log.error(f"获取凭证额度失败 {filename}: {e}")
-        raise HTTPException(status_code=500, detail=f"获取额度失败: {str(e)}")
+    if validate_mode(mode) != "antigravity":
+        raise HTTPException(status_code=400, detail="此额度查询仅支持 Antigravity")
+    if not filename.endswith(".json"):
+        raise HTTPException(status_code=400, detail="无效的文件名")
+    storage = await get_storage_adapter()
+    result = await get_account_quota(storage, filename, force=force)
+    status = 200 if result.get("success") else result.get("status_code", 502)
+    return JSONResponse(content=result, status_code=status)
 
 
 @router.get("/antigravity-credit-summary")
 async def get_antigravity_credit_summary(
     token: str = Depends(verify_panel_token),
+    force: bool = False,
 ):
-    """
-    Return aggregate Antigravity quota and credit data for enabled credentials.
-    """
-    progress_run_id = None
+    # Return immediately; the browser polls progress instead of holding a long request.
+    lock = await asyncio.to_thread(_lock_quota_refresh)
+    snapshot = await asyncio.to_thread(_read_quota_snapshot)
+    if lock is None:
+        return JSONResponse(content={**snapshot, "running": True}, status_code=202)
+    if not force and snapshot.get("result") and time.time() - snapshot.get("updated_at", 0) < QUOTA_CACHE_SECONDS:
+        lock.close()
+        return JSONResponse(content={**snapshot["result"], "cached": True})
     try:
-        storage_adapter = await get_storage_adapter()
-        all_states = await storage_adapter.get_all_credential_states(mode="antigravity")
-        enabled_filenames = [
-            filename
-            for filename, state in all_states.items()
-            if not state.get("disabled", False)
-        ]
-        progress_run_id = _reset_antigravity_credit_summary_progress(len(enabled_filenames))
-
-        if not enabled_filenames:
-            _finish_antigravity_credit_summary_progress(progress_run_id)
-            return JSONResponse(content={
-                "success": True,
-                "enabled_accounts": 0,
-                "checked_accounts": 0,
-                "failed_accounts": 0,
-                "credit_accounts": 0,
-                "quota_accounts": 0,
-                "total_remaining_credits": 0,
-                "remaining_fraction": None,
-                "remaining_percent": None,
-                "model_summaries": [],
-                "updated_at": time.time(),
-                "errors": [],
-            })
-
-        api_base_url = await get_antigravity_api_url()
-        semaphore = asyncio.Semaphore(ANTIGRAVITY_CREDIT_SUMMARY_CONCURRENCY)
-
-        async def fetch_one(filename: str) -> Dict[str, Any]:
-            result: Dict[str, Any] = {
-                "filename": os.path.basename(filename),
-                "success": False,
-                "credit_amount": None,
-                "quota_remaining_fraction": None,
-                "quota_model_count": 0,
-                "models": {},
-                "error": None,
-            }
-
-            async with semaphore:
-                try:
-                    credential_data = await storage_adapter.get_credential(
-                        filename, mode="antigravity"
-                    )
-                    if not credential_data:
-                        result["error"] = "credential not found"
-                        return result
-
-                    creds = Credentials.from_dict(credential_data)
-                    token_refreshed = await creds.refresh_if_needed()
-                    updated_data = creds.to_dict()
-
-                    if token_refreshed or updated_data != credential_data:
-                        await storage_adapter.store_credential(
-                            filename, updated_data, mode="antigravity"
-                        )
-                        credential_data = updated_data
-
-                    access_token = (
-                        credential_data.get("access_token")
-                        or credential_data.get("token")
-                        or creds.access_token
-                    )
-                    if not access_token:
-                        result["error"] = "missing access token"
-                        return result
-
-                    quota_info, credit_amount = await asyncio.gather(
-                        fetch_quota_info(access_token),
-                        fetch_credit_amount(
-                            access_token=access_token,
-                            user_agent=ANTIGRAVITY_USER_AGENT,
-                            api_base_url=api_base_url,
-                        ),
-                    )
-
-                    normalized_credit = _normalize_credit_amount(credit_amount)
-                    if normalized_credit is not None:
-                        result["credit_amount"] = normalized_credit
-
-                    if quota_info.get("success"):
-                        models = quota_info.get("models", {}) or {}
-                        await sync_model_cooldowns_from_quota(
-                            storage_adapter,
-                            filename,
-                            "antigravity",
-                            models,
-                            credential_state=all_states.get(filename),
-                        )
-                        result["quota_model_count"] = len(models)
-                        result["quota_remaining_fraction"] = _average_quota_remaining(models)
-
-                        result["models"] = _group_antigravity_quota_models(models)
-                    else:
-                        result["error"] = quota_info.get("error", "quota fetch failed")
-
-                    result["success"] = (
-                        result["credit_amount"] is not None
-                        or result["quota_remaining_fraction"] is not None
-                    )
-                    return result
-
-                except Exception as e:
-                    result["error"] = str(e)
-                    log.warning(
-                        f"[ANTIGRAVITY SUMMARY] Failed to fetch {filename}: {e}"
-                    )
-                    return result
-
-        async def fetch_one_with_progress(filename: str) -> Dict[str, Any]:
-            result = await fetch_one(filename)
-            _update_antigravity_credit_summary_progress(
-                progress_run_id,
-                failed=not result.get("success")
-            )
-            return result
-
-        results = await asyncio.gather(
-            *(fetch_one_with_progress(filename) for filename in enabled_filenames)
+        storage = await get_storage_adapter()
+        states = await storage.get_all_credential_states(mode="antigravity")
+        now = time.time()
+        snapshot = {
+            "success": True, "run_id": uuid.uuid4().hex, "running": True,
+            "total": sum(not state.get("disabled") for state in states.values()),
+            "completed": 0, "failed": 0, "started_at": now, "updated_at": now,
+        }
+        await asyncio.to_thread(_write_quota_snapshot, snapshot)
+        create_managed_task(
+            _refresh_quota_summary(storage, states, snapshot, lock, force),
+            name="antigravity-quota-refresh",
         )
-        _finish_antigravity_credit_summary_progress(progress_run_id)
-
-        quota_fractions = [
-            item["quota_remaining_fraction"]
-            for item in results
-            if item.get("quota_remaining_fraction") is not None
-        ]
-        credit_amounts = [
-            item["credit_amount"]
-            for item in results
-            if item.get("credit_amount") is not None
-        ]
-
-        remaining_fraction = (
-            sum(quota_fractions) / len(quota_fractions)
-            if quota_fractions
-            else None
-        )
-        total_remaining_credits = sum(credit_amounts) if credit_amounts else None
-
-        model_buckets: Dict[str, Dict[str, Any]] = {}
-        for item in results:
-            for model_name, model_data in (item.get("models") or {}).items():
-                remaining_fraction = model_data.get("remaining_fraction")
-                if remaining_fraction is None:
-                    continue
-
-                bucket = model_buckets.setdefault(
-                    model_name,
-                    {
-                        "remaining_values": [],
-                    },
-                )
-                bucket["remaining_values"].append(remaining_fraction)
-
-        model_summaries = []
-        for model_name, bucket in model_buckets.items():
-            remaining_values = bucket["remaining_values"]
-            if not remaining_values:
-                continue
-
-            average_remaining = sum(remaining_values) / len(remaining_values)
-            exhausted_accounts = sum(
-                1 for value in remaining_values
-                if value <= ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD
-            )
-
-            model_summaries.append({
-                "model": model_name,
-                "account_count": len(remaining_values),
-                "exhausted_accounts": exhausted_accounts,
-                "remaining_fraction": average_remaining,
-                "remaining_percent": round(average_remaining * 100, 2),
-            })
-
-        order = {"Gemini 模型": 0, "Claude 模型": 1}
-        model_summaries.sort(key=lambda item: order.get(item["model"], 99))
-
-        failed_results = [item for item in results if not item.get("success")]
-        errors = [
-            {
-                "filename": item.get("filename"),
-                "error": item.get("error") or "no quota or credit data",
-            }
-            for item in failed_results
-        ][:10]
-
-        return JSONResponse(content={
-            "success": True,
-            "enabled_accounts": len(enabled_filenames),
-            "checked_accounts": len(results),
-            "failed_accounts": len(failed_results),
-            "credit_accounts": len(credit_amounts),
-            "quota_accounts": len(quota_fractions),
-            "total_remaining_credits": total_remaining_credits,
-            "remaining_fraction": remaining_fraction,
-            "remaining_percent": (
-                round(remaining_fraction * 100, 2)
-                if remaining_fraction is not None
-                else None
-            ),
-            "model_summaries": model_summaries,
-            "updated_at": time.time(),
-            "errors": errors,
-        })
-
-    except Exception as e:
-        if progress_run_id:
-            _finish_antigravity_credit_summary_progress(progress_run_id)
-        log.error(f"[ANTIGRAVITY SUMMARY] Failed to build summary: {e}")
-        raise HTTPException(status_code=500, detail=f"获取总额度失败: {str(e)}")
+    except BaseException:
+        lock.close()
+        raise
+    return JSONResponse(content=snapshot, status_code=202)
 
 
 @router.get("/antigravity-credit-summary-progress")
-async def get_antigravity_credit_summary_progress(
-    token: str = Depends(verify_panel_token),
-):
-    """Return current aggregate Antigravity quota refresh progress."""
-    return JSONResponse(content={
-        "success": True,
-        **_read_antigravity_credit_summary_progress(),
-    })
+async def get_antigravity_credit_summary_progress(token: str = Depends(verify_panel_token)):
+    return JSONResponse(content=await asyncio.to_thread(_read_quota_snapshot))
 
 
 @router.post("/configure-preview/{filename}")
