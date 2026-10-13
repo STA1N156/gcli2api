@@ -1,3 +1,7 @@
+function panelIcon(name, extraClass = '') {
+    return `<svg class="panel-icon ${extraClass}" aria-hidden="true"><use href="./front/icons.svg#${name}"></use></svg>`;
+}
+
 // =====================================================================
 // GCLI2API 控制面板公共JavaScript模块
 // =====================================================================
@@ -39,24 +43,20 @@ const AppState = {
     // 冷却倒计时
     cooldownTimerInterval: null,
 
+    quotaCache: new Map(),
+    quotaRequests: new Map(),
+    quotaOpen: new Set(),
+    antigravityCreditSummaryPollFailures: 0,
+
     // Antigravity total quota UI
     antigravityCreditSummaryProgressTimer: null,
     antigravityCreditSummaryLoaded: false,
     antigravityCreditSummaryLoading: false,
-    antigravityCreditSummaryProgress: {
-        requestStartedAt: 0,
-        backendStartedAt: 0,
-        total: 0,
-        completed: 0,
-        failed: 0
-    },
-
     // 请求体捕捉
     requestCapturePollTimer: null,
     requestCaptureAutoDownloaded: false
 };
 
-const ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD = 0.0002; // 0.02%
 
 // =====================================================================
 // 凭证管理器工厂
@@ -504,7 +504,7 @@ function createUploadManager(type) {
 
             this.selectedFiles.forEach((file, index) => {
                 const isZip = file.name.endsWith('.zip');
-                const fileIcon = isZip ? '📦' : '📄';
+                const fileIcon = panelIcon(isZip ? 'box' : 'file');
                 const fileType = isZip ? ' (ZIP压缩包)' : ' (JSON文件)';
 
                 const fileItem = document.createElement('div');
@@ -613,7 +613,7 @@ function showStatus(message, type = 'info') {
         }
 
         // 创建新的 toast
-        statusSection.innerHTML = `<div class="status ${type}">${message}</div>`;
+        statusSection.innerHTML = `<div class="status ${type}">${panelIcon(type === 'success' ? 'check' : type === 'error' ? 'alert' : 'info')}<span>${escapeHtml(message)}</span></div>`;
         const statusDiv = statusSection.querySelector('.status');
 
         // 强制重绘以触发动画
@@ -659,7 +659,7 @@ function showMessageModal(title, message, type = 'info') {
         <div class="message-modal ${type}">
             <div class="message-modal-header">
                 <h3>${title}</h3>
-                <button class="message-modal-close" onclick="this.closest('.message-modal-overlay').remove()">&times;</button>
+                <button class="message-modal-close" aria-label="关闭" onclick="this.closest('.message-modal-overlay').remove()">${panelIcon('x')}</button>
             </div>
             <div class="message-modal-body">
                 ${linkifyText(message).replace(/\n/g, '<br>')}
@@ -780,7 +780,7 @@ function getGroupedCooldowns(modelCooldowns, managerType = null) {
 function renderCooldownBadges(modelCooldowns, managerType = null) {
     return getGroupedCooldowns(modelCooldowns, managerType)
         .map(item => (
-            `<span class="cooldown-badge" data-cooldown-group="${item.group}" style="background-color: #17a2b8;" title="${item.group}冷却中，覆盖 ${item.count} 个模型">⏰ ${item.group}: ${item.time}</span>`
+            `<span class="cooldown-badge" data-cooldown-group="${item.group}" style="background-color: #17a2b8;" title="${item.group}冷却中，覆盖 ${item.count} 个模型">${panelIcon('clock')} ${item.group}: ${item.time}</span>`
         ))
         .join('');
 }
@@ -881,13 +881,19 @@ function createCredCard(credInfo, manager) {
             <div class="cred-content" data-filename="${filename}" data-loaded="false" style="background-color: #fff3cd; border-color: #ffc107;">点击"查看报错"按钮加载报错信息...</div>
         </div>
         ${managerType === 'antigravity' ? `
-        <div class="cred-quota-details" id="quota-${pathId}" style="display: none;">
+        <div class="cred-quota-details" id="quota-${pathId}" style="display: ${AppState.quotaOpen.has(filename) ? 'block' : 'none'};">
             <div class="cred-quota-content" data-filename="${filename}" data-loaded="false">
                 点击"查看额度"按钮加载额度信息...
             </div>
         </div>
         ` : ''}
     `;
+
+    if (managerType === 'antigravity' && AppState.quotaOpen.has(filename)) {
+        const cached = AppState.quotaCache.get(filename);
+        const content = div.querySelector('.cred-quota-content');
+        content.innerHTML = accountQuotaMarkup(pathId, cached, AppState.quotaRequests.has(filename));
+    }
 
     // 添加事件监听
     div.querySelectorAll('[data-filename][data-action]').forEach(button => {
@@ -1017,6 +1023,9 @@ async function autoLogin() {
 }
 
 function logout() {
+    stopAntigravityCreditSummaryProgressPolling();
+    AppState.quotaCache.clear();
+    AppState.quotaOpen.clear();
     localStorage.removeItem('gcli2api_auth_token');
     AppState.authToken = '';
     document.getElementById('loginSection').classList.remove('hidden');
@@ -1128,8 +1137,8 @@ async function getCredentials() {
             document.getElementById('credentialsContent').textContent = JSON.stringify(data.credentials, null, 2);
 
             const msg = data.auto_detected_project
-                ? `✅ 认证成功！项目ID已自动检测为: ${data.credentials.project_id}，文件已保存到: ${data.file_path}`
-                : `✅ 认证成功！文件已保存到: ${data.file_path}`;
+                ? ` 认证成功！项目ID已自动检测为: ${data.credentials.project_id}，文件已保存到: ${data.file_path}`
+                : ` 认证成功！文件已保存到: ${data.file_path}`;
             showStatus(msg, 'success');
 
             document.getElementById('credentialsSection').classList.remove('hidden');
@@ -1165,7 +1174,7 @@ async function getCredentials() {
                 showStatus('需要项目ID才能完成认证，请重新开始并输入正确的项目ID', 'error');
             }
         } else {
-            showStatus(`❌ 错误: ${data.error || '获取认证文件失败'}`, 'error');
+            showStatus(` 错误: ${data.error || '获取认证文件失败'}`, 'error');
         }
     } catch (error) {
         showStatus(`网络错误: ${error.message}`, 'error');
@@ -1203,9 +1212,9 @@ async function startAntigravityAuth() {
             authUrlLink.textContent = data.auth_url;
             document.getElementById('antigravityAuthUrlSection').classList.remove('hidden');
 
-            showStatus('✅ Antigravity 认证链接已生成！请点击链接完成授权', 'success');
+            showStatus(' Antigravity 认证链接已生成！请点击链接完成授权', 'success');
         } else {
-            showStatus(`❌ 错误: ${data.error || '生成认证链接失败'}`, 'error');
+            showStatus(` 错误: ${data.error || '生成认证链接失败'}`, 'error');
         }
     } catch (error) {
         showStatus(`网络错误: ${error.message}`, 'error');
@@ -1240,9 +1249,9 @@ async function getAntigravityCredentials() {
             document.getElementById('antigravityCredsContent').textContent = JSON.stringify(data.credentials, null, 2);
             document.getElementById('antigravityCredsSection').classList.remove('hidden');
             AppState.antigravityAuthInProgress = false;
-            showStatus(`✅ Antigravity 认证成功！文件已保存到: ${data.file_path}`, 'success');
+            showStatus(` Antigravity 认证成功！文件已保存到: ${data.file_path}`, 'success');
         } else {
-            showStatus(`❌ 错误: ${data.error || '获取认证文件失败'}`, 'error');
+            showStatus(` 错误: ${data.error || '获取认证文件失败'}`, 'error');
         }
     } catch (error) {
         showStatus(`网络错误: ${error.message}`, 'error');
@@ -1273,11 +1282,11 @@ function toggleProjectIdSection() {
     if (section.style.display === 'none') {
         section.style.display = 'block';
         icon.style.transform = 'rotate(90deg)';
-        icon.textContent = '▼';
+        icon.innerHTML = panelIcon('chevron-down');
     } else {
         section.style.display = 'none';
         icon.style.transform = 'rotate(0deg)';
-        icon.textContent = '▶';
+        icon.innerHTML = panelIcon('chevron-right');
     }
 }
 
@@ -1288,11 +1297,11 @@ function toggleCallbackUrlSection() {
     if (section.style.display === 'none') {
         section.style.display = 'block';
         icon.style.transform = 'rotate(180deg)';
-        icon.textContent = '▲';
+        icon.innerHTML = panelIcon('chevron-up');
     } else {
         section.style.display = 'none';
         icon.style.transform = 'rotate(0deg)';
-        icon.textContent = '▼';
+        icon.innerHTML = panelIcon('chevron-down');
     }
 }
 
@@ -1303,11 +1312,11 @@ function toggleAntigravityCallbackUrlSection() {
     if (section.style.display === 'none') {
         section.style.display = 'block';
         icon.style.transform = 'rotate(180deg)';
-        icon.textContent = '▲';
+        icon.innerHTML = panelIcon('chevron-up');
     } else {
         section.style.display = 'none';
         icon.style.transform = 'rotate(0deg)';
-        icon.textContent = '▼';
+        icon.innerHTML = panelIcon('chevron-down');
     }
 }
 
@@ -1325,7 +1334,7 @@ async function processCallbackUrl() {
     }
 
     if (!callbackUrl.includes('code=') || !callbackUrl.includes('state=')) {
-        showStatus('❌ 这不是有效的回调URL！请确保：\n1. 已完成Google OAuth授权\n2. 复制的是浏览器地址栏的完整URL\n3. URL包含code和state参数', 'error');
+        showStatus(' 这不是有效的回调URL！请确保：\n1. 已完成Google OAuth授权\n2. 复制的是浏览器地址栏的完整URL\n3. URL包含code和state参数', 'error');
         return;
     }
 
@@ -1378,7 +1387,7 @@ async function processAntigravityCallbackUrl() {
     }
 
     if (!callbackUrl.includes('code=') || !callbackUrl.includes('state=')) {
-        showStatus('❌ 这不是有效的回调URL！请确保包含code和state参数', 'error');
+        showStatus(' 这不是有效的回调URL！请确保包含code和state参数', 'error');
         return;
     }
 
@@ -1485,16 +1494,6 @@ function setAntigravityCreditSummaryText(id, text) {
     if (element) element.textContent = text;
 }
 
-function formatAntigravityCreditNumber(value) {
-    if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) {
-        return '--';
-    }
-
-    return Number(value).toLocaleString('zh-CN', {
-        maximumFractionDigits: 2
-    });
-}
-
 function formatAntigravityCreditPercent(value) {
     if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) {
         return '--%';
@@ -1519,304 +1518,138 @@ function formatAntigravitySummaryTime(timestamp) {
 
 function getAntigravityQuotaColor(percent) {
     const safePercent = Number(percent);
-    if (safePercent >= 50) return '#28a745';
-    if (safePercent >= 20) return '#ffc107';
-    return '#dc3545';
+    if (safePercent >= 50) return 'var(--success)';
+    if (safePercent >= 20) return 'var(--warning)';
+    return 'var(--danger)';
 }
 
-function getAntigravityQuotaModelGroup(modelName) {
-    return getCooldownModelGroup(modelName);
+function quotaWindowMarkup(period, value = {}, note = '') {
+    const percent = value.remaining_percent;
+    const known = percent !== null && percent !== undefined && Number.isFinite(Number(percent));
+    const safe = known ? Math.max(0, Math.min(100, Number(percent))) : 0;
+    const color = known ? getAntigravityQuotaColor(safe) : 'var(--muted)';
+    const reset = value.reset_time ? new Date(value.reset_time) : null;
+    const resetText = reset && Number.isFinite(reset.getTime())
+        ? (reset.getTime() > Date.now() ? '恢复于 ' : '上次恢复时间 ') + reset.toLocaleString('zh-CN', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false})
+        : '';
+    const metadata = [note, resetText, value.disabled ? '此额度窗口暂不可用' : '', value.weekly_limited ? '已受 7d 剩余额度限制' : ''].filter(Boolean).join(' · ');
+    return `<div class="quota-window ${known ? '' : 'unknown'}">
+        <div class="quota-window-head"><span>${panelIcon(period === '5h' ? 'clock' : 'calendar')}${period === '5h' ? '5 小时' : '7 天'}</span>
+        <strong style="color:${color}">${known ? formatAntigravityCreditPercent(safe) : '--'}</strong></div>
+        <div class="quota-window-track" role="meter" aria-label="${period}剩余额度" aria-valuemin="0" aria-valuemax="100" ${known ? `aria-valuenow="${safe}"` : ''}>
+            <span style="width:${safe}%;background:${color}"></span></div>
+        <div class="quota-window-meta">${escapeHtml(metadata || (known ? '剩余额度' : '上游未提供此周期额度'))}</div>
+    </div>`;
 }
 
-function groupAntigravityQuotaModels(models) {
-    const groups = {
-        'Gemini 模型': { remainingValues: [], resetTime: 'N/A' },
-        'Claude 模型': { remainingValues: [], resetTime: 'N/A' }
-    };
-
-    for (const [modelName, quotaData] of Object.entries(models || {})) {
-        const groupName = getAntigravityQuotaModelGroup(modelName);
-        if (!groupName) continue;
-
-        const remaining = Number(quotaData?.remaining);
-        if (!Number.isFinite(remaining)) continue;
-
-        const group = groups[groupName];
-        group.remainingValues.push(Math.max(0, Math.min(1, remaining)));
-        if (group.resetTime === 'N/A' && quotaData?.resetTime && quotaData.resetTime !== 'N/A') {
-            group.resetTime = quotaData.resetTime;
-        }
-    }
-
-    return ['Gemini 模型', 'Claude 模型']
-        .map(groupName => {
-            const group = groups[groupName];
-            if (group.remainingValues.length === 0) return null;
-
-            const remaining = group.remainingValues.reduce((sum, value) => sum + value, 0) / group.remainingValues.length;
-            return {
-                model: groupName,
-                remaining,
-                resetTime: group.resetTime
-            };
-        })
-        .filter(Boolean);
-}
-
-function getFullyAvailableQuotaGroups(models) {
-    const groups = {
-        'Gemini 模型': { total: 0, available: 0 },
-        'Claude 模型': { total: 0, available: 0 }
-    };
-
-    for (const [modelName, quotaData] of Object.entries(models || {})) {
-        const groupName = getAntigravityQuotaModelGroup(modelName);
-        if (!groupName) continue;
-
-        const remaining = Number(quotaData?.remaining);
-        if (!Number.isFinite(remaining)) continue;
-
-        groups[groupName].total += 1;
-        if (remaining > ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD) groups[groupName].available += 1;
-    }
-
-    return new Set(
-        Object.entries(groups)
-            .filter(([, group]) => group.total > 0 && group.available === group.total)
-            .map(([groupName]) => groupName)
-    );
-}
-
-function getQuotaResetTimestamp(quotaData) {
-    const resetTimeRaw = quotaData?.resetTimeRaw;
-    const resetTimestamp = resetTimeRaw ? Date.parse(resetTimeRaw) / 1000 : NaN;
-    if (Number.isFinite(resetTimestamp) && resetTimestamp > Date.now() / 1000) {
-        return resetTimestamp;
-    }
-    return Date.now() / 1000 + 4 * 3600;
-}
-
-function renderAntigravityCreditModelList(modelSummaries) {
-    const container = getAntigravityCreditSummaryElement('antigravityCreditModelList');
-    if (!container) return;
-
-    if (!Array.isArray(modelSummaries) || modelSummaries.length === 0) {
-        container.innerHTML = '<div class="quota-model-empty">暂无分模型额度数据</div>';
-        return;
-    }
-
-    container.innerHTML = modelSummaries.map(modelInfo => {
-        const percent = modelInfo.remaining_percent;
-        const safePercent = percent === null || percent === undefined
-            ? 0
-            : Math.max(0, Math.min(100, Number(percent)));
-        const percentText = formatAntigravityCreditPercent(percent);
-        const accountCount = modelInfo.account_count || 0;
-        const exhaustedAccounts = modelInfo.exhausted_accounts || 0;
-        const color = getAntigravityQuotaColor(safePercent);
-        const modelName = escapeHtml(modelInfo.model || 'unknown');
-
-        return `
-            <div class="quota-model-item">
-                <div class="quota-model-row">
-                    <span class="quota-model-name" title="${modelName}">${modelName}</span>
-                    <span class="quota-model-percent" style="color: ${color};">${percentText}</span>
-                </div>
-                <div class="quota-model-bar">
-                    <div class="quota-model-fill" style="width: ${safePercent}%; background-color: ${color};"></div>
-                </div>
-                <div class="quota-model-meta">覆盖 ${accountCount} 个启用号 · ${exhaustedAccounts} 个已耗尽</div>
-            </div>
-        `;
-    }).join('');
+function quotaFamiliesMarkup(windows, summaries = null) {
+    return ['gemini', 'claude'].map(family => `<section class="quota-family ${family}">
+        <h4><span class="quota-family-dot"></span>${family === 'gemini' ? 'Gemini' : 'Claude'}<span class="quota-family-caption">剩余额度</span></h4>
+        ${['5h', '7d'].map(period => {
+            const data = summaries ? summaries.find(item => item.family === family && item.period === period) : windows?.[family]?.[period];
+            const note = summaries && data ? `统计 ${data.account_count} 个号 · 耗尽 ${data.exhausted_accounts} 个` : '';
+            return quotaWindowMarkup(period, data || {}, note);
+        }).join('')}
+    </section>`).join('');
 }
 
 function updateAntigravityCreditSummaryUI(data) {
-    const creditsText = formatAntigravityCreditNumber(data.total_remaining_credits);
-    const enabledAccounts = data.enabled_accounts || 0;
-    const creditAccounts = data.credit_accounts || 0;
-    const quotaAccounts = data.quota_accounts || 0;
-    const failedAccounts = data.failed_accounts || 0;
-
-    setAntigravityCreditSummaryText('antigravityCreditRemainingAmount', creditsText);
-    setAntigravityCreditSummaryText('antigravityCreditEnabledAccounts', enabledAccounts.toString());
-
-    if (enabledAccounts > 0) {
-        setAntigravityCreditSummaryText(
-            'antigravityCreditSummaryCompact',
-            `${creditsText} 积分 · 启用 ${enabledAccounts} 个`
-        );
-    } else {
-        setAntigravityCreditSummaryText('antigravityCreditSummaryCompact', '没有启用凭证');
-    }
-
-    renderAntigravityCreditModelList(data.model_summaries || []);
-
-    const refreshTime = formatAntigravitySummaryTime(data.updated_at);
-    const metaParts = [
-        `启用 ${enabledAccounts} 个`,
-        `积分数据 ${creditAccounts} 个`,
-        `额度数据 ${quotaAccounts} 个`,
-        `刷新 ${refreshTime}`
-    ];
-    if (failedAccounts > 0) metaParts.push(`失败 ${failedAccounts} 个`);
-    setAntigravityCreditSummaryText('antigravityCreditSummaryMeta', metaParts.join(' · '));
-
+    const enabled = data.enabled_accounts || 0;
+    setAntigravityCreditSummaryText('antigravityCreditSummaryCompact', `已查询 ${data.checked_accounts || 0} / ${enabled} 个号`);
+    const list = getAntigravityCreditSummaryElement('antigravityCreditModelList');
+    if (list) list.innerHTML = quotaFamiliesMarkup(null, data.model_summaries || []);
+    const parts = [`启用 ${enabled} 个`, `有周期额度 ${data.quota_accounts || 0} 个`];
+    if (data.unsupported_accounts) parts.push(`未提供周期额度 ${data.unsupported_accounts} 个`);
+    if (data.failed_accounts) parts.push(`查询失败 ${data.failed_accounts} 个`);
+    if (data.duration_seconds !== undefined) parts.push(`用时 ${data.duration_seconds} 秒`);
+    parts.push(`更新于 ${formatAntigravitySummaryTime(data.updated_at)}`);
+    setAntigravityCreditSummaryText('antigravityCreditSummaryMeta', parts.join(' · '));
     const meta = getAntigravityCreditSummaryElement('antigravityCreditSummaryMeta');
-    if (meta && Array.isArray(data.errors) && data.errors.length > 0) {
-        meta.title = data.errors.map(item => `${item.filename}: ${item.error}`).join('\n');
-    } else if (meta) {
-        meta.removeAttribute('title');
-    }
-
+    if (meta) meta.title = (data.errors || []).map(item => `${item.filename}: ${item.error}`).join('\n');
     AppState.antigravityCreditSummaryLoaded = true;
 }
 
-function setAntigravityCreditSummaryLoading(isLoading) {
-    AppState.antigravityCreditSummaryLoading = isLoading;
-    if (isLoading) {
-        AppState.antigravityCreditSummaryProgress = {
-            requestStartedAt: Date.now() / 1000 - 3,
-            backendStartedAt: 0,
-            total: 0,
-            completed: 0,
-            failed: 0
-        };
+function setAntigravityCreditSummaryLoading(loading) {
+    AppState.antigravityCreditSummaryLoading = loading;
+    const button = getAntigravityCreditSummaryElement('antigravityCreditSummaryRefreshBtn');
+    if (button) {
+        button.disabled = loading;
+        button.innerHTML = panelIcon('refresh', loading ? 'spinning' : '') + (loading ? '正在刷新' : '刷新全部');
     }
-
-    const refreshBtn = getAntigravityCreditSummaryElement('antigravityCreditSummaryRefreshBtn');
-    if (refreshBtn) {
-        refreshBtn.disabled = isLoading;
-        refreshBtn.textContent = isLoading ? '刷新中...' : '手动刷新';
-    }
-
-    if (isLoading && !AppState.antigravityCreditSummaryLoaded) {
-        setAntigravityCreditSummaryText('antigravityCreditSummaryCompact', '正在获取...');
-        setAntigravityCreditSummaryText('antigravityCreditSummaryMeta', '正在获取启用凭证额度...');
-    }
+    const progress = getAntigravityCreditSummaryElement('antigravityQuotaProgress');
+    if (progress) progress.hidden = !loading;
 }
 
-function updateAntigravityCreditSummaryProgress(progress) {
-    if (!progress || !progress.running) return;
+function updateAntigravityCreditSummaryProgress(data) {
+    if (data.result) updateAntigravityCreditSummaryUI(data.result);
+    const total = Number(data.total) || 0;
+    const done = Number(data.completed) || 0;
+    setAntigravityCreditSummaryText('antigravityCreditSummaryCompact', `正在查询 ${done} / ${total} 个号`);
+    const bar = getAntigravityCreditSummaryElement('antigravityQuotaProgressFill');
+    if (bar) bar.style.width = `${total ? Math.min(100, done / total * 100) : 0}%`;
+}
 
-    const state = AppState.antigravityCreditSummaryProgress;
-    const backendStartedAt = Number(progress.started_at) || 0;
-    if (backendStartedAt && state.requestStartedAt && backendStartedAt < state.requestStartedAt) {
-        return;
-    }
-
-    if (backendStartedAt && backendStartedAt > state.backendStartedAt) {
-        state.backendStartedAt = backendStartedAt;
-        state.total = 0;
-        state.completed = 0;
-        state.failed = 0;
-    } else if (backendStartedAt && backendStartedAt < state.backendStartedAt) {
-        return;
-    }
-
-    const total = Number(progress.total) || 0;
-    const completed = Number(progress.completed) || 0;
-    const failed = Number(progress.failed) || 0;
-    if (total > 0) state.total = Math.max(state.total, total);
-    state.completed = Math.max(state.completed, Math.min(completed, state.total || completed));
-    state.failed = Math.max(state.failed, failed);
-
-    const displayTotal = state.total;
-    const displayCompleted = state.completed;
-    const displayFailed = state.failed;
-    const progressText = displayTotal > 0
-        ? `正在获取 ${displayCompleted}/${displayTotal}`
-        : '正在获取...';
-    const metaParts = [displayTotal > 0 ? `正在获取启用凭证额度 ${displayCompleted}/${displayTotal}` : '正在获取启用凭证额度'];
-
-    if (displayFailed > 0) metaParts.push(`失败 ${displayFailed} 个`);
-
-    setAntigravityCreditSummaryText('antigravityCreditSummaryCompact', progressText);
-    setAntigravityCreditSummaryText('antigravityCreditSummaryMeta', metaParts.join(' · '));
+function stopAntigravityCreditSummaryProgressPolling() {
+    clearTimeout(AppState.antigravityCreditSummaryProgressTimer);
+    AppState.antigravityCreditSummaryProgressTimer = null;
 }
 
 async function pollAntigravityCreditSummaryProgress() {
     if (!AppState.antigravityCreditSummaryLoading) return;
-
     try {
-        const response = await fetch('./creds/antigravity-credit-summary-progress', {
-            method: 'GET',
-            headers: getAuthHeaders()
-        });
+        const response = await fetch('./creds/antigravity-credit-summary-progress', {headers: getAuthHeaders(), cache: 'no-store'});
         const data = await response.json();
-
-        if (response.ok && data.success) {
-            updateAntigravityCreditSummaryProgress(data);
+        if (!response.ok || data.error) throw new Error(data.error || '额度刷新失败');
+        AppState.antigravityCreditSummaryPollFailures = 0;
+        if (!data.running) {
+            if (data.result) updateAntigravityCreditSummaryUI(data.result);
+            setAntigravityCreditSummaryLoading(false);
+            return;
         }
+        updateAntigravityCreditSummaryProgress(data);
     } catch (error) {
-        // Progress polling is only a UI helper; the main refresh request handles real errors.
+        if (++AppState.antigravityCreditSummaryPollFailures >= 3) {
+            setAntigravityCreditSummaryLoading(false);
+            setAntigravityCreditSummaryText('antigravityCreditSummaryMeta', error.message + '，可点击刷新重试');
+            return;
+        }
     }
-}
-
-function startAntigravityCreditSummaryProgressPolling() {
-    stopAntigravityCreditSummaryProgressPolling();
-    pollAntigravityCreditSummaryProgress();
-    AppState.antigravityCreditSummaryProgressTimer = setInterval(
-        pollAntigravityCreditSummaryProgress,
-        1000
-    );
-}
-
-function stopAntigravityCreditSummaryProgressPolling() {
-    if (!AppState.antigravityCreditSummaryProgressTimer) return;
-
-    clearInterval(AppState.antigravityCreditSummaryProgressTimer);
-    AppState.antigravityCreditSummaryProgressTimer = null;
+    AppState.antigravityCreditSummaryProgressTimer = setTimeout(pollAntigravityCreditSummaryProgress, 1000);
 }
 
 function toggleAntigravityCreditSummary() {
     const body = getAntigravityCreditSummaryElement('antigravityCreditSummaryBody');
     const card = getAntigravityCreditSummaryElement('antigravityCreditSummaryCard');
     if (!body || !card) return;
-
-    const shouldOpen = body.style.display !== 'block';
-    body.style.display = shouldOpen ? 'block' : 'none';
-    card.classList.toggle('expanded', shouldOpen);
-    card.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
-    setAntigravityCreditSummaryText('antigravityCreditSummaryToggleIcon', shouldOpen ? '收起' : '展开');
-
+    const open = body.style.display !== 'block';
+    body.style.display = open ? 'block' : 'none';
+    card.classList.toggle('expanded', open);
+    card.setAttribute('aria-expanded', String(open));
+    const icon = getAntigravityCreditSummaryElement('antigravityCreditSummaryToggleIcon');
+    if (icon) icon.innerHTML = panelIcon(open ? 'chevron-up' : 'chevron-down');
+    if (open && !AppState.antigravityCreditSummaryLoaded) refreshAntigravityCreditSummary(true);
 }
 
 async function refreshAntigravityCreditSummary(silent = false) {
-    const card = getAntigravityCreditSummaryElement('antigravityCreditSummaryCard');
-    if (!card || AppState.antigravityCreditSummaryLoading) return;
-
+    if (AppState.antigravityCreditSummaryLoading) return;
     setAntigravityCreditSummaryLoading(true);
-    startAntigravityCreditSummaryProgressPolling();
-
+    AppState.antigravityCreditSummaryPollFailures = 0;
+    stopAntigravityCreditSummaryProgressPolling();
     try {
-        const response = await fetch('./creds/antigravity-credit-summary', {
-            method: 'GET',
-            headers: getAuthHeaders()
-        });
+        const response = await fetch(`./creds/antigravity-credit-summary?force=${!silent}`, {headers: getAuthHeaders(), cache: 'no-store'});
         const data = await response.json();
-
-        if (response.ok && data.success) {
-            updateAntigravityCreditSummaryUI(data);
-            const cooldownFilterEl = document.getElementById('antigravityCooldownFilter');
-            if (cooldownFilterEl) {
-                AppState.antigravityCreds.currentCooldownFilter = cooldownFilterEl.value;
-            }
-            await AppState.antigravityCreds.refresh({ silent: true });
-            if (!silent) showStatus('Antigravity 总额度已刷新', 'success');
+        if (!response.ok || data.error) throw new Error(data.error || data.detail || '获取额度失败');
+        if (data.running) {
+            updateAntigravityCreditSummaryProgress(data);
+            AppState.antigravityCreditSummaryProgressTimer = setTimeout(pollAntigravityCreditSummaryProgress, 500);
         } else {
-            const errorMsg = data.error || data.detail || '获取总额度失败';
-            setAntigravityCreditSummaryText('antigravityCreditSummaryCompact', '获取失败');
-            setAntigravityCreditSummaryText('antigravityCreditSummaryMeta', errorMsg);
-            if (!silent) showStatus(errorMsg, 'error');
+            updateAntigravityCreditSummaryUI(data);
+            setAntigravityCreditSummaryLoading(false);
         }
     } catch (error) {
-        setAntigravityCreditSummaryText('antigravityCreditSummaryCompact', '获取失败');
-        setAntigravityCreditSummaryText('antigravityCreditSummaryMeta', error.message);
-        if (!silent) showStatus(`获取总额度失败: ${error.message}`, 'error');
-    } finally {
-        stopAntigravityCreditSummaryProgressPolling();
         setAntigravityCreditSummaryLoading(false);
+        setAntigravityCreditSummaryText('antigravityCreditSummaryMeta', error.message);
+        if (!silent) showStatus(error.message, 'error');
     }
 }
 
@@ -1858,7 +1691,7 @@ function downloadAntigravityCred(filename) {
             a.download = filename;
             a.click();
             window.URL.revokeObjectURL(url);
-            showStatus(`✅ 已下载: ${filename}`, 'success');
+            showStatus(` 已下载: ${filename}`, 'success');
         })
         .catch(() => showStatus(`下载失败: ${filename}`, 'error'));
 }
@@ -1878,7 +1711,7 @@ async function downloadAllAntigravityCreds() {
             a.download = `antigravity_credentials_${Date.now()}.zip`;
             a.click();
             window.URL.revokeObjectURL(url);
-            showStatus('✅ 所有Antigravity凭证已打包下载', 'success');
+            showStatus(' 所有Antigravity凭证已打包下载', 'success');
         }
     } catch (error) {
         showStatus(`网络错误: ${error.message}`, 'error');
@@ -1972,7 +1805,7 @@ async function fetchAntigravityUserEmail(filename) {
 async function verifyProjectId(filename) {
     try {
         // 显示加载状态
-        showStatus('🔍 正在检验Project ID，请稍候...', 'info');
+        showStatus(' 正在检验Project ID，请稍候...', 'info');
 
         const response = await fetch(`./creds/verify-project/${encodeURIComponent(filename)}`, {
             method: 'POST',
@@ -1986,31 +1819,31 @@ async function verifyProjectId(filename) {
             const creditLine = data.credit_amount !== undefined && data.credit_amount !== null
                 ? `\n积分: ${data.credit_amount}`
                 : '';
-            const successMsg = `✅ 检验成功！\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`;
+            const successMsg = ` 检验成功！\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`;
             showStatus(successMsg.replace(/\n/g, '<br>'), 'success');
 
             // 弹出成功提示
-            showMessageModal('检验成功', `✅ 检验成功！\n\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`, 'success');
+            showMessageModal('检验成功', ` 检验成功！\n\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`, 'success');
 
             await AppState.creds.refresh();
         } else {
             // 失败时显示红色错误消息
             const errorMsg = data.message || '检验失败';
-            showStatus(`❌ ${errorMsg}`, 'error');
-            showMessageModal('检验失败', `❌ 检验失败\n\n${errorMsg}`, 'error');
+            showStatus(` ${errorMsg}`, 'error');
+            showMessageModal('检验失败', ` 检验失败\n\n${errorMsg}`, 'error');
             await AppState.creds.refresh();
         }
     } catch (error) {
         const errorMsg = `检验失败: ${error.message}`;
-        showStatus(`❌ ${errorMsg}`, 'error');
-        showMessageModal('检验失败', `❌ ${errorMsg}`, 'error');
+        showStatus(` ${errorMsg}`, 'error');
+        showMessageModal('检验失败', ` ${errorMsg}`, 'error');
     }
 }
 
 async function verifyAntigravityProjectId(filename) {
     try {
         // 显示加载状态
-        showStatus('🔍 正在检验Antigravity Project ID，请稍候...', 'info');
+        showStatus(' 正在检验Antigravity Project ID，请稍候...', 'info');
 
         const response = await fetch(`./creds/verify-project/${encodeURIComponent(filename)}?mode=antigravity`, {
             method: 'POST',
@@ -2024,31 +1857,31 @@ async function verifyAntigravityProjectId(filename) {
             const creditLine = data.credit_amount !== undefined && data.credit_amount !== null
                 ? `\n积分: ${data.credit_amount}`
                 : '';
-            const successMsg = `✅ 检验成功！\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`;
+            const successMsg = ` 检验成功！\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`;
             showStatus(successMsg.replace(/\n/g, '<br>'), 'success');
 
             // 弹出成功提示
-            showMessageModal('检验成功', `✅ Antigravity检验成功！\n\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`, 'success');
+            showMessageModal('检验成功', ` Antigravity检验成功！\n\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`, 'success');
 
             await AppState.antigravityCreds.refresh();
         } else {
             // 失败时显示红色错误消息
             const errorMsg = data.message || '检验失败';
-            showStatus(`❌ ${errorMsg}`, 'error');
-            showMessageModal('检验失败', `❌ 检验失败\n\n${errorMsg}`, 'error');
+            showStatus(` ${errorMsg}`, 'error');
+            showMessageModal('检验失败', ` 检验失败\n\n${errorMsg}`, 'error');
             await AppState.antigravityCreds.refresh();
         }
     } catch (error) {
         const errorMsg = `检验失败: ${error.message}`;
-        showStatus(`❌ ${errorMsg}`, 'error');
-        showMessageModal('检验失败', `❌ ${errorMsg}`, 'error');
+        showStatus(` ${errorMsg}`, 'error');
+        showMessageModal('检验失败', ` ${errorMsg}`, 'error');
     }
 }
 
 async function testCredential(filename) {
     try {
         // 显示加载状态
-        showStatus('🧪 正在测试凭证，请稍候...', 'info');
+        showStatus(' 正在测试凭证，请稍候...', 'info');
 
         const response = await fetch(`./creds/test/${encodeURIComponent(filename)}`, {
             method: 'POST',
@@ -2060,14 +1893,14 @@ async function testCredential(filename) {
 
         if (data.success) {
             // 凭证可用
-            const successMsg = `✅ 测试成功！\n文件: ${filename}\n状态: ${data.message || '凭证可用'} (${data.status_code || 200})`;
-            showStatus('✅ 测试成功！', 'success');
+            const successMsg = ` 测试成功！\n文件: ${filename}\n状态: ${data.message || '凭证可用'} (${data.status_code || 200})`;
+            showStatus(' 测试成功！', 'success');
             showMessageModal('测试成功', successMsg, 'success');
             await AppState.creds.refresh();
         }
         else {
             // 其他错误 - 显示完整错误信息
-            let errorDetails = `❌ 测试失败\n文件: ${filename}\n`;
+            let errorDetails = ` 测试失败\n文件: ${filename}\n`;
 
             // 如果有完整的错误响应，添加到详情中
             if (data.error) {
@@ -2083,21 +1916,21 @@ async function testCredential(filename) {
                 errorDetails += `错误码: ${data.status_code || response.status}`;
             }
 
-            showStatus(`❌ 测试失败 - ${data.message || '错误码: ' + (data.status_code || response.status)}`, 'error');
+            showStatus(` 测试失败 - ${data.message || '错误码: ' + (data.status_code || response.status)}`, 'error');
             showMessageModal('测试失败', errorDetails, 'error');
             await AppState.creds.refresh();
         }
     } catch (error) {
         const errorMsg = `测试失败: ${error.message}`;
-        showStatus(`❌ ${errorMsg}`, 'error');
-        showMessageModal('测试失败', `❌ ${errorMsg}`, 'error');
+        showStatus(` ${errorMsg}`, 'error');
+        showMessageModal('测试失败', ` ${errorMsg}`, 'error');
     }
 }
 
 async function testAntigravityCredential(filename) {
     try {
         // 显示加载状态
-        showStatus('🧪 正在测试Antigravity凭证，请稍候...', 'info');
+        showStatus(' 正在测试Antigravity凭证，请稍候...', 'info');
 
         const response = await fetch(`./creds/test/${encodeURIComponent(filename)}?mode=antigravity`, {
             method: 'POST',
@@ -2109,14 +1942,14 @@ async function testAntigravityCredential(filename) {
 
         if (data.success) {
             // 凭证可用
-            const successMsg = `✅ 测试成功！\n文件: ${filename}\n状态: ${data.message || 'Antigravity凭证可用'} (${data.status_code || 200})`;
-            showStatus('✅ 测试成功！', 'success');
+            const successMsg = ` 测试成功！\n文件: ${filename}\n状态: ${data.message || 'Antigravity凭证可用'} (${data.status_code || 200})`;
+            showStatus(' 测试成功！', 'success');
             showMessageModal('测试成功', successMsg, 'success');
             await AppState.antigravityCreds.refresh();
         }
         else {
             // 其他错误 - 显示完整错误信息
-            let errorDetails = `❌ 测试失败\n文件: ${filename}\n`;
+            let errorDetails = ` 测试失败\n文件: ${filename}\n`;
 
             // 如果有完整的错误响应，添加到详情中
             if (data.error) {
@@ -2132,21 +1965,21 @@ async function testAntigravityCredential(filename) {
                 errorDetails += `错误码: ${data.status_code || response.status}`;
             }
 
-            showStatus(`❌ 测试失败 - ${data.message || '错误码: ' + (data.status_code || response.status)}`, 'error');
+            showStatus(` 测试失败 - ${data.message || '错误码: ' + (data.status_code || response.status)}`, 'error');
             showMessageModal('测试失败', errorDetails, 'error');
             await AppState.antigravityCreds.refresh();
         }
     } catch (error) {
         const errorMsg = `测试失败: ${error.message}`;
-        showStatus(`❌ ${errorMsg}`, 'error');
-        showMessageModal('测试失败', `❌ ${errorMsg}`, 'error');
+        showStatus(` ${errorMsg}`, 'error');
+        showMessageModal('测试失败', ` ${errorMsg}`, 'error');
     }
 }
 
 async function configurePreviewChannel(filename) {
     try {
         // 显示加载状态
-        showStatus('🔧 正在配置Preview通道，请稍候...', 'info');
+        showStatus(' 正在配置Preview通道，请稍候...', 'info');
 
         const response = await fetch(`./creds/configure-preview/${encodeURIComponent(filename)}`, {
             method: 'POST',
@@ -2157,9 +1990,9 @@ async function configurePreviewChannel(filename) {
 
         if (response.ok && data.success) {
             // 配置成功
-            const successMsg = `✅ 配置成功！\n文件: ${filename}\n状态: ${data.message}`;
+            const successMsg = ` 配置成功！\n文件: ${filename}\n状态: ${data.message}`;
             showStatus(successMsg.replace(/\n/g, '<br>'), 'success');
-            showMessageModal('Preview通道配置成功', `✅ Preview通道配置成功！\n\n文件: ${filename}\n\n${data.message}\n\nSetting ID: ${data.setting_id || 'N/A'}\nBinding ID: ${data.binding_id || 'N/A'}`, 'success');
+            showMessageModal('Preview通道配置成功', ` Preview通道配置成功！\n\n文件: ${filename}\n\n${data.message}\n\nSetting ID: ${data.setting_id || 'N/A'}\nBinding ID: ${data.binding_id || 'N/A'}`, 'success');
 
             // 刷新凭证列表
             await AppState.creds.refresh();
@@ -2169,7 +2002,7 @@ async function configurePreviewChannel(filename) {
             const errorDetail = data.error || '';
             const step = data.step || '';
 
-            let alertMsg = `❌ Preview通道配置失败\n\n文件: ${filename}\n\n${errorMsg}`;
+            let alertMsg = ` Preview通道配置失败\n\n文件: ${filename}\n\n${errorMsg}`;
             if (step) {
                 alertMsg += `\n失败步骤: ${step}`;
             }
@@ -2177,177 +2010,70 @@ async function configurePreviewChannel(filename) {
                 alertMsg += `\n\n错误详情: ${errorDetail}`;
             }
 
-            showStatus(`❌ ${errorMsg}`, 'error');
+            showStatus(` ${errorMsg}`, 'error');
             showMessageModal('Preview通道配置失败', alertMsg, 'error');
         }
     } catch (error) {
         const errorMsg = `配置Preview通道失败: ${error.message}`;
-        showStatus(`❌ ${errorMsg}`, 'error');
-        showMessageModal('配置Preview通道失败', `❌ ${errorMsg}`, 'error');
+        showStatus(` ${errorMsg}`, 'error');
+        showMessageModal('配置Preview通道失败', ` ${errorMsg}`, 'error');
     }
 }
 
-function updateAntigravityCooldownDisplayFromQuota(pathId, filename, models) {
-    if (!models || typeof models !== 'object') return;
+function accountQuotaMarkup(pathId, data, loading = false) {
+    const age = data?.updated_at ? '更新于 ' + formatAntigravitySummaryTime(data.updated_at) : '';
+    const header = `<div class="account-quota-header"><span>${panelIcon('chart')}账户额度 <small>${age}</small></span>
+        <button type="button" class="quota-summary-refresh" ${loading ? 'disabled' : ''} onclick="refreshAccountQuota('${pathId}', true)">${panelIcon('refresh', loading ? 'spinning' : '')}${loading ? '查询中' : '刷新'}</button></div>`;
+    const body = data?.success ? quotaFamiliesMarkup(data.windows)
+        : `<div class="quota-placeholder">${panelIcon(loading ? 'refresh' : 'info', loading ? 'spinning' : '')}${escapeHtml(loading ? '正在查询周期额度…' : data?.error || '暂无周期额度数据')}</div>`;
+    return header + `<div class="quota-family-grid">${body}</div>`;
+}
 
-    const availableGroups = getFullyAvailableQuotaGroups(models);
-    const exhaustedModels = Object.entries(models)
-        .map(([modelName, quotaData]) => ({
-            modelName,
-            groupName: getCooldownModelGroup(modelName),
-            remaining: Number(quotaData?.remaining),
-            cooldownUntil: getQuotaResetTimestamp(quotaData)
-        }))
-        .filter(item => (
-            item.groupName &&
-            Number.isFinite(item.remaining) &&
-            item.remaining <= ANTIGRAVITY_QUOTA_COOLDOWN_THRESHOLD
-        ));
+function renderAccountQuota(pathId, filename, data, loading = false) {
+    const content = document.getElementById('quota-' + pathId)?.querySelector('.cred-quota-content');
+    if (content) content.innerHTML = accountQuotaMarkup(pathId, data, loading);
+}
 
-    if (availableGroups.size === 0 && exhaustedModels.length === 0) return;
-
-    const credInfo = AppState.antigravityCreds.data[filename];
-    if (credInfo) {
-        if (!credInfo.model_cooldowns) credInfo.model_cooldowns = {};
-        for (const modelName of Object.keys(credInfo.model_cooldowns)) {
-            const groupName = getCooldownModelGroup(modelName);
-            if (availableGroups.has(groupName)) {
-                delete credInfo.model_cooldowns[modelName];
-            }
+async function refreshAccountQuota(pathId, force = false) {
+    const content = document.getElementById('quota-' + pathId)?.querySelector('.cred-quota-content');
+    const filename = content?.dataset.filename;
+    if (!filename) return;
+    const cached = AppState.quotaCache.get(filename);
+    if (!force && cached && Date.now() / 1000 - cached.updated_at < 30) {
+        renderAccountQuota(pathId, filename, cached);
+        return;
+    }
+    renderAccountQuota(pathId, filename, cached, true);
+    try {
+        let pending = AppState.quotaRequests.get(filename);
+        if (!pending) {
+            pending = fetch(`./creds/quota/${encodeURIComponent(filename)}?mode=antigravity&force=${force}`, {headers: getAuthHeaders(), cache: 'no-store'})
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok || !data.success) throw new Error(data.error || data.detail || '额度查询失败');
+                    AppState.quotaCache.set(filename, data);
+                    return data;
+                }).finally(() => AppState.quotaRequests.delete(filename));
+            AppState.quotaRequests.set(filename, pending);
         }
-        exhaustedModels.forEach(item => {
-            credInfo.model_cooldowns[item.modelName] = item.cooldownUntil;
-        });
+        const data = await pending;
+        renderAccountQuota(pathId, filename, data);
+    } catch (error) {
+        renderAccountQuota(pathId, filename, {error: error.message});
     }
-
-    const quotaDetails = document.getElementById('quota-' + pathId);
-    const card = quotaDetails?.closest('.cred-card');
-    const statusEl = card?.querySelector('.cred-status');
-    if (statusEl && credInfo?.model_cooldowns) {
-        statusEl.querySelectorAll('.cooldown-badge').forEach(badge => badge.remove());
-        statusEl.insertAdjacentHTML('beforeend', renderCooldownBadges(credInfo.model_cooldowns));
-    }
-
 }
 
 async function toggleAntigravityQuotaDetails(pathId) {
-    const quotaDetails = document.getElementById('quota-' + pathId);
-    if (!quotaDetails) return;
-
-    // 切换显示状态
-    const isShowing = quotaDetails.style.display === 'block';
-
-    if (isShowing) {
-        // 收起
-        quotaDetails.style.display = 'none';
+    const details = document.getElementById('quota-' + pathId);
+    if (!details) return;
+    const filename = details.querySelector('.cred-quota-content').dataset.filename;
+    const open = details.style.display !== 'block';
+    details.style.display = open ? 'block' : 'none';
+    if (open) {
+        AppState.quotaOpen.add(filename);
+        await refreshAccountQuota(pathId);
     } else {
-        // 展开
-        quotaDetails.style.display = 'block';
-
-        const contentDiv = quotaDetails.querySelector('.cred-quota-content');
-        const filename = contentDiv.getAttribute('data-filename');
-
-        // 每次展开都重新加载数据
-        if (filename) {
-            contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #666;">📊 正在加载额度信息...</div>';
-
-            try {
-                const response = await fetch(`./creds/quota/${encodeURIComponent(filename)}?mode=antigravity`, {
-                    method: 'GET',
-                    headers: getAuthHeaders()
-                });
-                const data = await response.json();
-
-                if (response.ok && data.success) {
-                    // 成功时渲染美化的额度信息
-                    const models = data.models || {};
-                    const groupedModels = groupAntigravityQuotaModels(models);
-
-                    if (groupedModels.length === 0) {
-                        contentDiv.innerHTML = `
-                            <div style="text-align: center; padding: 20px; color: #999;">
-                                <div style="font-size: 48px; margin-bottom: 10px;">📊</div>
-                                <div>暂无额度信息</div>
-                            </div>
-                        `;
-                    } else {
-                        let quotaHTML = `
-                            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px; border-radius: 8px 8px 0 0; margin: -10px -10px 15px -10px;">
-                                <h4 style="margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px;">
-                                    <span style="font-size: 20px;">📊</span>
-                                    <span>额度信息详情</span>
-                                </h4>
-                                <div style="font-size: 12px; opacity: 0.9; margin-top: 5px;">文件: ${filename}</div>
-                            </div>
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 10px;">
-                        `;
-
-                        for (const quotaData of groupedModels) {
-                            // 后端返回的是剩余比例 (0-1)，不是绝对数量
-                            const modelName = quotaData.model;
-                            const remainingFraction = quotaData.remaining || 0;
-                            const resetTime = quotaData.resetTime || 'N/A';
-
-                            // 计算已使用百分比（1 - 剩余比例）
-                            const remainingPercentValue = Math.max(0, Math.min(100, remainingFraction * 100));
-                            const usedPercentage = Math.max(0, Math.min(100, (1 - remainingFraction) * 100));
-                            const remainingPercentage = remainingPercentValue.toFixed(2);
-
-                            // 根据使用情况选择颜色
-                            let percentageColor = '#28a745'; // 绿色：使用少
-                            if (usedPercentage >= 90) percentageColor = '#dc3545'; // 红色：使用多
-                            else if (usedPercentage >= 70) percentageColor = '#ffc107'; // 黄色：使用较多
-                            else if (usedPercentage >= 50) percentageColor = '#17a2b8'; // 蓝色：使用中等
-
-                            quotaHTML += `
-                                <div style="background: white; border-left: 4px solid ${percentageColor}; border-radius: 4px; padding: 8px 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                        <div style="font-weight: bold; color: #333; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px;" title="${modelName} - 剩余${remainingPercentage}% - ${resetTime}">
-                                            ${modelName}
-                                        </div>
-                                        <div style="font-size: 13px; font-weight: bold; color: ${percentageColor}; white-space: nowrap;">
-                                            ${remainingPercentage}%
-                                        </div>
-                                    </div>
-                                    <div style="width: 100%; height: 8px; background-color: #e9ecef; border-radius: 4px; overflow: hidden; margin-bottom: 4px;">
-                                        <div style="width: ${usedPercentage}%; height: 100%; background-color: ${percentageColor}; transition: width 0.3s ease;"></div>
-                                    </div>
-                                    <div style="font-size: 10px; color: #666; text-align: right;">
-                                        ${resetTime !== 'N/A' ? '🔄 ' + resetTime : ''}
-                                    </div>
-                                </div>
-                            `;
-                        }
-
-                        quotaHTML += '</div>';
-                        contentDiv.innerHTML = quotaHTML;
-                    }
-
-                    updateAntigravityCooldownDisplayFromQuota(pathId, filename, models);
-                    showStatus('✅ 成功加载额度信息', 'success');
-                } else {
-                    // 失败时显示错误
-                    const errorMsg = data.error || '获取额度信息失败';
-                    contentDiv.innerHTML = `
-                        <div style="text-align: center; padding: 20px; color: #dc3545;">
-                            <div style="font-size: 48px; margin-bottom: 10px;">❌</div>
-                            <div style="font-weight: bold; margin-bottom: 5px;">获取额度信息失败</div>
-                            <div style="font-size: 13px; color: #666;">${errorMsg}</div>
-                        </div>
-                    `;
-                    showStatus(`❌ ${errorMsg}`, 'error');
-                }
-            } catch (error) {
-                contentDiv.innerHTML = `
-                    <div style="text-align: center; padding: 20px; color: #dc3545;">
-                        <div style="font-size: 48px; margin-bottom: 10px;">❌</div>
-                        <div style="font-weight: bold; margin-bottom: 5px;">网络错误</div>
-                        <div style="font-size: 13px; color: #666;">${error.message}</div>
-                    </div>
-                `;
-                showStatus(`❌ 获取额度信息失败: ${error.message}`, 'error');
-            }
-        }
+        AppState.quotaOpen.delete(filename);
     }
 }
 
@@ -2375,7 +2101,7 @@ async function toggleErrorDetailsCommon(pathId, manager) {
 
         // 每次展开都重新加载数据
         if (filename) {
-            contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #666;">⏳ 正在加载报错信息...</div>';
+            contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #666;"> 正在加载报错信息...</div>';
 
             try {
                 const modeParam = manager.type === 'antigravity' ? 'mode=antigravity' : 'mode=geminicli';
@@ -2392,7 +2118,7 @@ async function toggleErrorDetailsCommon(pathId, manager) {
                     if (errorCodes.length === 0) {
                         contentDiv.innerHTML = `
                             <div style="text-align: center; padding: 20px; color: #28a745;">
-                                <div style="font-size: 48px; margin-bottom: 10px;">✅</div>
+                                <div style="font-size: 48px; margin-bottom: 10px;"></div>
                                 <div style="font-weight: bold;">无报错记录</div>
                                 <div style="font-size: 12px; color: #666; margin-top: 8px;">该凭证运行正常</div>
                             </div>
@@ -2484,28 +2210,28 @@ async function toggleErrorDetailsCommon(pathId, manager) {
                         contentDiv.innerHTML = errorHTML;
                     }
 
-                    showStatus('✅ 成功加载报错信息', 'success');
+                    showStatus(' 成功加载报错信息', 'success');
                 } else {
                     // 失败时显示错误
                     const errorMsg = data.detail || data.error || '获取报错信息失败';
                     contentDiv.innerHTML = `
                         <div style="text-align: center; padding: 20px; color: #dc3545;">
-                            <div style="font-size: 48px; margin-bottom: 10px;">❌</div>
+                            <div style="font-size: 48px; margin-bottom: 10px;"></div>
                             <div style="font-weight: bold;">加载失败</div>
                             <div style="font-size: 12px; margin-top: 8px;">${errorMsg}</div>
                         </div>
                     `;
-                    showStatus(`❌ 获取报错信息失败: ${errorMsg}`, 'error');
+                    showStatus(` 获取报错信息失败: ${errorMsg}`, 'error');
                 }
             } catch (error) {
                 contentDiv.innerHTML = `
                     <div style="text-align: center; padding: 20px; color: #dc3545;">
-                        <div style="font-size: 48px; margin-bottom: 10px;">❌</div>
+                        <div style="font-size: 48px; margin-bottom: 10px;"></div>
                         <div style="font-weight: bold;">网络错误</div>
                         <div style="font-size: 12px; margin-top: 8px;">${error.message}</div>
                     </div>
                 `;
-                showStatus(`❌ 获取报错信息失败: ${error.message}`, 'error');
+                showStatus(` 获取报错信息失败: ${error.message}`, 'error');
             }
         }
     }
@@ -2530,7 +2256,7 @@ function highlightHttpLinks(text) {
 async function batchVerifyProjectIds() {
     const selectedFiles = Array.from(AppState.creds.selectedFiles);
     if (selectedFiles.length === 0) {
-        showStatus('❌ 请先选择要检验的凭证', 'error');
+        showStatus(' 请先选择要检验的凭证', 'error');
         showMessageModal('提示', '请先选择要检验的凭证', 'error');
         return;
     }
@@ -2539,7 +2265,7 @@ async function batchVerifyProjectIds() {
         return;
     }
 
-    showStatus(`🔍 正在并行检验 ${selectedFiles.length} 个凭证，请稍候...`, 'info');
+    showStatus(` 正在并行检验 ${selectedFiles.length} 个凭证，请稍候...`, 'info');
 
     // 并行执行所有检验请求
     const promises = selectedFiles.map(async (filename) => {
@@ -2580,10 +2306,10 @@ async function batchVerifyProjectIds() {
             const creditSuffix = result.creditAmount !== undefined && result.creditAmount !== null
                 ? ` (积分: ${result.creditAmount})`
                 : '';
-            resultMessages.push(`✅ ${result.filename}: ${result.projectId}${creditSuffix}`);
+            resultMessages.push(` ${result.filename}: ${result.projectId}${creditSuffix}`);
         } else {
             failCount++;
-            resultMessages.push(`❌ ${result.filename}: ${result.error}`);
+            resultMessages.push(` ${result.filename}: ${result.error}`);
         }
     });
 
@@ -2592,13 +2318,13 @@ async function batchVerifyProjectIds() {
     const summary = `批量检验完成！\n\n成功: ${successCount} 个\n失败: ${failCount} 个\n总计: ${selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
 
     if (failCount === 0) {
-        showStatus(`✅ 全部检验成功！成功检验 ${successCount}/${selectedFiles.length} 个凭证`, 'success');
+        showStatus(` 全部检验成功！成功检验 ${successCount}/${selectedFiles.length} 个凭证`, 'success');
         showMessageModal('批量检验完成', summary, 'success');
     } else if (successCount === 0) {
-        showStatus(`❌ 全部检验失败！失败 ${failCount}/${selectedFiles.length} 个凭证`, 'error');
+        showStatus(` 全部检验失败！失败 ${failCount}/${selectedFiles.length} 个凭证`, 'error');
         showMessageModal('批量检验完成', summary, 'error');
     } else {
-        showStatus(`⚠️ 批量检验完成：成功 ${successCount}/${selectedFiles.length} 个，失败 ${failCount} 个`, 'info');
+        showStatus(` 批量检验完成：成功 ${successCount}/${selectedFiles.length} 个，失败 ${failCount} 个`, 'info');
         showMessageModal('批量检验完成', summary, 'info');
     }
 
@@ -2611,7 +2337,7 @@ async function batchVerifyMessageCredentials(isAntigravity = false) {
     const label = isAntigravity ? 'Antigravity凭证' : '凭证';
 
     if (selectedFiles.length === 0) {
-        showStatus(`❌ 请先选择要消息校验的${label}`, 'error');
+        showStatus(` 请先选择要消息校验的${label}`, 'error');
         showMessageModal('提示', `请先选择要消息校验的${label}`, 'error');
         return;
     }
@@ -2659,10 +2385,10 @@ async function batchVerifyMessageCredentials(isAntigravity = false) {
     results.forEach(result => {
         if (result.success) {
             successCount++;
-            resultMessages.push(`✅ ${result.filename}: ${result.message} (${result.statusCode})`);
+            resultMessages.push(` ${result.filename}: ${result.message} (${result.statusCode})`);
         } else {
             failCount++;
-            resultMessages.push(`❌ ${result.filename}: ${result.error}`);
+            resultMessages.push(` ${result.filename}: ${result.error}`);
         }
     });
 
@@ -2692,7 +2418,7 @@ async function batchVerifyAntigravityMessageCredentials() {
 async function batchVerifyAntigravityProjectIds() {
     const selectedFiles = Array.from(AppState.antigravityCreds.selectedFiles);
     if (selectedFiles.length === 0) {
-        showStatus('❌ 请先选择要检验的Antigravity凭证', 'error');
+        showStatus(' 请先选择要检验的Antigravity凭证', 'error');
         showMessageModal('提示', '请先选择要检验的Antigravity凭证', 'error');
         return;
     }
@@ -2701,7 +2427,7 @@ async function batchVerifyAntigravityProjectIds() {
         return;
     }
 
-    showStatus(`🔍 正在并行检验 ${selectedFiles.length} 个Antigravity凭证，请稍候...`, 'info');
+    showStatus(` 正在并行检验 ${selectedFiles.length} 个Antigravity凭证，请稍候...`, 'info');
 
     // 并行执行所有检验请求
     const promises = selectedFiles.map(async (filename) => {
@@ -2742,10 +2468,10 @@ async function batchVerifyAntigravityProjectIds() {
             const creditSuffix = result.creditAmount !== undefined && result.creditAmount !== null
                 ? ` (积分: ${result.creditAmount})`
                 : '';
-            resultMessages.push(`✅ ${result.filename}: ${result.projectId}${creditSuffix}`);
+            resultMessages.push(` ${result.filename}: ${result.projectId}${creditSuffix}`);
         } else {
             failCount++;
-            resultMessages.push(`❌ ${result.filename}: ${result.error}`);
+            resultMessages.push(` ${result.filename}: ${result.error}`);
         }
     });
 
@@ -2754,13 +2480,13 @@ async function batchVerifyAntigravityProjectIds() {
     const summary = `Antigravity批量检验完成！\n\n成功: ${successCount} 个\n失败: ${failCount} 个\n总计: ${selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
 
     if (failCount === 0) {
-        showStatus(`✅ 全部检验成功！成功检验 ${successCount}/${selectedFiles.length} 个Antigravity凭证`, 'success');
+        showStatus(` 全部检验成功！成功检验 ${successCount}/${selectedFiles.length} 个Antigravity凭证`, 'success');
         showMessageModal('Antigravity批量检验完成', summary, 'success');
     } else if (successCount === 0) {
-        showStatus(`❌ 全部检验失败！失败 ${failCount}/${selectedFiles.length} 个Antigravity凭证`, 'error');
+        showStatus(` 全部检验失败！失败 ${failCount}/${selectedFiles.length} 个Antigravity凭证`, 'error');
         showMessageModal('Antigravity批量检验完成', summary, 'error');
     } else {
-        showStatus(`⚠️ 批量检验完成：成功 ${successCount}/${selectedFiles.length} 个，失败 ${failCount} 个`, 'info');
+        showStatus(` 批量检验完成：成功 ${successCount}/${selectedFiles.length} 个，失败 ${failCount} 个`, 'info');
         showMessageModal('Antigravity批量检验完成', summary, 'info');
     }
 
@@ -2770,7 +2496,7 @@ async function batchVerifyAntigravityProjectIds() {
 async function batchConfigurePreview() {
     const selectedFiles = Array.from(AppState.creds.selectedFiles);
     if (selectedFiles.length === 0) {
-        showStatus('❌ 请先选择要配置Preview的凭证', 'error');
+        showStatus(' 请先选择要配置Preview的凭证', 'error');
         showMessageModal('提示', '请先选择要配置Preview的凭证', 'error');
         return;
     }
@@ -2779,7 +2505,7 @@ async function batchConfigurePreview() {
         return;
     }
 
-    showStatus(`🔧 正在为 ${selectedFiles.length} 个凭证配置Preview通道，请稍候...`, 'info');
+    showStatus(` 正在为 ${selectedFiles.length} 个凭证配置Preview通道，请稍候...`, 'info');
 
     // 并行执行所有配置请求
     const promises = selectedFiles.map(async (filename) => {
@@ -2823,11 +2549,11 @@ async function batchConfigurePreview() {
     results.forEach(result => {
         if (result.success) {
             successCount++;
-            resultMessages.push(`✅ ${result.filename}: ${result.message || '配置成功'}`);
+            resultMessages.push(` ${result.filename}: ${result.message || '配置成功'}`);
         } else {
             failCount++;
             const errorMsg = result.step ? `${result.error} (步骤: ${result.step})` : result.error;
-            resultMessages.push(`❌ ${result.filename}: ${errorMsg}`);
+            resultMessages.push(` ${result.filename}: ${errorMsg}`);
         }
     });
 
@@ -2836,13 +2562,13 @@ async function batchConfigurePreview() {
     const summary = `批量配置Preview通道完成！\n\n成功: ${successCount} 个\n失败: ${failCount} 个\n总计: ${selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
 
     if (failCount === 0) {
-        showStatus(`✅ 全部配置成功！成功配置 ${successCount}/${selectedFiles.length} 个凭证的Preview通道`, 'success');
+        showStatus(` 全部配置成功！成功配置 ${successCount}/${selectedFiles.length} 个凭证的Preview通道`, 'success');
         showMessageModal('批量配置Preview通道完成', summary, 'success');
     } else if (successCount === 0) {
-        showStatus(`❌ 全部配置失败！失败 ${failCount}/${selectedFiles.length} 个凭证`, 'error');
+        showStatus(` 全部配置失败！失败 ${failCount}/${selectedFiles.length} 个凭证`, 'error');
         showMessageModal('批量配置Preview通道完成', summary, 'error');
     } else {
-        showStatus(`⚠️ 批量配置完成：成功 ${successCount}/${selectedFiles.length} 个，失败 ${failCount} 个`, 'info');
+        showStatus(` 批量配置完成：成功 ${successCount}/${selectedFiles.length} 个，失败 ${failCount} 个`, 'info');
         showMessageModal('批量配置Preview通道完成', summary, 'info');
     }
 
@@ -3126,7 +2852,7 @@ async function checkEnvCredsStatus() {
                 : '未找到GCLI_CREDS_*环境变量';
 
             const autoLoadStatus = document.getElementById('autoLoadStatus');
-            autoLoadStatus.textContent = data.auto_load_enabled ? '✅ 已启用' : '❌ 未启用';
+            autoLoadStatus.textContent = data.auto_load_enabled ? ' 已启用' : ' 未启用';
             autoLoadStatus.style.color = data.auto_load_enabled ? '#28a745' : '#dc3545';
 
             document.getElementById('envFilesCount').textContent = `${data.existing_env_files_count} 个文件`;
@@ -3161,10 +2887,10 @@ async function loadEnvCredentials() {
 
         if (response.ok) {
             if (data.loaded_count > 0) {
-                showStatus(`✅ 成功导入 ${data.loaded_count}/${data.total_count} 个凭证文件`, 'success');
+                showStatus(` 成功导入 ${data.loaded_count}/${data.total_count} 个凭证文件`, 'success');
                 setTimeout(() => checkEnvCredsStatus(), 1000);
             } else {
-                showStatus(`⚠️ ${data.message}`, 'info');
+                showStatus(` ${data.message}`, 'info');
             }
         } else {
             showStatus(`导入失败: ${data.detail || data.error || '未知错误'}`, 'error');
@@ -3190,7 +2916,7 @@ async function clearEnvCredentials() {
         const data = await response.json();
 
         if (response.ok) {
-            showStatus(`✅ 成功删除 ${data.deleted_count} 个环境变量凭证文件`, 'success');
+            showStatus(` 成功删除 ${data.deleted_count} 个环境变量凭证文件`, 'success');
             setTimeout(() => checkEnvCredsStatus(), 1000);
         } else {
             showStatus(`清除失败: ${data.detail || data.error || '未知错误'}`, 'error');
@@ -3336,7 +3062,7 @@ async function saveConfig() {
             }
 
             if (data.restart_required && data.restart_required.length > 0) {
-                message += `\n⚠️ 重启提醒: ${data.restart_notice}`;
+                message += `\n 重启提醒: ${data.restart_notice}`;
                 showStatus(message, 'info');
             } else {
                 showStatus(message, 'success');
@@ -3537,7 +3263,7 @@ function useMirrorUrls() {
             const field = document.getElementById(fieldId);
             if (field && !field.disabled) field.value = url;
         }
-        showStatus('✅ 已切换到镜像网址配置，记得点击"保存配置"按钮保存设置', 'success');
+        showStatus(' 已切换到镜像网址配置，记得点击"保存配置"按钮保存设置', 'success');
     }
 }
 
@@ -3547,7 +3273,7 @@ function restoreOfficialUrls() {
             const field = document.getElementById(fieldId);
             if (field && !field.disabled) field.value = url;
         }
-        showStatus('✅ 已切换到官方端点配置，记得点击"保存配置"按钮保存设置', 'success');
+        showStatus(' 已切换到官方端点配置，记得点击"保存配置"按钮保存设置', 'success');
     }
 }
 
@@ -3719,7 +3445,7 @@ function updateCooldownDisplays() {
             return;
         }
 
-        badge.innerHTML = `⏰ ${cooldownGroup.group}: ${cooldownGroup.time}`;
+        badge.innerHTML = `${panelIcon('clock')} ${cooldownGroup.group}: ${cooldownGroup.time}`;
         badge.title = `${cooldownGroup.group}冷却中，覆盖 ${cooldownGroup.count} 个模型`;
     });
 }

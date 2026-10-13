@@ -5,7 +5,7 @@ import hashlib
 import json
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -589,46 +589,3 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
     except Exception as exc:
         log.error(f"[ANTIGRAVITY] Failed to fetch models: {exc}")
         return []
-
-
-async def fetch_quota_info(access_token: str) -> Dict[str, Any]:
-    try:
-        api_url = await get_antigravity_api_url()
-        response = await post_async(
-            url=f"{api_url}/v1internal:fetchAvailableModels",
-            json={},
-            headers=build_antigravity_headers(access_token),
-            timeout=30.0,
-        )
-        if response.status_code != 200:
-            return {
-                "success": False,
-                "error": f"API返回错误: {response.status_code}",
-            }
-
-        quota_info = {}
-        for model_id, model_data in response.json().get("models", {}).items():
-            if not isinstance(model_data, dict) or "quotaInfo" not in model_data:
-                continue
-            quota = model_data["quotaInfo"]
-            reset_time_raw = quota.get("resetTime", "")
-            reset_time = "N/A"
-            if reset_time_raw:
-                try:
-                    utc_date = datetime.fromisoformat(
-                        reset_time_raw.replace("Z", "+00:00")
-                    )
-                    reset_time = (utc_date + timedelta(hours=8)).strftime(
-                        "%m-%d %H:%M"
-                    )
-                except ValueError:
-                    pass
-            quota_info[model_id] = {
-                "remaining": quota.get("remainingFraction", 0),
-                "resetTime": reset_time,
-                "resetTimeRaw": reset_time_raw,
-            }
-        return {"success": True, "models": quota_info}
-    except Exception as exc:
-        log.error(f"[ANTIGRAVITY QUOTA] Failed to fetch quota: {exc}")
-        return {"success": False, "error": str(exc)}

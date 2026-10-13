@@ -578,215 +578,6 @@
             overflow-y: auto;
         }
 
-        /* 额度信息显示样式 */
-        .cred-quota-details {
-            margin-top: 10px;
-            animation: slideDown 0.3s ease-out;
-        }
-
-        @keyframes slideDown {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .cred-quota-content {
-            background: linear-gradient(to bottom, #ffffff, #f8f9fa);
-            border: 2px solid #17a2b8;
-            border-radius: 8px;
-            padding: 10px;
-            box-shadow: 0 2px 8px rgba(23, 162, 184, 0.15);
-        }
-
-        .quota-summary-card {
-            background: #ffffff;
-            border: 1px solid #dce3ea;
-            border-left: 4px solid #17a2b8;
-            border-radius: 8px;
-            margin: 0 0 20px 0;
-            overflow: hidden;
-            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-        }
-
-        .quota-summary-header {
-            width: 100%;
-            border: 0;
-            background: #f8fbfd;
-            color: #333;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 12px 16px;
-            text-align: left;
-        }
-
-        .quota-summary-title {
-            display: block;
-            font-size: 15px;
-            font-weight: 700;
-        }
-
-        .quota-summary-subtitle {
-            display: block;
-            color: #667085;
-            font-size: 12px;
-            margin-top: 3px;
-        }
-
-        .quota-summary-compact {
-            color: #0c5460;
-            font-size: 13px;
-            font-weight: 700;
-            white-space: nowrap;
-        }
-
-        .quota-summary-toggle {
-            color: #666;
-            font-size: 12px;
-            margin-left: 8px;
-            white-space: nowrap;
-        }
-
-        .quota-summary-body {
-            border-top: 1px solid #edf0f3;
-            padding: 14px 16px 16px;
-        }
-
-        .quota-summary-metrics {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
-            margin-bottom: 12px;
-        }
-
-        .quota-summary-metric {
-            background: #f8f9fa;
-            border-radius: 6px;
-            padding: 10px;
-        }
-
-        .quota-summary-metric strong {
-            color: #222;
-            display: block;
-            font-size: 22px;
-            line-height: 1.2;
-            word-break: break-word;
-        }
-
-        .quota-summary-metric span {
-            color: #667085;
-            display: block;
-            font-size: 12px;
-            margin-top: 4px;
-        }
-
-        .quota-model-list {
-            display: grid;
-            gap: 8px;
-            margin-top: 14px;
-        }
-
-        .quota-model-item {
-            background: #ffffff;
-            border: 1px solid #edf0f3;
-            border-radius: 6px;
-            padding: 10px;
-        }
-
-        .quota-model-row {
-            align-items: center;
-            display: flex;
-            gap: 10px;
-            justify-content: space-between;
-        }
-
-        .quota-model-name {
-            color: #333;
-            font-size: 13px;
-            font-weight: 700;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .quota-model-percent {
-            font-size: 13px;
-            font-weight: 700;
-            white-space: nowrap;
-        }
-
-        .quota-model-bar {
-            background: #e9ecef;
-            border-radius: 999px;
-            height: 7px;
-            margin: 8px 0 6px;
-            overflow: hidden;
-        }
-
-        .quota-model-fill {
-            height: 100%;
-            transition: width 0.25s ease;
-            width: 0;
-        }
-
-        .quota-model-meta,
-        .quota-model-empty {
-            color: #667085;
-            font-size: 12px;
-        }
-
-        .quota-summary-footer {
-            align-items: center;
-            display: flex;
-            gap: 10px;
-            justify-content: space-between;
-            margin-top: 10px;
-        }
-
-        .quota-summary-meta {
-            color: #667085;
-            font-size: 12px;
-        }
-
-        .quota-summary-refresh {
-            background: #17a2b8;
-            border: 0;
-            border-radius: 4px;
-            color: white;
-            cursor: pointer;
-            font-size: 13px;
-            padding: 7px 10px;
-            white-space: nowrap;
-        }
-
-        .quota-summary-refresh:disabled {
-            background: #9ab7c0;
-            cursor: not-allowed;
-        }
-
-        @media (max-width: 640px) {
-            .quota-summary-header,
-            .quota-summary-footer {
-                align-items: flex-start;
-                flex-direction: column;
-            }
-
-            .quota-summary-compact {
-                white-space: normal;
-            }
-
-            .quota-summary-metrics {
-                grid-template-columns: 1fr;
-            }
-        }
 
         .manage-actions {
             margin-bottom: 20px;
@@ -1114,7 +905,7 @@
         }
 
         .env-locked::after {
-            content: "🔒 环境变量锚定";
+            content: "环境变量锚定";
             position: absolute;
             right: 10px;
             top: 50%;
@@ -1490,7 +1281,7 @@
             }
         }
     </style>
-    <link rel="stylesheet" href="./front/panel.css?v=20260905">
+    <link rel="stylesheet" href="./front/panel.css?v=quota-20261014">
 </head>
 
 <body>
@@ -1540,7 +1331,7 @@
             <div id="oauthTab" class="tab-content active">
                 <!-- API 自动启用说明 -->
                 <div class="status success" style="margin-bottom: 20px;">
-                    <strong>✨ 自动化优化：</strong> 系统现在会在认证成功后自动为您的项目启用必需的API服务
+                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> 自动化优化：</strong> 系统现在会在认证成功后自动为您的项目启用必需的API服务
                     <ul style="margin: 10px 0; padding-left: 20px;">
                         <li><strong>Gemini Cloud Assist API</strong></li>
                         <li><strong>Gemini for Google Cloud API</strong></li>
@@ -1553,10 +1344,10 @@
                 <div class="form-group">
                     <div style="cursor: pointer; user-select: none; padding: 12px; border: 2px solid #ddd; border-radius: 5px; background: #f8f9fa; display: flex; justify-content: space-between; align-items: center;"
                         onclick="toggleProjectIdSection()">
-                        <span style="font-weight: bold; color: #555;">📁 高级选项：Google Cloud Project ID
+                        <span style="font-weight: bold; color: #555;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#folder"></use></svg> 高级选项：Google Cloud Project ID
                             (不用管，直接点击获取链接即可)</span>
                         <span id="projectIdToggleIcon"
-                            style="font-size: 14px; color: #666; transition: transform 0.3s ease;">▶</span>
+                            style="font-size: 14px; color: #666; transition: transform 0.3s ease;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#chevron-right"></use></svg></span>
                     </div>
                     <div id="projectIdSection"
                         style="display: none; margin-top: 15px; padding: 15px; border: 2px solid #ddd; border-top: none; border-radius: 0 0 5px 5px; background: #ffffff;">
@@ -1567,7 +1358,7 @@
                             style="width: 100%; padding: 10px; border: 2px solid #ddd; border-radius: 5px; font-size: 16px; box-sizing: border-box;"
                             placeholder="留空将尝试自动检测，或手动输入项目ID" />
                         <small style="color: #666; font-size: 12px; margin-top: 5px; display: block;">
-                            💡 提示：如果你不懂这是什么，可以留空此字段让系统自动检测项目ID
+                            <svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#info"></use></svg> 提示：如果你不懂这是什么，可以留空此字段让系统自动检测项目ID
                         </small>
                     </div>
                 </div>
@@ -1595,14 +1386,14 @@
                         style="margin: 20px 0; padding: 15px; border: 2px solid #e8f4fd; border-radius: 8px; background: #f8fcff;">
                         <div style="cursor: pointer; user-select: none; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;"
                             onclick="toggleCallbackUrlSection()">
-                            <span style="font-weight: bold; color: #0066cc;">🚀 无法回源？试试快捷方式</span>
+                            <span style="font-weight: bold; color: #0066cc;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> 无法回源？试试快捷方式</span>
                             <span id="callbackUrlToggleIcon"
-                                style="font-size: 14px; color: #666; transition: transform 0.3s ease;">▼</span>
+                                style="font-size: 14px; color: #666; transition: transform 0.3s ease;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#chevron-down"></use></svg></span>
                         </div>
                         <div id="callbackUrlSection" style="display: none;">
                             <div
                                 style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 6px; padding: 12px; margin-bottom: 12px;">
-                                <div style="color: #856404; font-size: 14px; font-weight: bold; margin-bottom: 6px;">📚
+                                <div style="color: #856404; font-size: 14px; font-weight: bold; margin-bottom: 6px;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#book"></use></svg>
                                     适用场景：</div>
                                 <ul
                                     style="color: #856404; font-size: 13px; margin: 0; padding-left: 18px; line-height: 1.5;">
@@ -1613,7 +1404,7 @@
                                 </ul>
                             </div>
                             <div style="color: #666; font-size: 13px; margin-bottom: 12px; line-height: 1.6;">
-                                <strong style="color: #0066cc;">🔍 什么是回调URL？</strong><br>
+                                <strong style="color: #0066cc;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#search"></use></svg> 什么是回调URL？</strong><br>
                                 完成Google OAuth授权后，浏览器地址栏显示的完整URL，通常看起来像这样：<br>
                                 <code
                                     style="background: #f1f3f4; padding: 2px 6px; border-radius: 3px; font-size: 12px; word-break: break-all;">
@@ -1622,7 +1413,7 @@
                             </div>
                             <div
                                 style="background: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 6px; padding: 10px; margin-bottom: 12px;">
-                                <div style="color: #0066cc; font-size: 13px; font-weight: bold; margin-bottom: 4px;">📋
+                                <div style="color: #0066cc; font-size: 13px; font-weight: bold; margin-bottom: 4px;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#file"></use></svg>
                                     使用步骤：</div>
                                 <ol
                                     style="color: #0066cc; font-size: 12px; margin: 0; padding-left: 18px; line-height: 1.4;">
@@ -1654,7 +1445,7 @@
             <!-- Antigravity 认证标签页 -->
             <div id="antigravityTab" class="tab-content">
                 <div class="status info" style="margin-bottom: 20px;">
-                    <strong>🚀 Antigravity 认证模式</strong>
+                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> Antigravity 认证模式</strong>
                     <p style="margin: 10px 0;">
                         获取谷歌Antigravity 凭证
                     </p>
@@ -1682,14 +1473,14 @@
                         style="margin: 20px 0; padding: 15px; border: 2px solid #e8f4fd; border-radius: 8px; background: #f8fcff;">
                         <div style="cursor: pointer; user-select: none; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;"
                             onclick="toggleAntigravityCallbackUrlSection()">
-                            <span style="font-weight: bold; color: #0066cc;">🚀 无法回源？试试快捷方式</span>
+                            <span style="font-weight: bold; color: #0066cc;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> 无法回源？试试快捷方式</span>
                             <span id="antigravityCallbackUrlToggleIcon"
-                                style="font-size: 14px; color: #666; transition: transform 0.3s ease;">▼</span>
+                                style="font-size: 14px; color: #666; transition: transform 0.3s ease;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#chevron-down"></use></svg></span>
                         </div>
                         <div id="antigravityCallbackUrlSection" style="display: none;">
                             <div
                                 style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 6px; padding: 12px; margin-bottom: 12px;">
-                                <div style="color: #856404; font-size: 14px; font-weight: bold; margin-bottom: 6px;">📚
+                                <div style="color: #856404; font-size: 14px; font-weight: bold; margin-bottom: 6px;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#book"></use></svg>
                                     适用场景：</div>
                                 <ul
                                     style="color: #856404; font-size: 13px; margin: 0; padding-left: 18px; line-height: 1.5;">
@@ -1700,7 +1491,7 @@
                                 </ul>
                             </div>
                             <div style="color: #666; font-size: 13px; margin-bottom: 12px; line-height: 1.6;">
-                                <strong style="color: #0066cc;">🔍 什么是回调URL？</strong><br>
+                                <strong style="color: #0066cc;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#search"></use></svg> 什么是回调URL？</strong><br>
                                 完成Google OAuth授权后，浏览器地址栏显示的完整URL，通常看起来像这样：<br>
                                 <code
                                     style="background: #f1f3f4; padding: 2px 6px; border-radius: 3px; font-size: 12px; word-break: break-all;">
@@ -1709,7 +1500,7 @@
                             </div>
                             <div
                                 style="background: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 6px; padding: 10px; margin-bottom: 12px;">
-                                <div style="color: #0066cc; font-size: 13px; font-weight: bold; margin-bottom: 4px;">📋
+                                <div style="color: #0066cc; font-size: 13px; font-weight: bold; margin-bottom: 4px;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#file"></use></svg>
                                     使用步骤：</div>
                                 <ol
                                     style="color: #0066cc; font-size: 12px; margin: 0; padding-left: 18px; line-height: 1.4;">
@@ -1751,7 +1542,7 @@
                 <div
                     style="margin-bottom: 30px; padding: 20px; border: 2px solid #e1e4e8; border-radius: 8px; background: #f8f9fa;">
                     <h4 style="margin-top: 0; color: #007bff; border-bottom: 2px solid #007bff; padding-bottom: 10px;">
-                        📤 GCLI 凭证批量上传</h4>
+                        <svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#upload"></use></svg> GCLI 凭证批量上传</h4>
 
                     <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
                         <p>点击选择文件或拖拽文件到此区域</p>
@@ -1783,7 +1574,7 @@
                 <!-- Antigravity凭证上传区域 -->
                 <div style="padding: 20px; border: 2px solid #e1e4e8; border-radius: 8px; background: #f8f9fa;">
                     <h4 style="margin-top: 0; color: #28a745; border-bottom: 2px solid #28a745; padding-bottom: 10px;">
-                        📤 Antigravity 凭证批量上传</h4>
+                        <svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#upload"></use></svg> Antigravity 凭证批量上传</h4>
 
                     <div class="upload-area" style="border-color: #28a745;"
                         onclick="document.getElementById('antigravityFileInput').click()"
@@ -1822,7 +1613,7 @@
                 <h3>GCLI凭证文件管理</h3>
                 <p>管理所有GCLI认证文件，查看状态和执行操作</p>
                 <div class="endpoint-card">
-                    <strong>📡 API地址（点击复制）：</strong>
+                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#link"></use></svg> API地址（点击复制）：</strong>
                     <table style="margin-top:6px;border-collapse:collapse;width:100%;">
                         <tr>
                             <td style="color:#666;width:90px;">OpenAI格式</td>
@@ -1856,13 +1647,13 @@
                         <strong>检验功能</strong>
                         <p>
                             点击每个凭证的"检验"按钮可以重新获取Project ID, 并查看账号的tier(free/pro/ultra)。<br>
-                            <strong style="color: #0c5460;">✅ 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
+                            <strong style="color: #0c5460;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg> 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
                             建议在遇到403错误时使用此功能。
                         </p>
                         <strong>设置预览</strong>
                         <p>
                             点击每个凭证的"设置预览"按钮可以配置Preview通道。<br>
-                            <strong style="color: #0c5460;">✅ 设置预览可以解决部分凭证调用preview模型时404的问题</strong>。<br>
+                            <strong style="color: #0c5460;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg> 设置预览可以解决部分凭证调用preview模型时404的问题</strong>。<br>
                             建议在调用gemini-3-pro-preview等模型遇到404错误时使用此功能。
                         </p>
                     </div>
@@ -1999,7 +1790,7 @@
                 <h3>Antigravity凭证文件管理</h3>
                 <p>管理所有Antigravity认证文件，查看状态和执行操作</p>
                 <div class="endpoint-card">
-                    <strong>📡 API地址（点击复制）：</strong>
+                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#link"></use></svg> API地址（点击复制）：</strong>
                     <table style="margin-top:6px;border-collapse:collapse;width:100%;">
                         <tr>
                             <td style="color:#666;width:90px;">OpenAI格式</td>
@@ -2032,45 +1823,37 @@
                         <strong>检验功能</strong>
                         <p>
                             点击每个凭证的"检验"按钮可以重新获取Project ID, 并查看账号的tier(free/pro/ultra)。<br>
-                            <strong style="color: #0c5460;">✅ 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
+                            <strong style="color: #0c5460;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg> 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
                             建议在遇到403错误时使用此功能。
                         </p>
                     </div>
                 </details>
 
-                <!-- 总额度统计 -->
-                <div class="quota-summary-card" id="antigravityCreditSummaryCard" aria-expanded="false">
-                    <button type="button" class="quota-summary-header" onclick="toggleAntigravityCreditSummary()">
-                        <span>
-                            <span class="quota-summary-title">Antigravity 总额度</span>
-                            <span class="quota-summary-subtitle">只统计启用凭证，展开可看每个模型额度</span>
+                <!-- 周期额度总览：只展示百分比，不将不同周期相加 -->
+                <section class="quota-summary-card" id="antigravityCreditSummaryCard" aria-expanded="false">
+                    <button type="button" class="quota-summary-header" onclick="toggleAntigravityCreditSummary()" aria-controls="antigravityCreditSummaryBody">
+                        <span class="quota-heading">
+                            <span class="quota-heading-icon"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#chart"></use></svg></span>
+                            <span><span class="quota-summary-title">额度总览</span>
+                            <span class="quota-summary-subtitle">Gemini / Claude · 5h 与 7d 独立统计</span></span>
                         </span>
-                        <span>
-                            <span class="quota-summary-compact" id="antigravityCreditSummaryCompact">未加载</span>
-                            <span class="quota-summary-toggle" id="antigravityCreditSummaryToggleIcon">展开</span>
+                        <span class="quota-heading-status">
+                            <span class="quota-summary-compact" id="antigravityCreditSummaryCompact">点击查看</span>
+                            <span class="quota-summary-toggle" id="antigravityCreditSummaryToggleIcon"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#chevron-down"></use></svg></span>
                         </span>
                     </button>
-                    <div class="quota-summary-body" id="antigravityCreditSummaryBody" style="display: none;">
-                        <div class="quota-summary-metrics">
-                            <div class="quota-summary-metric">
-                                <strong id="antigravityCreditRemainingAmount">--</strong>
-                                <span>启用号剩余积分</span>
-                            </div>
-                            <div class="quota-summary-metric">
-                                <strong id="antigravityCreditEnabledAccounts">0</strong>
-                                <span>启用凭证</span>
-                            </div>
-                        </div>
-                        <div class="quota-model-list" id="antigravityCreditModelList">
-                            <div class="quota-model-empty">暂无分模型额度数据</div>
+                    <div class="quota-summary-body" id="antigravityCreditSummaryBody" style="display:none;">
+                        <div class="quota-guidance"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#info"></use></svg>显示成功查询账号的平均剩余百分比；5h 已考虑 7d 额度限制，不同周期不可相加。</div>
+                        <div class="quota-progress" id="antigravityQuotaProgress" hidden><span id="antigravityQuotaProgressFill"></span></div>
+                        <div class="quota-family-grid" id="antigravityCreditModelList">
+                            <div class="quota-placeholder">展开后自动查询启用凭证</div>
                         </div>
                         <div class="quota-summary-footer">
-                            <span class="quota-summary-meta" id="antigravityCreditSummaryMeta">等待刷新</span>
-                            <button type="button" class="quota-summary-refresh" id="antigravityCreditSummaryRefreshBtn"
-                                onclick="event.stopPropagation(); refreshAntigravityCreditSummary(false)">手动刷新</button>
+                            <span class="quota-summary-meta" id="antigravityCreditSummaryMeta">暂未查询</span>
+                            <button type="button" class="quota-summary-refresh" id="antigravityCreditSummaryRefreshBtn" onclick="refreshAntigravityCreditSummary(false)"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#refresh"></use></svg>刷新全部</button>
                         </div>
                     </div>
-                </div>
+                </section>
 
                 <!-- 状态统计 -->
                 <div class="stats-container" id="antigravityStatsContainer">
@@ -2276,11 +2059,11 @@
                                 <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
                                     <button type="button" class="btn" onclick="useMirrorUrls()"
                                         style="font-size: 14px;">
-                                        🚀 一键使用镜像网址
+                                        <svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> 一键使用镜像网址
                                     </button>
                                     <button type="button" class="btn" onclick="restoreOfficialUrls()"
                                         style="font-size: 14px;">
-                                        🔄 还原官方端点
+                                        <svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#refresh"></use></svg> 还原官方端点
                                     </button>
                                 </div>
                                 <small class="config-note">镜像网址主要解决墙内无法访问官方端点的问题，部分地区可能无法使用</small>
@@ -2406,10 +2189,10 @@
                                     启用兼容性模式
                                 </label>
                                 <small class="config-note">启用后所有system消息全部转换成user，停用system_instructions <span
-                                        style="color: #28a745;">✓ 支持热更新</span></small>
+                                        style="color: #28a745;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg> 支持热更新</span></small>
                                 <div class="config-info"
                                     style="background-color: #fff3cd; border: 1px solid #ffc107; color: #856404;">
-                                    <strong>⚠️ 注意：</strong>该选项可能会降低模型理解能力，但是能避免流式空回的情况。
+                                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#alert"></use></svg> 注意：</strong>该选项可能会降低模型理解能力，但是能避免流式空回的情况。
                                     <br><strong>适用场景：</strong>当遇到流式传输时模型不返回内容或返回空响应时启用此选项。
                                 </div>
                             </div>
@@ -2420,10 +2203,10 @@
                                     返回思维链到前端
                                 </label>
                                 <small class="config-note">启用后，模型的思维链会在响应中返回；禁用后，思维链会被过滤掉 <span
-                                        style="color: #28a745;">✓ 支持热更新</span></small>
+                                        style="color: #28a745;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg> 支持热更新</span></small>
                                 <div class="config-info"
                                     style="background-color: #e3f2fd; border: 1px solid #2196f3; color: #0d47a1;">
-                                    <strong>💭 说明：</strong>某些模型（如Gemini 2.0
+                                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#chat"></use></svg> 说明：</strong>某些模型（如Gemini 2.0
                                     Pro）支持thinking模式，会在生成回答前先输出思考过程。启用后可以看到模型的思考过程；禁用后只显示最终回答，让输出更简洁。
                                 </div>
                             </div>
@@ -2433,11 +2216,11 @@
                                     <input type="checkbox" id="antigravityStream2nostream" class="config-checkbox" />
                                     Antigravity流式转非流式
                                 </label>
-                                <small class="config-note">启用后，非流式请求将使用流式API并收集为完整响应 <span style="color: #28a745;">✓
+                                <small class="config-note">启用后，非流式请求将使用流式API并收集为完整响应 <span style="color: #28a745;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg>
                                         支持热更新</span></small>
                                 <div class="config-info"
                                     style="background-color: #f3e5f5; border: 1px solid #9c27b0; color: #4a148c;">
-                                    <strong>🔄
+                                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#refresh"></use></svg>
                                         说明：</strong>针对Antigravity模式的优化选项。启用后，即使客户端请求非流式响应，后端也会使用流式API获取数据并收集完整后再返回。
                                     <br><strong>适用场景：</strong>某些情况下流式API比非流式API更稳定，启用此选项可以提高响应质量。
                                     <br><strong>默认：</strong>已启用
@@ -2474,7 +2257,7 @@
                                 <input type="text" id="keepaliveUrl" class="config-input"
                                     placeholder="留空则不启用，例如: https://your-app.example.com/keepalive" />
                                 <small class="config-note">配置后服务会定期向该 URL 发送 GET 请求以保持在线；留空则禁用保活 <span
-                                        style="color: #28a745;">✓ 支持热更新</span></small>
+                                        style="color: #28a745;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg> 支持热更新</span></small>
                                 <button type="button" onclick="autoSetKeepaliveUrl()"
                                     style="margin-top:6px; padding:4px 12px; font-size:13px; cursor:pointer;">一键设置保活</button>
                             </div>
@@ -2483,7 +2266,7 @@
                                 <label for="keepaliveInterval">保活间隔 (秒):</label>
                                 <input type="number" id="keepaliveInterval" class="config-input" min="5" max="86400" />
                                 <small class="config-note">两次保活请求之间的等待时间，范围 5 - 86400 秒，默认 60 <span
-                                        style="color: #28a745;">✓ 支持热更新</span></small>
+                                        style="color: #28a745;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg> 支持热更新</span></small>
                             </div>
                         </div>
 
@@ -2493,7 +2276,7 @@
                             <div class="form-group">
                                 <div class="config-info"
                                     style="background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724;">
-                                    <strong>🔥 热更新配置（立即生效）：</strong>
+                                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> 热更新配置（立即生效）：</strong>
                                     <ul style="margin: 8px 0; padding-left: 20px; color: #212529;">
                                         <li><strong>网络配置：</strong>代理设置、端点配置、HTTP超时时间、最大连接数</li>
                                         <li><strong>API配置：</strong>凭证轮换次数、错误重试设置、自动封禁配置</li>
@@ -2506,7 +2289,7 @@
                             <div class="form-group">
                                 <div class="config-info"
                                     style="background-color: #fff3cd; border: 1px solid #ffc107; color: #856404;">
-                                    <strong>🔄 需要重启的配置：</strong>
+                                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#refresh"></use></svg> 需要重启的配置：</strong>
                                     <ul style="margin: 8px 0; padding-left: 20px; color: #212529;">
                                         <li><strong>服务器配置：</strong>主机地址、端口号</li>
                                         <li><strong>目录配置：</strong>凭证目录路径、Code Assist端点</li>
@@ -2564,15 +2347,15 @@
                 <!-- 项目介绍 -->
                 <div
                     style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #007bff;">
-                    <h4 style="margin-top: 0; color: #007bff;">📋 项目简介</h4>
+                    <h4 style="margin-top: 0; color: #007bff;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#file"></use></svg> 项目简介</h4>
                     <p style="margin: 10px 0; line-height: 1.6; color: #495057;">
                         GCLI2API是一个将Google Gemini API转换为OpenAI 和GEMINI API格式的代理工具，支持多账户管理、自动轮换、实时日志监控等功能。
                     </p>
                     <div style="margin: 15px 0;">
-                        <p style="margin: 5px 0;"><strong>🔗 项目地址：</strong> <a
+                        <p style="margin: 5px 0;"><strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#link"></use></svg> 项目地址：</strong> <a
                                 href="https://github.com/su-kaka/gcli2api" target="_blank"
                                 style="color: #007bff; text-decoration: none;">GitHub - su-kaka/gcli2api</a></p>
-                        <p style="margin: 5px 0;"><strong>⚠️ 使用声明：</strong> <span
+                        <p style="margin: 5px 0;"><strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#alert"></use></svg> 使用声明：</strong> <span
                                 style="color: #dc3545; font-weight: 500;">禁止商业用途和倒卖 - 仅供学习使用</span></p>
                     </div>
                 </div>
@@ -2580,17 +2363,17 @@
                 <!-- 功能特性 -->
                 <div
                     style="background-color: #e7f3ff; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #17a2b8;">
-                    <h4 style="margin-top: 0; color: #17a2b8;">✨ 主要功能</h4>
+                    <h4 style="margin-top: 0; color: #17a2b8;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> 主要功能</h4>
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
                         <div>
-                            <p><strong>🔄 多账户管理：</strong> 支持批量上传和管理多个Google账户</p>
-                            <p><strong>⚡ 自动轮换：</strong> 智能轮换账户，避免单账户限额</p>
-                            <p><strong>📊 实时监控：</strong> 使用统计、错误监控、实时日志</p>
+                            <p><strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#refresh"></use></svg> 多账户管理：</strong> 支持批量上传和管理多个Google账户</p>
+                            <p><strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> 自动轮换：</strong> 智能轮换账户，避免单账户限额</p>
+                            <p><strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#chart"></use></svg> 实时监控：</strong> 使用统计、错误监控、实时日志</p>
                         </div>
                         <div>
-                            <p><strong>🛡️ 安全可靠：</strong> OAuth2认证、自动封禁异常账户</p>
-                            <p><strong>🎛️ 配置灵活：</strong> 支持热更新配置、代理设置</p>
-                            <p><strong>📱 界面友好：</strong> 响应式设计、移动端适配</p>
+                            <p><strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#shield"></use></svg> 安全可靠：</strong> OAuth2认证、自动封禁异常账户</p>
+                            <p><strong> 配置灵活：</strong> 支持热更新配置、代理设置</p>
+                            <p><strong> 界面友好：</strong> 响应式设计、移动端适配</p>
                         </div>
                     </div>
                 </div>
@@ -2598,7 +2381,7 @@
                 <!-- 交流群 -->
                 <div
                     style="background-color: #e7f3ff; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #4285f4; text-align: center;">
-                    <h4 style="margin-top: 0; color: #1976d2;">💬 交流群</h4>
+                    <h4 style="margin-top: 0; color: #1976d2;"> 交流群</h4>
                     <div style="color: #1565c0; line-height: 1.6;">
                         <p>欢迎加入 QQ 群交流讨论！</p>
                         <p style="font-size: 18px; font-weight: bold; color: #4285f4;">QQ 群号：1083250744</p>
@@ -2616,7 +2399,7 @@
                 <!-- 联系和反馈 -->
                 <div
                     style="background-color: #d1ecf1; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #bee5eb;">
-                    <h4 style="margin-top: 0; color: #0c5460;">📞 联系我们</h4>
+                    <h4 style="margin-top: 0; color: #0c5460;"> 联系我们</h4>
                     <div style="color: #0c5460; line-height: 1.6;">
                         <p>• <strong>问题反馈：</strong> 通过GitHub Issues提交问题和建议</p>
                         <p>• <strong>功能请求：</strong> 在GitHub Discussions中讨论新功能</p>
@@ -2637,7 +2420,7 @@
     </div>
 
     <!-- 引入公共JavaScript模块 -->
-    <script src="./front/common.js?v=ui-refresh-20260905"></script>
+    <script src="./front/common.js?v=quota-20261014"></script>
 
 </body>
 
