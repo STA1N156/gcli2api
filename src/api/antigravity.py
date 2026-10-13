@@ -84,7 +84,10 @@ async def wrap_cli_request(
     inner.setdefault("sessionId", _generate_stable_session_id(inner))
 
     generation_config = dict(inner.get("generationConfig") or {})
-    generation_config["maxOutputTokens"] = 64000
+    if "image" in model.lower():
+        generation_config.pop("maxOutputTokens", None)
+    else:
+        generation_config["maxOutputTokens"] = 1_000_000 if model.lower().startswith("gemini-4") else 64000
     inner["generationConfig"] = generation_config
 
     if "claude" in model.lower():

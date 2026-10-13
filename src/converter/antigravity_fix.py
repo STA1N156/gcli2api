@@ -529,10 +529,11 @@ def prepare_image_generation_request(
     """
     图像生成模型请求体后处理
 
-    支持三种方式指定图片参数（优先级从高到低）:
+    图片参数优先级（从高到低）:
     1. size 参数: 如 "1024x1536"，自动计算 aspectRatio 和 imageSize
     2. 模型名后缀: 如 -4k, -2k, -16x9, -1x1
-    3. 默认值: 不设置额外参数
+    3. generationConfig.imageConfig 中的图片参数
+    4. 默认值: 不设置额外参数
 
     Args:
         request_body: 原始请求体
@@ -543,11 +544,13 @@ def prepare_image_generation_request(
     """
     request_body = request_body.copy()
     model_lower = model.lower()
+    generation_config = request_body.get("generationConfig") or {}
+    image_config = dict(generation_config.get("imageConfig") or {})
 
     # 优先使用 size 参数
     size_str = request_body.pop("size", None)
     if size_str:
-        image_config = _parse_size_to_image_config(size_str)
+        image_config.update(_parse_size_to_image_config(size_str))
         log.debug(f"[IMAGE] 从 size 参数 '{size_str}' 解析: {image_config}")
     else:
         # 从模型名后缀解析
@@ -562,7 +565,6 @@ def prepare_image_generation_request(
                 aspect_ratio = ratio
                 break
 
-        image_config = {}
         if aspect_ratio:
             image_config["aspectRatio"] = aspect_ratio
         if image_size:
@@ -571,6 +573,7 @@ def prepare_image_generation_request(
     request_body["model"] = "gemini-3.1-flash-image"  # 统一使用基础模型名
     request_body["generationConfig"] = {
         "candidateCount": 1,
+        "responseModalities": generation_config.get("responseModalities") or ["TEXT", "IMAGE"],
         "imageConfig": image_config
     }
 
@@ -605,8 +608,7 @@ def _normalize_antigravity_request(
     return_thoughts: bool,
 ) -> str:
     """antigravity 模式专属处理，返回处理后的模型名"""
-    # 1. 思考模型处理：antigravity 模型名不带 -high/-low/-search 等后缀，
-    # 仅通过 "think" 是否出现在模型名中判断，命中则使用默认思考预算。
+    # Gemini 3/4 由模型名选择思考档位；其他模型通过 think 后缀启用预算配置。
     thinking = is_thinking_model(model)
 
     # 针对 Gemini 模型：根据思考设置映射至真实的 Antigravity 后端模型 ID
@@ -619,10 +621,10 @@ def _normalize_antigravity_request(
             model = "gemini-pro-agent"
             log.debug(f"[ANTIGRAVITY] 映射模型: {original_model} -> {model}")
 
-        # Antigravity uses the Gemini 3.x model route/name to select thinking depth.
+        # Antigravity uses the Gemini 3/4 model route/name to select thinking depth.
         # Do not send thinkingLevel/thinkingBudget because they can conflict with that route.
         # Keep includeThoughts so reasoning is still returned to the frontend when enabled.
-        if "gemini-3" in original_model.lower():
+        if original_model.lower().startswith(("gemini-3", "gemini-4")):
             thinking_config = generation_config.setdefault("thinkingConfig", {})
             thinking_config.pop("thinkingBudget", None)
             thinking_config.pop("thinkingLevel", None)
@@ -740,10 +742,6 @@ async def normalize_antigravity_request(
     # 获取配置值
     return_thoughts = await get_return_thoughts_to_frontend()
 
-    # 图片模型走独立的图片生成处理路径
-    if "image" in model.lower():
-        return ensure_user_ending(prepare_image_generation_request(result, model))
-
     model = _normalize_antigravity_request(result, model, generation_config, return_thoughts)
     result["model"] = model
 
@@ -768,7 +766,7 @@ async def normalize_antigravity_request(
 
     # 2. 参数范围限制
     _clamp_temperature(generation_config)
-    generation_config["maxOutputTokens"] = 64000
+    generation_config["maxOutputTokens"] = 1_000_000 if model.lower().startswith("gemini-4") else 64000
 
     if "contents" in result:
         result["contents"] = _ensure_tool_call_ids(result["contents"], model)
@@ -811,7 +809,8 @@ async def normalize_antigravity_request(
                     )
 
                     if has_valid_value:
-                        part = _normalize_part_thought_signature(part, model)
+                        if "image" not in model.lower():
+                            part = _normalize_part_thought_signature(part, model)
                         part = normalize_inline_image_part(part)
                         valid_parts.append(part)
                     else:
@@ -832,6 +831,10 @@ async def normalize_antigravity_request(
         result["contents"] = cleaned_contents
 
     result["generationConfig"] = generation_config
+
+    # 图片请求也先清理消息，再保留图片专用参数。
+    if "image" in model.lower():
+        result = prepare_image_generation_request(result, model)
 
     # 清理空消息后再补续写指令，避免末尾空 user 被删除后重新露出 model。
     return ensure_user_ending(result)
