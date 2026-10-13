@@ -510,7 +510,7 @@ def get_thinking_settings(model_name: str) -> tuple[Optional[int], Optional[str]
 
     # Gemini 3 Preview 系列: 使用 thinkingLevel
     if "gemini-3" in base_model:
-        if "-high" in model_name:
+        if "-high" in model_name or "-max" in model_name:
             return None, "high"
         elif "-medium" in model_name:
             # 仅 3-flash-preview 支持 medium
@@ -600,13 +600,13 @@ async def normalize_gemini_request(
 
     # ========== Gemini CLI 处理 ==========
     # 1. 思考设置
-    # 优先使用 get_thinking_settings 获取的思考预算和等级
-    thinking_budget, thinking_level = get_thinking_settings(model)
-
-    # 其次使用传入的思考预算（如果未从模型名称获取）
+    # 客户端明确设置优先，未设置时再使用模型后缀。
+    thinking_budget = generation_config.get("thinkingConfig", {}).get("thinkingBudget")
+    thinking_level = generation_config.get("thinkingConfig", {}).get("thinkingLevel")
     if thinking_budget is None and thinking_level is None:
-        thinking_budget = generation_config.get("thinkingConfig", {}).get("thinkingBudget")
-        thinking_level = generation_config.get("thinkingConfig", {}).get("thinkingLevel")
+        thinking_budget, thinking_level = get_thinking_settings(model)
+    if isinstance(thinking_level, str) and thinking_level.lower() == "max":
+        thinking_level = "HIGH"
 
     # 假如 is_thinking_model 为真或者思考预算/等级不为空，设置 thinkingConfig
     if is_thinking_model(model) or thinking_budget is not None or thinking_level is not None:
