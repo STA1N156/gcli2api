@@ -1,4 +1,4 @@
-full_hash=113f5fbd40df2bbb8480c1b0c72fcb1c4e22129c
-short_hash=113f5fb
-message=feat: add 5h and 7d quotas and streamline dashboard
-date=2026-10-14 03:43:00 +0800
+full_hash=a68a39f5a069123957ae195f9b2cd028f44fa46f
+short_hash=a68a39f
+message=feat: honor client thinking settings and support Flash Lite aliases
+date=2026-10-14 05:51:27 +0800
