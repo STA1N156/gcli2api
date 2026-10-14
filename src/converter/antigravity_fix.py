@@ -610,8 +610,8 @@ def _normalize_antigravity_request(
     """antigravity 模式专属处理，返回处理后的模型名"""
     # 客户端参数优先，模型后缀只提供默认思考等级。
     thinking = is_thinking_model(model)
-    # Argon 的 high/max 都走 high 通道，但不强制思考等级。
-    argon_dynamic = model.lower() in {"gemini-4-argon-high", "gemini-4-argon-max"}
+    # Argon high 保留上游默认等级；max 则明确使用 HIGH。
+    argon_default = model.lower() == "gemini-4-argon-high"
     supports_thinking_level = (
         model.lower().startswith(("gemini-3", "gemini-4")) or "claude" in model.lower()
     )
@@ -620,7 +620,7 @@ def _normalize_antigravity_request(
     legacy_claude_thinking = model.lower() in {
         "claude-opus-4-6-thinking", "claude-sonnet-4-6-thinking"
     }
-    suffix = "" if argon_dynamic else model.lower().rsplit("-", 1)[-1]
+    suffix = "" if argon_default else model.lower().rsplit("-", 1)[-1]
     if "claude" in model.lower() and suffix == "thinking":
         suffix = "high"
     thinking_config = generation_config.get("thinkingConfig", {})
