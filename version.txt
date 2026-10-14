@@ -1,4 +1,4 @@
-full_hash=d3fb434437c22ab24a5f25107082d6432d34ea33
-short_hash=d3fb434
-message=fix: raise Claude output limit and use default Argon thinking
-date=2026-10-14 06:22:31 +0800
+full_hash=9e7ceaf5b571a9dd5ce00ecf6c5758911dad3140
+short_hash=9e7ceaf
+message=fix: map Argon max to explicit high thinking
+date=2026-10-14 08:50:05 +0800
