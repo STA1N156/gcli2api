@@ -128,7 +128,7 @@ class AntigravityThinkingTests(unittest.TestCase):
         with patch("config.get_return_thoughts_to_frontend", new=AsyncMock(return_value=True)):
             asyncio.run(check())
 
-    def test_argon_high_and_max_use_dynamic_thinking_unless_client_sets_level(self):
+    def test_argon_high_uses_default_and_max_uses_high_unless_client_sets_level(self):
         async def check():
             for suffix in ("high", "max"):
                 for effort in (None, "high", "max", "medium", "low"):
@@ -144,7 +144,8 @@ class AntigravityThinkingTests(unittest.TestCase):
                         payload, _ = await wrap_cli_request(result, result["model"], "test-project")
                         self.assertEqual(payload["model"], "gemini-4-argon-high")
                         thinking = payload["request"]["generationConfig"]["thinkingConfig"]
-                        expected = "HIGH" if effort == "max" else effort.upper() if effort else None
+                        expected = (effort or ("high" if suffix == "max" else "")).upper()
+                        expected = "HIGH" if expected == "MAX" else expected or None
                         self.assertEqual(thinking.get("thinkingLevel"), expected)
                         self.assertNotIn("thinkingBudget", thinking)
                         self.assertTrue(thinking["includeThoughts"])
