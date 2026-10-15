@@ -1,4 +1,4 @@
-full_hash=9e7ceaf5b571a9dd5ce00ecf6c5758911dad3140
-short_hash=9e7ceaf
-message=fix: map Argon max to explicit high thinking
-date=2026-10-14 08:50:05 +0800
+full_hash=979eb8f1201a896ac735600a669b5e341916da04
+short_hash=979eb8f
+message=fix: refine empty retries and normalize xhigh thinking
+date=2026-10-15 11:26:21 +0800
