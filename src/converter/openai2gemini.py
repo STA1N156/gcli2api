@@ -1651,7 +1651,7 @@ def convert_gemini_to_openai_response(
         "id": str(uuid.uuid4()),
         "object": "chat.completion",
         "created": int(time.time()),
-        "model": model,
+        "model": gemini_response.get("modelVersion") or model,
         "choices": choices,
     }
 
@@ -1665,7 +1665,8 @@ def convert_gemini_to_openai_stream(
     gemini_stream_chunk: str,
     model: str,
     response_id: str,
-    status_code: int = 200
+    status_code: int = 200,
+    model_state: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """
     将 Gemini 格式流式响应块转换为 OpenAI SSE 格式流式响应
@@ -1677,6 +1678,7 @@ def convert_gemini_to_openai_stream(
         model: 模型名称
         response_id: 此流式响应的一致ID
         status_code: HTTP 状态码 (默认 200)
+        model_state: 当前流已收到的真实模型名，避免后续缺省片段退回请求名
 
     Returns:
         OpenAI SSE 格式的响应字符串 (如 "data: {json}\n\n"),
@@ -1716,6 +1718,10 @@ def convert_gemini_to_openai_stream(
         gemini_response = gemini_chunk["response"]
     else:
         gemini_response = gemini_chunk
+
+    model = gemini_response.get("modelVersion") or (model_state or {}).get("model", model)
+    if model_state is not None:
+        model_state["model"] = model
 
     # 转换为 OpenAI 流式格式
     choices = []

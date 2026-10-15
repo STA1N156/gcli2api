@@ -100,6 +100,7 @@ async def chat_completions(
             return
 
         response_id = str(uuid.uuid4())
+        model_state = {}
 
         async for chunk in prepend_async_item(first_chunk, stream_gen):
             if isinstance(chunk, Response):
@@ -126,7 +127,9 @@ async def chat_completions(
             if chunk_str.startswith("data: "):
                 try:
                     from src.converter.openai2gemini import convert_gemini_to_openai_stream
-                    openai_chunk_str = convert_gemini_to_openai_stream(chunk_str, real_model, response_id)
+                    openai_chunk_str = convert_gemini_to_openai_stream(
+                        chunk_str, real_model, response_id, model_state=model_state,
+                    )
                     if openai_chunk_str:
                         yield openai_chunk_str.encode("utf-8")
                 except Exception as e:

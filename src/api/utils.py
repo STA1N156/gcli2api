@@ -278,6 +278,13 @@ async def collect_streaming_response(stream_generator) -> Response:
                         log.debug("[STREAM COLLECTOR] No 'response' key in chunk, trying direct access")
                     response_obj = chunk  # 尝试直接使用chunk
 
+                # 元数据可能单独出现在没有 candidates 的首段或末段。
+                if response_obj.get("modelVersion"):
+                    merged_response["response"]["modelVersion"] = response_obj["modelVersion"]
+                usage = response_obj.get("usageMetadata")
+                if usage:
+                    merged_response["response"]["usageMetadata"].update(usage)
+
                 candidates = response_obj.get("candidates", [])
                 if debug_enabled:
                     log.debug(f"[STREAM COLLECTOR] Found {len(candidates)} candidates")
@@ -334,11 +341,6 @@ async def collect_streaming_response(stream_generator) -> Response:
 
                 if candidate.get("citationMetadata"):
                     merged_response["response"]["candidates"][0]["citationMetadata"] = candidate["citationMetadata"]
-
-                # 更新使用元数据
-                usage = response_obj.get("usageMetadata", {})
-                if usage:
-                    merged_response["response"]["usageMetadata"].update(usage)
 
             except json.JSONDecodeError as e:
                 if debug_enabled:
