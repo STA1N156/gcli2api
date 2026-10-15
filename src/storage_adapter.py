@@ -69,6 +69,11 @@ class StorageBackend(Protocol):
         ...
 
     # 配置管理
+    async def save_marked_prompt(self, record: Dict[str, Any]) -> None: ...
+    async def has_marked_prompt(self, prompt_id: str) -> bool: ...
+    async def list_marked_prompts(self, offset: int, limit: int) -> Dict[str, Any]: ...
+    async def get_marked_prompts(self, prompt_ids: List[str]) -> List[Dict[str, Any]]: ...
+
     async def set_config(self, key: str, value: Any) -> bool:
         """设置配置项"""
         ...
@@ -233,6 +238,23 @@ class StorageAdapter:
         return await self._backend.delete_session_binding(
             binding_key, expected_filename
         )
+
+    # 单独保存提示词，避免全文进入每个 Worker 的配置缓存。
+    async def save_marked_prompt(self, record: Dict[str, Any]) -> None:
+        self._ensure_initialized()
+        await self._backend.save_marked_prompt(record)
+
+    async def has_marked_prompt(self, prompt_id: str) -> bool:
+        self._ensure_initialized()
+        return await self._backend.has_marked_prompt(prompt_id)
+
+    async def list_marked_prompts(self, offset: int = 0, limit: int = 30) -> Dict[str, Any]:
+        self._ensure_initialized()
+        return await self._backend.list_marked_prompts(offset, limit)
+
+    async def get_marked_prompts(self, prompt_ids: List[str]) -> List[Dict[str, Any]]:
+        self._ensure_initialized()
+        return await self._backend.get_marked_prompts(prompt_ids)
 
     # ============ 配置管理 ============
 

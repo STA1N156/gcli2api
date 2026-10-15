@@ -150,11 +150,31 @@ class MongoDBManager:
             await session_bindings_collection.create_index(
                 [("expires_at", ASCENDING)], name="idx_session_bindings_expires_at"
             )
+            await self._db["marked_prompts"].create_index([("created_at", -1)])
             log.debug("MongoDB indexes created successfully")
         except Exception as e:
             # 如果索引已存在，忽略错误
             if "already exists" not in str(e).lower():
                 log.warning(f"Index creation warning: {e}")
+
+    async def save_marked_prompt(self, record: Dict[str, Any]) -> None:
+        await self._db["marked_prompts"].update_one(
+            {"_id": record["id"]}, {"$setOnInsert": record}, upsert=True,
+        )
+
+    async def has_marked_prompt(self, prompt_id: str) -> bool:
+        return await self._db["marked_prompts"].find_one({"_id": prompt_id}, {"_id": 1}) is not None
+
+    async def list_marked_prompts(self, offset: int, limit: int) -> Dict[str, Any]:
+        collection = self._db["marked_prompts"]
+        cursor = collection.find({}, {"_id": 0, "text": 0}).sort([("created_at", -1), ("id", 1)])
+        items = await cursor.skip(offset).limit(limit).to_list(length=limit)
+        return {"items": items, "total": await collection.count_documents({})}
+
+    async def get_marked_prompts(self, prompt_ids: List[str]) -> List[Dict[str, Any]]:
+        return await self._db["marked_prompts"].find(
+            {"_id": {"$in": prompt_ids}}, {"_id": 0},
+        ).to_list(length=len(prompt_ids)) if prompt_ids else []
 
     async def _load_config_cache(self):
         """加载配置到内存缓存（仅在初始化时调用一次）"""

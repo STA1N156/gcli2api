@@ -270,7 +270,49 @@ class SQLiteManager:
             ON session_bindings(expires_at)
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS marked_prompts (
+                id TEXT PRIMARY KEY, text TEXT NOT NULL, model TEXT NOT NULL,
+                created_at REAL NOT NULL, chars INTEGER NOT NULL, preview TEXT NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_marked_prompts_created ON marked_prompts(created_at)")
         log.debug("SQLite tables and indexes created")
+
+    async def save_marked_prompt(self, record: Dict[str, Any]) -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO marked_prompts (id,text,model,created_at,chars,preview) VALUES (?,?,?,?,?,?)",
+                tuple(record[key] for key in ("id", "text", "model", "created_at", "chars", "preview")),
+            )
+            await db.commit()
+
+    async def has_marked_prompt(self, prompt_id: str) -> bool:
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute("SELECT 1 FROM marked_prompts WHERE id=?", (prompt_id,)) as cursor:
+                return await cursor.fetchone() is not None
+
+    async def list_marked_prompts(self, offset: int, limit: int) -> Dict[str, Any]:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT COUNT(*) FROM marked_prompts") as cursor:
+                total = (await cursor.fetchone())[0]
+            async with db.execute(
+                "SELECT id,model,created_at,chars,preview FROM marked_prompts ORDER BY created_at DESC,id LIMIT ? OFFSET ?",
+                (limit, offset),
+            ) as cursor:
+                return {"items": [dict(row) for row in await cursor.fetchall()], "total": total}
+
+    async def get_marked_prompts(self, prompt_ids: List[str]) -> List[Dict[str, Any]]:
+        if not prompt_ids:
+            return []
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"SELECT * FROM marked_prompts WHERE id IN ({','.join('?' for _ in prompt_ids)})",
+                prompt_ids,
+            ) as cursor:
+                return [dict(row) for row in await cursor.fetchall()]
 
     async def _repair_credential_filenames(self, db: aiosqlite.Connection):
         """
