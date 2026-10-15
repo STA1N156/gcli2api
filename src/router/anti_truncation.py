@@ -6,7 +6,7 @@ from fastapi import Response
 from fastapi.responses import JSONResponse
 
 from src.api.empty_output import build_empty_model_output_response, is_empty_model_output_error
-from src.api.empty_retry import empty_output_stream, has_current_input_tool_result, prepare_empty_retry
+from src.api.empty_retry import empty_output_stream, has_current_input_tool_result, wrap_user_input_in_tool
 from src.api.utils import collect_streaming_response
 from src.converter.anti_truncation import ReplyToolStream, apply_anti_truncation, latest_user_text_parts
 
@@ -19,11 +19,13 @@ async def anti_truncation_gemini_stream(
     api_request: Dict[str, Any],
     stream_request_func: Callable[..., AsyncIterator[Any]],
 ) -> AsyncIterator[Any]:
-    """Force a reply tool; retry an empty body once with user text in a tool result."""
+    """Wrap current user text in a tool result and request the reply through a tool."""
     payload = apply_anti_truncation(api_request)
     passthrough = payload is api_request
     # Internal retry hint; API clients build upstream bodies without this field.
     payload = {**payload, "_anti_truncation": True}
+    if not has_current_input_tool_result(payload["request"]):
+        wrap_user_input_in_tool(payload, latest_user_text_parts(payload["request"]))
     # Existing/explicit client tool choices are passed through, never swallowed.
     if passthrough:
         async with aclosing(empty_output_stream(payload, stream_request_func)) as stream:
@@ -78,7 +80,7 @@ async def anti_truncation_gemini_stream(
         response = final.get("response", final)
         if (not processor.has_output and attempt == 0
                 and not has_current_input_tool_result(payload["request"])):
-            prepare_empty_retry(payload, text_parts)
+            wrap_user_input_in_tool(payload, text_parts)
             for key, value in processor.usage.items():
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     previous_usage[key] = previous_usage.get(key, 0) + value

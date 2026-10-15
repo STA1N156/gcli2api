@@ -2163,7 +2163,7 @@
                                     <input type="checkbox" id="emptyOutputErrorEnabled" class="config-checkbox" />
                                     空回报错 400
                                 </label>
-                                <small class="config-note">控制其他请求路径的空回报错。GCLI / Antigravity 最多发送两次：首次正常发送，空回后以工具结果包装最新用户原文再试一次；仍空回则返回 400。</small>
+                                <small class="config-note">控制其他请求路径的空回报错。GCLI / Antigravity 普通模型空回后以工具结果包装最新用户原文再试一次；抗截断模型首轮即包装，空回直接返回 400。换凭证重试另按路由设置执行。</small>
                             </div>
                         </div>
                         <div class="config-group" data-settings-panel="diagnostics" hidden>
@@ -2247,7 +2247,7 @@
 
                             <div class="form-group">
                                 <label>空回重试（普通模型和抗截断模型）</label>
-                                <small class="config-note">首次正常发送；空回后，将最新用户原文放入 read_user_input 工具结果，再尝试一次。若本轮输入已经是完整配对的 read_user_input 工具结果，空回直接返回 400，不重复包装；历史记录不影响本轮。思考不算正文，英文拒绝文本不按空回重试。已知被标记的完整系统提示词会在发送前直接移到首条用户消息，仍保留一次空回重试。</small>
+                                <small class="config-note">普通模型首次正常发送，空回后将最新用户原文放入 read_user_input 工具结果，再尝试一次。抗截断模型首轮即使用此包装；本轮已有完整配对时不重复添加，空回直接返回 400，历史记录不影响本轮。思考不算正文，英文拒绝文本不按空回重试。已知被标记的完整系统提示词会在发送前直接移到首条用户消息，提示词搬移和换凭证重试规则不变。</small>
                             </div>
 
                             <div class="form-group">
@@ -2264,7 +2264,7 @@
                         </div>
 
                         <div class="config-group" data-settings-panel="marked" hidden>
-                            <div class="marked-heading"><div><h4>标记提示词</h4><p>记住已触发标记错误的系统提示词，下次直接搬迁，少一次失败请求。</p></div><span class="settings-badge">多 Worker 共享</span></div>
+                            <div class="marked-heading"><div><h4>标记提示词</h4><p>Antigravity 普通和抗截断模型均支持：首次标记后搬迁重试，下次命中直接搬迁。</p></div><span class="settings-badge">多 Worker 共享</span></div>
                             <div class="marked-notice"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#info"></use></svg><span>Antigravity 请求按完整系统提示词精确匹配，忽略程序附加的抗截断说明。记录不等于确认违规；下载包含完整原文，请妥善保管。</span></div>
                             <div class="marked-toolbar">
                                 <label><input type="checkbox" id="markedPromptSelectAll" onchange="toggleMarkedPromptPage(this.checked)"> 全选本页</label>
