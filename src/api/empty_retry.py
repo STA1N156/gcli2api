@@ -51,7 +51,7 @@ def has_current_input_tool_result(request):
     return False
 
 
-def prepare_empty_retry(payload, text_parts):
+def wrap_user_input_in_tool(payload, text_parts):
     # Match the original parts by identity: a moved system prompt and the
     # anti-truncation reminder must stay outside the synthetic tool result.
     selected = {id(part) for part in text_parts}
@@ -84,7 +84,7 @@ def prepare_empty_retry(payload, text_parts):
             }}]},
         ]
         payload["request"] = {**request, "contents": contents}
-        log.info("[空回重试] 最新用户原文已移至 read_user_input 工具结果，尝试 2/2")
+        log.info("[输入包装] 最新用户原文已移至 read_user_input 工具结果")
         return
 
 
@@ -185,7 +185,7 @@ async def empty_output_stream(body, stream_request_func, headers=None):
         for key, value in usage.items():
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 previous_usage[key] = previous_usage.get(key, 0) + value
-        prepare_empty_retry(payload, text_parts)
+        wrap_user_input_in_tool(payload, text_parts)
 
 
 def retry_empty_stream(func):
@@ -216,7 +216,7 @@ def retry_empty_response(func):
             if not empty:
                 return response
             if attempt == 0 and not has_current_input_tool_result(payload["request"]):
-                prepare_empty_retry(payload, text_parts)
+                wrap_user_input_in_tool(payload, text_parts)
             else:
                 break
         return build_empty_model_output_response()

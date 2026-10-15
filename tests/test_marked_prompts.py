@@ -12,7 +12,7 @@ import httpx
 from fastapi import FastAPI
 
 from src import marked_prompts
-from src.api.empty_retry import empty_output_stream, prepare_empty_retry
+from src.api.empty_retry import empty_output_stream, wrap_user_input_in_tool
 from src.converter.anti_truncation import apply_anti_truncation, latest_user_text_parts
 from src.panel import marked_prompts as routes
 from src.storage.sqlite_manager import SQLiteManager
@@ -52,7 +52,7 @@ class MarkedPromptTests(unittest.IsolatedAsyncioTestCase):
             await marked_prompts.relocate_known_prompt(body)
         self.assertNotIn("systemInstruction", body["request"])
         self.assertIn("测试系统提示词", body["request"]["contents"][0]["parts"][0]["text"])
-        prepare_empty_retry(body, parts)
+        wrap_user_input_in_tool(body, parts)
         self.assertEqual(body["request"]["contents"][-1]["parts"][0]["functionResponse"]["response"]["text"], "走吧")
         different = {"systemInstruction": {"parts": [{"text": "测试系统提示词"}]}}
         self.assertFalse(await self.storage.has_marked_prompt(marked_prompts.system_prompt_identity(different)[0]))
