@@ -1,4 +1,4 @@
-full_hash=fe1ca46caed43182a84662fc277a9c77ef44d31b
-short_hash=fe1ca46
-message=feat: wrap anti-truncation inputs and extend marked prompt retries
-date=2026-10-15 13:22:41 +0800
+full_hash=b9dfcbdeb5dd4d4e9a1ec390c6cc127263763d5f
+short_hash=b9dfcbd
+message=fix: preserve upstream model version in responses
+date=2026-10-16 02:35:37 +0800
