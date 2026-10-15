@@ -916,7 +916,7 @@ def gemini_to_anthropic_response(
         "id": message_id,
         "type": "message",
         "role": "assistant",
-        "model": model,
+        "model": response_data.get("modelVersion") or model,
         "content": content,
         "stop_reason": stop_reason,
         "stop_sequence": None,
@@ -1037,6 +1037,8 @@ async def gemini_stream_to_anthropic_stream(
                     "type": "error", "error": {"type": "api_error", **error},
                 })
                 return
+
+            model = response.get("modelVersion") or model
 
             candidate = (response.get("candidates", []) or [{}])[0] or {}
             parts = (candidate.get("content", {}) or {}).get("parts", []) or []

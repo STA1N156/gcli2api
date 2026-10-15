@@ -177,6 +177,7 @@ async def chat_completions(
             return
 
         response_id = str(uuid.uuid4())
+        model_state = {}
 
         # yield所有数据,处理可能的错误Response
         async for chunk in prepend_async_item(first_chunk, stream_gen):
@@ -219,7 +220,8 @@ async def chat_completions(
                         openai_chunk_str = convert_gemini_to_openai_stream(
                             chunk_str,
                             real_model,
-                            response_id
+                            response_id,
+                            model_state=model_state,
                         )
 
                         if openai_chunk_str:
