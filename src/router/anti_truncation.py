@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from src.api.empty_output import build_empty_model_output_response, is_empty_model_output_error
 from src.api.empty_retry import empty_output_stream, prepare_empty_retry
 from src.api.utils import collect_streaming_response
-from src.converter.anti_truncation import ReplyToolStream, apply_anti_truncation
+from src.converter.anti_truncation import ReplyToolStream, apply_anti_truncation, latest_user_text_parts
 
 
 def _sse(data):
@@ -19,7 +19,7 @@ async def anti_truncation_gemini_stream(
     api_request: Dict[str, Any],
     stream_request_func: Callable[..., AsyncIterator[Any]],
 ) -> AsyncIterator[Any]:
-    """Force a reply tool; retry empty bodies once with a trailing hint, then a leading hint."""
+    """Force a reply tool; retry an empty body once with Unicode-encoded user text."""
     payload = apply_anti_truncation(api_request)
     passthrough = payload is api_request
     # Internal retry hint; API clients build upstream bodies without this field.
@@ -32,8 +32,8 @@ async def anti_truncation_gemini_stream(
         return
 
     previous_usage = {}
-    continue_hint = {"text": "（继续）"}
-    for attempt in range(3):
+    text_parts = latest_user_text_parts(payload["request"])
+    for attempt in range(2):
         processor = ReplyToolStream()
         error_response = None
         done = False
@@ -76,8 +76,8 @@ async def anti_truncation_gemini_stream(
             return
         final = processor.finish()
         response = final.get("response", final)
-        if not processor.has_output and attempt < 2:
-            prepare_empty_retry(payload, continue_hint, attempt)
+        if not processor.has_output and attempt == 0:
+            prepare_empty_retry(payload, text_parts)
             for key, value in processor.usage.items():
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     previous_usage[key] = previous_usage.get(key, 0) + value

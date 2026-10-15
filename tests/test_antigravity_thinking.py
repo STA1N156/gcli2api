@@ -85,25 +85,32 @@ class AntigravityThinkingTests(unittest.TestCase):
         self.assertNotIn("thinkingBudget", result)
         self.assertEqual(self.normalize("claude-sonnet-4-6-thinking", contents=contents)["thinkingBudget"], 8192)
 
-    def test_max_is_high(self):
-        for model in ("gemini-3.8-flash-max", "claude-opus-5-5-max"):
-            with self.subTest(model=model):
-                config = {}
-                result = _normalize_antigravity_request({}, model, config, True)
-                self.assertTrue(result.endswith("-high"))
-                self.assertEqual(config["thinkingConfig"]["thinkingLevel"], "HIGH")
-        self.assertEqual(self.normalize("gemini-4-argon-low", {"thinkingLevel": "max"})["thinkingLevel"], "HIGH")
+    def test_max_and_xhigh_are_high(self):
+        for effort in ("max", "xhigh"):
+            for base in ("gemini-3.8-flash", "gemini-4-argon", "claude-opus-5-5"):
+                with self.subTest(model=base, effort=effort):
+                    config = {}
+                    result = _normalize_antigravity_request({}, f"{base}-{effort}", config, True)
+                    self.assertEqual(result, f"{base}-high")
+                    self.assertEqual(config["thinkingConfig"]["thinkingLevel"], "HIGH")
+                    self.assertEqual(self.normalize(base, {"thinkingLevel": effort.upper()})["thinkingLevel"], "HIGH")
+                    self.assertEqual(self.normalize(f"{base}-{effort}", {"thinkingLevel": "LOW"})["thinkingLevel"], "LOW")
 
-        request = {"model": "claude-sonnet-5-5-high", "reasoning_effort": "max",
-                   "messages": [{"role": "user", "content": "Hello"}]}
-        with patch("src.converter.openai2gemini.merge_system_messages", new=AsyncMock(return_value=request)):
-            result = asyncio.run(convert_openai_to_gemini_request(request))
-        self.assertEqual(result["generationConfig"]["thinkingConfig"]["thinkingLevel"], "HIGH")
+            request = {"model": "claude-sonnet-5-5-low", "reasoning_effort": effort.upper(),
+                       "messages": [{"role": "user", "content": "Hello"}]}
+            with patch("src.converter.openai2gemini.merge_system_messages", new=AsyncMock(return_value=request)):
+                result = asyncio.run(convert_openai_to_gemini_request(request))
+            self.assertEqual(result["generationConfig"]["thinkingConfig"]["thinkingLevel"], "HIGH")
 
-        request = {"model": "gemini-3.1-pro-preview-max"}
-        with patch("config.get_return_thoughts_to_frontend", new=AsyncMock(return_value=True)):
-            result = asyncio.run(normalize_gemini_request(request))
-        self.assertEqual(result["generationConfig"]["thinkingConfig"]["thinkingLevel"].upper(), "HIGH")
+            requests = [
+                {"model": f"gemini-3.1-pro-preview-{effort}"},
+                {"model": "gemini-3.1-pro-preview-low", "generationConfig": {"thinkingConfig": {"thinkingLevel": effort}}},
+            ]
+            for request in requests:
+                with patch("config.get_return_thoughts_to_frontend", new=AsyncMock(return_value=True)):
+                    result = asyncio.run(normalize_gemini_request(request))
+                self.assertEqual(result["model"], "gemini-3.1-pro-preview")
+                self.assertEqual(result["generationConfig"]["thinkingConfig"]["thinkingLevel"].upper(), "HIGH")
 
     def test_output_limits_survive_request_wrapping(self):
         async def check():
@@ -130,8 +137,8 @@ class AntigravityThinkingTests(unittest.TestCase):
 
     def test_argon_high_uses_default_and_max_uses_high_unless_client_sets_level(self):
         async def check():
-            for suffix in ("high", "max"):
-                for effort in (None, "high", "max", "medium", "low"):
+            for suffix in ("high", "max", "xhigh"):
+                for effort in (None, "high", "max", "xhigh", "medium", "low"):
                     with self.subTest(suffix=suffix, effort=effort):
                         request = {"model": f"gemini-4-argon-{suffix}",
                                    "messages": [{"role": "user", "content": "Hello"}]}
@@ -144,8 +151,8 @@ class AntigravityThinkingTests(unittest.TestCase):
                         payload, _ = await wrap_cli_request(result, result["model"], "test-project")
                         self.assertEqual(payload["model"], "gemini-4-argon-high")
                         thinking = payload["request"]["generationConfig"]["thinkingConfig"]
-                        expected = (effort or ("high" if suffix == "max" else "")).upper()
-                        expected = "HIGH" if expected == "MAX" else expected or None
+                        expected = (effort or ("high" if suffix in ("max", "xhigh") else "")).upper()
+                        expected = "HIGH" if expected in ("MAX", "XHIGH") else expected or None
                         self.assertEqual(thinking.get("thinkingLevel"), expected)
                         self.assertNotIn("thinkingBudget", thinking)
                         self.assertTrue(thinking["includeThoughts"])

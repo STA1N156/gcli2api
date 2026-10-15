@@ -1,6 +1,7 @@
-"""Retry empty replies twice without buffering ordinary streaming text."""
+"""Retry an empty reply once with Unicode-encoded user text; stream text immediately."""
 
 import json
+import re
 from contextlib import aclosing
 from functools import wraps
 
@@ -14,12 +15,46 @@ from src.api.empty_output import (
     is_empty_model_output,
     is_empty_model_output_error,
 )
-from src.converter.anti_truncation import move_continue_hint
+from src.converter.anti_truncation import latest_user_text_parts
 
 
-def prepare_empty_retry(payload, hint, attempt):
-    payload["request"] = move_continue_hint(payload["request"], hint, to_start=attempt > 0)
-    log.info(f"[空回重试] 将（继续）移到最新用户输入{'开头' if attempt else '末尾'}，尝试 {attempt + 2}/3")
+_UNICODE_SPAN = re.compile(r"(⟦U:[0-9A-Fa-f]{4,6}(?:\s+[0-9A-Fa-f]{4,6})*⟧)")
+
+
+def _encode_user_text(text):
+    result = []
+    for index, part in enumerate(_UNICODE_SPAN.split(text)):
+        if not part:
+            continue
+        if index % 2 and all(
+            value <= 0x10FFFF and not 0xD800 <= value <= 0xDFFF
+            for value in (int(code, 16) for code in part[3:-1].split())
+        ):
+            result.append(part)
+        else:
+            result.append("⟦U:" + " ".join(f"{ord(char):04X}" for char in part) + "⟧")
+    return "".join(result)
+
+
+def prepare_empty_retry(payload, text_parts):
+    # Match the original parts by identity: a moved system prompt and the
+    # anti-truncation reminder must not be encoded along with the user's input.
+    replacements = {
+        id(part): {**part, "text": _encode_user_text(part["text"])}
+        for part in text_parts
+    }
+    request = payload["request"]
+    contents = list(request.get("contents") or [])
+    for index in range(len(contents) - 1, -1, -1):
+        content = contents[index]
+        parts = content.get("parts") or []
+        if any(id(part) in replacements for part in parts):
+            contents[index] = {
+                **content, "parts": [replacements.get(id(part), part) for part in parts],
+            }
+            break
+    payload["request"] = {**request, "contents": contents}
+    log.info("[空回重试] 最新用户输入已转为 Unicode 编码，尝试 2/2")
 
 
 def _sse(data):
@@ -36,9 +71,9 @@ def _add_usage(data, previous_usage):
 
 async def empty_output_stream(body, stream_request_func, headers=None):
     payload = {**body, "_empty_retry_active": True}
-    hint = {"text": "（继续）"}
+    text_parts = latest_user_text_parts(payload["request"])
     previous_usage = {}
-    for attempt in range(3):
+    for attempt in range(2):
         has_output = False
         error = None
         usage = {}
@@ -113,13 +148,13 @@ async def empty_output_stream(body, stream_request_func, headers=None):
             return
         if has_output:
             return
-        if attempt == 2:
+        if attempt == 1:
             yield build_empty_model_output_response()
             return
         for key, value in usage.items():
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 previous_usage[key] = previous_usage.get(key, 0) + value
-        prepare_empty_retry(payload, hint, attempt)
+        prepare_empty_retry(payload, text_parts)
 
 
 def retry_empty_stream(func):
@@ -141,15 +176,15 @@ def retry_empty_response(func):
         if body.get("_empty_retry_active"):
             return await func(body=body, headers=headers)
         payload = {**body, "_empty_retry_active": True}
-        hint = {"text": "（继续）"}
-        for attempt in range(3):
+        text_parts = latest_user_text_parts(payload["request"])
+        for attempt in range(2):
             response = await func(body=payload, headers=headers)
             empty = is_empty_model_output_error(response) or (
                 response.status_code == 200 and is_empty_model_output(response.body)
             )
             if not empty:
                 return response
-            if attempt < 2:
-                prepare_empty_retry(payload, hint, attempt)
+            if attempt == 0:
+                prepare_empty_retry(payload, text_parts)
         return build_empty_model_output_response()
     return wrapped

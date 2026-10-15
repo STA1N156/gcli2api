@@ -423,7 +423,7 @@ def get_base_model_name(model_name: str) -> str:
     suffixes = [
         "-maxthinking", "-nothinking",
         "-minimal", "-medium", "-search", "-think",
-        "-high", "-max", "-low",
+        "-xhigh", "-high", "-max", "-low",
     ]
     result = model_name
     changed = True
@@ -510,7 +510,7 @@ def get_thinking_settings(model_name: str) -> tuple[Optional[int], Optional[str]
 
     # Gemini 3 Preview 系列: 使用 thinkingLevel
     if "gemini-3" in base_model:
-        if "-high" in model_name or "-max" in model_name:
+        if "-high" in model_name or "-xhigh" in model_name or "-max" in model_name:
             return None, "high"
         elif "-medium" in model_name:
             # 仅 3-flash-preview 支持 medium
@@ -532,7 +532,7 @@ def get_thinking_settings(model_name: str) -> tuple[Optional[int], Optional[str]
             # 2.5-flash-max: 24576, 2.5-pro-max: 32768
             budget = 24576 if "flash" in base_model else 32768
             return budget, None
-        elif "-high" in model_name:
+        elif "-high" in model_name or "-xhigh" in model_name:
             # 2.5-flash-high: 16000, 2.5-pro-high: 16000
             return 16000, None
         elif "-medium" in model_name:
@@ -605,7 +605,7 @@ async def normalize_gemini_request(
     thinking_level = generation_config.get("thinkingConfig", {}).get("thinkingLevel")
     if thinking_budget is None and thinking_level is None:
         thinking_budget, thinking_level = get_thinking_settings(model)
-    if isinstance(thinking_level, str) and thinking_level.lower() == "max":
+    if isinstance(thinking_level, str) and thinking_level.lower() in {"max", "xhigh"}:
         thinking_level = "HIGH"
 
     # 假如 is_thinking_model 为真或者思考预算/等级不为空，设置 thinkingConfig

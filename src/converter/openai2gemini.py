@@ -1391,7 +1391,7 @@ async def convert_openai_to_gemini_request(openai_request: Dict[str, Any]) -> Di
     model = openai_request.get("model", "")
 
     effort = openai_request.get("reasoning_effort")
-    if isinstance(effort, str) and effort.lower() == "max":
+    if isinstance(effort, str) and effort.lower() in {"max", "xhigh"}:
         effort = "high"
     if (
         isinstance(effort, str) and effort.lower() in {"minimal", "low", "medium", "high"}
