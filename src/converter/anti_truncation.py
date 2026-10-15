@@ -97,27 +97,15 @@ def move_system_to_first_user(request: Dict[str, Any]) -> Dict[str, Any]:
     return request
 
 
-def move_continue_hint(request: Dict[str, Any], hint: dict, *, to_start: bool) -> Dict[str, Any]:
-    """Move only our own retry hint; preserve user text, tool results and reminders."""
-    contents = list(request.get("contents") or [])
-    for index in range(len(contents) - 1, -1, -1):
-        content = contents[index]
+def latest_user_text_parts(request: Dict[str, Any]) -> list:
+    """Keep original user parts identifiable after a system-prompt move."""
+    for content in reversed(request.get("contents") or []):
         parts = content.get("parts") or []
         if content.get("role") != "user" or (parts and all("functionResponse" in part for part in parts)):
             continue
-        parts = [part for part in parts if part is not hint]
-        if to_start:
-            # Keep the anti-truncation reminder before the latest user input.
-            position = next((
-                i + 1 for i, part in enumerate(parts)
-                if part.get("text") == f"{REPLY_TOOL_INSTRUCTION}\n"
-            ), 0)
-            parts.insert(position, hint)
-        else:
-            parts.append(hint)
-        contents[index] = {**content, "parts": parts}
-        return {**request, "contents": contents}
-    return request
+        return [part for part in parts if isinstance(part.get("text"), str)
+                and part["text"] != f"{REPLY_TOOL_INSTRUCTION}\n"]
+    return []
 
 
 class ReplyToolStream:

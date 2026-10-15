@@ -223,6 +223,26 @@ async def _record_response_error(
     )
 
 
+def _uses_system_prompt_retry(body: Dict[str, Any]) -> bool:
+    model = body.get("model", "").lower().replace(".", "-")
+    return bool(
+        body.get("_anti_truncation")
+        or model == "gemini-4-argon" or model.startswith("gemini-4-argon-")
+        or (model.startswith("claude-") and "-5-5-" in f"{model}-")
+    )
+
+
+def _move_flagged_system_prompt(body: Dict[str, Any], final_payload: Dict[str, Any]) -> bool:
+    moved_request = move_system_to_first_user(final_payload["request"])
+    if moved_request is final_payload["request"]:
+        return False
+    final_payload["request"] = moved_request
+    # Persist the move if the outer loop subsequently retries an empty body.
+    body["request"] = move_system_to_first_user(body["request"])
+    log.info("[ANTIGRAVITY] 被标记重试：已将系统提示词移至首条用户消息")
+    return True
+
+
 @retry_empty_stream
 async def stream_request(
     body: Dict[str, Any],
@@ -318,16 +338,11 @@ async def stream_request(
                     if success_recorded or not is_retryable_status(chunk.status_code):
                         yield client_chunk
                         return
-                    if body.get("_anti_truncation") and client_chunk is not chunk:
-                        moved_request = move_system_to_first_user(final_payload["request"])
-                        if moved_request is final_payload["request"]:
+                    if _uses_system_prompt_retry(body) and client_chunk is not chunk:
+                        if not _move_flagged_system_prompt(body, final_payload):
                             # This prompt adjustment gets one extra attempt, not another rotation loop.
                             yield client_chunk
                             return
-                        final_payload["request"] = moved_request
-                        # Preserve this move if the outer anti-truncation loop retries an empty body.
-                        body["request"] = move_system_to_first_user(body["request"])
-                        log.info("[ANTIGRAVITY] 抗截断重试：已将系统提示词移至首条用户消息")
                     last_error = client_chunk
                     retry_current = True
                     break
@@ -488,8 +503,9 @@ async def non_stream_request(
                         continue
 
             error_text = getattr(response, "text", "") or ""
+            original_error = _response_from_httpx(response)
             last_error = rewrite_input_token_limit_response(
-                _rewrite_resource_exhausted_response(_response_from_httpx(response))
+                _rewrite_resource_exhausted_response(original_error)
             )
             log.warning(
                 f"[ANTIGRAVITY] 上游返回 {response.status_code}: "
@@ -501,6 +517,9 @@ async def non_stream_request(
             )
             if not is_retryable_status(response.status_code):
                 return last_error
+            if _uses_system_prompt_retry(body) and last_error is not original_error:
+                if not _move_flagged_system_prompt(body, final_payload):
+                    return last_error
         except Exception as exc:
             log.warning(
                 f"[ANTIGRAVITY] 请求异常，切换凭证: {current_file}: {exc}"
