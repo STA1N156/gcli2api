@@ -163,7 +163,39 @@ class PSQLManager:
             CREATE INDEX IF NOT EXISTS idx_ag_rotation_order ON antigravity_credentials(rotation_order)
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS marked_prompts (
+                id TEXT PRIMARY KEY, text TEXT NOT NULL, model TEXT NOT NULL,
+                created_at DOUBLE PRECISION NOT NULL, chars INTEGER NOT NULL, preview TEXT NOT NULL
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_marked_prompts_created ON marked_prompts(created_at)")
         log.debug("PostgreSQL tables and indexes created")
+
+    async def save_marked_prompt(self, record: Dict[str, Any]) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO marked_prompts (id,text,model,created_at,chars,preview) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING",
+                *(record[key] for key in ("id", "text", "model", "created_at", "chars", "preview")),
+            )
+
+    async def has_marked_prompt(self, prompt_id: str) -> bool:
+        async with self._pool.acquire() as conn:
+            return await conn.fetchval("SELECT EXISTS(SELECT 1 FROM marked_prompts WHERE id=$1)", prompt_id)
+
+    async def list_marked_prompts(self, offset: int, limit: int) -> Dict[str, Any]:
+        async with self._pool.acquire() as conn:
+            total = await conn.fetchval("SELECT COUNT(*) FROM marked_prompts")
+            rows = await conn.fetch(
+                "SELECT id,model,created_at,chars,preview FROM marked_prompts ORDER BY created_at DESC,id LIMIT $1 OFFSET $2",
+                limit, offset,
+            )
+            return {"items": [dict(row) for row in rows], "total": total}
+
+    async def get_marked_prompts(self, prompt_ids: List[str]) -> List[Dict[str, Any]]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM marked_prompts WHERE id=ANY($1::text[])", prompt_ids)
+            return [dict(row) for row in rows]
 
     async def _ensure_schema_compatibility(self, conn: asyncpg.Connection) -> None:
         """确保数据库结构兼容，自动修复缺失的列"""

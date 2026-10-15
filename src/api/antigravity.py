@@ -40,6 +40,7 @@ from src.converter.anti_truncation import move_system_to_first_user
 from src.converter.antigravity_fix import ensure_user_ending
 from src.httpx_client import post_async, stream_post_async
 from src.models import Model, model_to_dict
+from src.marked_prompts import relocate_known_prompt, remember_marked_prompt
 from src.session_affinity import extract_cache_session_key
 from src.utils import ANTIGRAVITY_USER_AGENT
 
@@ -253,6 +254,7 @@ async def stream_request(
     """流式请求；失败时只选择本次尚未尝试的可用凭证。"""
     model_name = body.get("model", "")
     session_key = extract_cache_session_key(body, headers)
+    await relocate_known_prompt(body)
     attempted: Set[str] = set()
     selected = await _get_valid_request_credential(
         model_name, session_key, attempted
@@ -339,6 +341,8 @@ async def stream_request(
                     client_chunk = rewrite_input_token_limit_response(
                         _rewrite_resource_exhausted_response(chunk)
                     )
+                    if chunk.status_code == 429 and client_chunk is not chunk:
+                        await remember_marked_prompt(body["request"], model_name)
                     if success_recorded or not is_retryable_status(chunk.status_code):
                         yield client_chunk
                         return
@@ -433,6 +437,7 @@ async def non_stream_request(
 
     model_name = body.get("model", "")
     session_key = extract_cache_session_key(body, headers)
+    await relocate_known_prompt(body)
     attempted: Set[str] = set()
     selected = await _get_valid_request_credential(
         model_name, session_key, attempted
@@ -513,6 +518,8 @@ async def non_stream_request(
             last_error = rewrite_input_token_limit_response(
                 _rewrite_resource_exhausted_response(original_error)
             )
+            if response.status_code == 429 and last_error is not original_error:
+                await remember_marked_prompt(body["request"], model_name)
             log.warning(
                 f"[ANTIGRAVITY] 上游返回 {response.status_code}: "
                 f"credential={current_file}, model={model_name}, "

@@ -2946,7 +2946,7 @@ async function loadConfig() {
 
             populateConfigForm();
             form.classList.remove('hidden');
-            showStatus('配置加载成功', 'success');
+            window.updateSettingsState?.('配置已同步');
         } else {
             showStatus(`加载配置失败: ${data.detail || data.error || '未知错误'}`, 'error');
         }
@@ -3010,6 +3010,10 @@ function setConfigField(fieldId, value) {
 }
 
 async function saveConfig() {
+    const button = document.getElementById('settingsSaveButton');
+    if (button?.disabled) return;
+    if (button) button.disabled = true;
+    const revision = AppState.settingsRevision || 0;
     try {
         const getValue = (id, def = '') => document.getElementById(id)?.value.trim() || def;
         const getInt = (id, def = 0) => parseInt(document.getElementById(id)?.value) || def;
@@ -3068,12 +3072,15 @@ async function saveConfig() {
                 showStatus(message, 'success');
             }
 
-            setTimeout(() => loadConfig(), 1000);
+            AppState.currentConfig = { ...AppState.currentConfig, ...config };
+            if ((AppState.settingsRevision || 0) === revision) window.updateSettingsState?.('已保存');
         } else {
             showStatus(`保存配置失败: ${data.detail || data.error || '未知错误'}`, 'error');
         }
     } catch (error) {
         showStatus(`网络错误: ${error.message}`, 'error');
+    } finally {
+        if (button) button.disabled = false;
     }
 }
 

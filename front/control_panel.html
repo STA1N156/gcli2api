@@ -1281,7 +1281,7 @@
             }
         }
     </style>
-    <link rel="stylesheet" href="./front/panel.css?v=quota-20261014">
+    <link rel="stylesheet" href="./front/panel.css?v=settings-20261015">
 </head>
 
 <body>
@@ -1987,18 +1987,32 @@
 
             <!-- 配置管理标签页 -->
             <div id="configTab" class="tab-content">
-                <h3>配置管理</h3>
-                <p>管理系统配置参数，修改后立即生效</p>
-
-                <div class="manage-actions">
-                    <button class="refresh-btn" onclick="loadConfig()">刷新配置</button>
-                    <button class="btn" onclick="saveConfig()">保存配置</button>
+                <div class="settings-header">
+                    <div><span class="settings-eyebrow">CONTROL CENTER</span><h3>系统设置</h3><p>路由、回复与服务配置，分区管理。</p></div>
+                    <div class="settings-actions">
+                        <span id="settingsSaveState" role="status">配置已同步</span>
+                        <button class="refresh-btn" onclick="loadConfig()"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#refresh"></use></svg> 刷新</button>
+                        <button class="btn" id="settingsSaveButton" onclick="saveConfig()">保存修改</button>
+                    </div>
                 </div>
 
                 <div id="configSection">
                     <div class="loading" id="configLoading">正在加载配置...</div>
-                    <div id="configForm" class="hidden">
-                        <div class="config-group">
+                    <div id="configForm" class="hidden settings-layout">
+                        <nav class="settings-nav" aria-label="设置分类">
+                            <span class="settings-nav-label">工作流</span>
+                            <button type="button" class="active" data-settings-target="routing" onclick="selectSettingsPane('routing')"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#settings"></use></svg> 路由与重试</button>
+                            <button type="button" data-settings-target="marked" onclick="selectSettingsPane('marked')"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#shield"></use></svg> 标记提示词 <span id="markedPromptNavCount">—</span></button>
+                            <button type="button" data-settings-target="compatibility" onclick="selectSettingsPane('compatibility')"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#chat"></use></svg> 回复与兼容</button>
+                            <button type="button" data-settings-target="diagnostics" onclick="selectSettingsPane('diagnostics')"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#search"></use></svg> 请求诊断</button>
+                            <span class="settings-nav-label">服务</span>
+                            <button type="button" data-settings-target="server" onclick="selectSettingsPane('server')"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#lock"></use></svg> 服务与访问</button>
+                            <button type="button" data-settings-target="network" onclick="selectSettingsPane('network')"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#link"></use></svg> 网络与端点</button>
+                            <button type="button" data-settings-target="keepalive" onclick="selectSettingsPane('keepalive')"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#clock"></use></svg> 保活设置</button>
+                            <div class="settings-sidebar-note">修改后点击保存。主机、端口与目录变更需要重启服务。</div>
+                        </nav>
+                        <div class="settings-pages">
+                        <div class="config-group" data-settings-panel="server" hidden>
                             <h4>服务器配置</h4>
 
                             <div class="form-group">
@@ -2017,24 +2031,24 @@
 
                             <div class="form-group">
                                 <label for="configApiPassword">API访问密码:</label>
-                                <input type="text" id="configApiPassword" class="config-input" placeholder="pwd" />
+                                <input type="password" id="configApiPassword" class="config-input" placeholder="pwd" autocomplete="off" />
                                 <small class="config-note">聊天API访问密码，用于OpenAI和Gemini API端点的认证</small>
                             </div>
 
                             <div class="form-group">
                                 <label for="configPanelPassword">控制面板密码:</label>
-                                <input type="text" id="configPanelPassword" class="config-input" placeholder="pwd" />
+                                <input type="password" id="configPanelPassword" class="config-input" placeholder="pwd" autocomplete="off" />
                                 <small class="config-note">控制面板访问密码，用于web界面登录认证</small>
                             </div>
 
                             <div class="form-group">
                                 <label for="configPassword">通用密码:</label>
-                                <input type="text" id="configPassword" class="config-input" placeholder="pwd" />
+                                <input type="password" id="configPassword" class="config-input" placeholder="pwd" autocomplete="off" />
                                 <small class="config-note">（兼容性保留）设置后将覆盖上述两个密码，留空则使用分开的密码设置</small>
                             </div>
                         </div>
 
-                        <div class="config-group">
+                        <div class="config-group" data-settings-panel="network" hidden>
                             <h4>基础配置</h4>
 
                             <div class="form-group">
@@ -2051,7 +2065,7 @@
                             </div>
                         </div>
 
-                        <div class="config-group">
+                        <div class="config-group" data-settings-panel="network" hidden>
                             <h4>端点配置</h4>
 
                             <!-- 快速配置按钮 -->
@@ -2106,8 +2120,8 @@
                             </div>
                         </div>
 
-                        <div class="config-group">
-                            <h4>凭证选择配置</h4>
+                        <div class="config-group" data-settings-panel="routing">
+                            <h4>路由与重试</h4>
 
                             <div class="form-group">
                                 <label>
@@ -2149,9 +2163,11 @@
                                     <input type="checkbox" id="emptyOutputErrorEnabled" class="config-checkbox" />
                                     空回报错 400
                                 </label>
-                                <small class="config-note">控制其他请求路径的空回报错。GCLI/Antigravity（含抗截断）固定先进行两次（继续）重试，仍空回则返回400，不受此开关影响。</small>
+                                <small class="config-note">控制其他请求路径的空回报错。GCLI / Antigravity 最多发送两次：首次正常发送，空回后以工具结果包装最新用户原文再试一次；仍空回则返回 400。</small>
                             </div>
-
+                        </div>
+                        <div class="config-group" data-settings-panel="diagnostics" hidden>
+                            <h4>请求诊断</h4>
                             <div class="form-group">
                                 <label for="requestCaptureType">请求体捕捉类型:</label>
                                 <select id="requestCaptureType" class="config-input">
@@ -2180,8 +2196,8 @@
                         </div>
 
 
-                        <div class="config-group">
-                            <h4>兼容性配置</h4>
+                        <div class="config-group" data-settings-panel="compatibility" hidden>
+                            <h4>回复与兼容</h4>
 
                             <div class="form-group">
                                 <label>
@@ -2192,8 +2208,7 @@
                                         style="color: #28a745;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg> 支持热更新</span></small>
                                 <div class="config-info"
                                     style="background-color: #fff3cd; border: 1px solid #ffc107; color: #856404;">
-                                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#alert"></use></svg> 注意：</strong>该选项可能会降低模型理解能力，但是能避免流式空回的情况。
-                                    <br><strong>适用场景：</strong>当遇到流式传输时模型不返回内容或返回空响应时启用此选项。
+                                    <strong>按需启用：</strong>这会改变全部请求的消息结构，并不保证解决空回。标记提示词的自动搬迁无需开启此选项。
                                 </div>
                             </div>
 
@@ -2206,8 +2221,7 @@
                                         style="color: #28a745;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg> 支持热更新</span></small>
                                 <div class="config-info"
                                     style="background-color: #e3f2fd; border: 1px solid #2196f3; color: #0d47a1;">
-                                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#chat"></use></svg> 说明：</strong>某些模型（如Gemini 2.0
-                                    Pro）支持thinking模式，会在生成回答前先输出思考过程。启用后可以看到模型的思考过程；禁用后只显示最终回答，让输出更简洁。
+                                    <strong>显示设置：</strong>仅控制是否向客户端转发模型提供的思考摘要，不会替模型调整思考强度。
                                 </div>
                             </div>
 
@@ -2228,12 +2242,12 @@
                             </div>
                         </div>
 
-                        <div class="config-group">
+                        <div class="config-group" data-settings-panel="routing">
                             <h4>空回重试与抗截断</h4>
 
                             <div class="form-group">
                                 <label>空回重试（普通模型和抗截断模型）</label>
-                                <small class="config-note">仅在没有正文、工具调用或图片等有效输出时重试，思考不算正文。固定先在最新用户输入末尾加（继续）重试一次，再移到开头重试一次；仍空回则返回400。英文拒绝提示不重试。抗截断遇到对应429时搬迁系统提示词的重试单独计算，不占这两次空回重试；普通模型不搬迁系统提示词。</small>
+                                <small class="config-note">首次正常发送；空回后，将最新用户原文放入 read_user_input 工具结果，再尝试一次。若本轮输入已经是完整配对的 read_user_input 工具结果，空回直接返回 400，不重复包装；历史记录不影响本轮。思考不算正文，英文拒绝文本不按空回重试。已知被标记的完整系统提示词会在发送前直接移到首条用户消息，仍保留一次空回重试。</small>
                             </div>
 
                             <div class="form-group">
@@ -2249,7 +2263,20 @@
                             </div>
                         </div>
 
-                        <div class="config-group">
+                        <div class="config-group" data-settings-panel="marked" hidden>
+                            <div class="marked-heading"><div><h4>标记提示词</h4><p>记住已触发标记错误的系统提示词，下次直接搬迁，少一次失败请求。</p></div><span class="settings-badge">多 Worker 共享</span></div>
+                            <div class="marked-notice"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#info"></use></svg><span>Antigravity 请求按完整系统提示词精确匹配，忽略程序附加的抗截断说明。记录不等于确认违规；下载包含完整原文，请妥善保管。</span></div>
+                            <div class="marked-toolbar">
+                                <label><input type="checkbox" id="markedPromptSelectAll" onchange="toggleMarkedPromptPage(this.checked)"> 全选本页</label>
+                                <span id="markedPromptSelection">已选 0 项</span>
+                                <div class="marked-toolbar-actions"><button type="button" class="refresh-btn" onclick="loadMarkedPrompts()">刷新列表</button><button type="button" class="btn" id="markedPromptDownload" onclick="downloadMarkedPrompts()" disabled>下载选中 TXT</button></div>
+                            </div>
+                            <div id="markedPromptList" class="marked-list" aria-live="polite"></div>
+                            <div class="marked-pagination"><span id="markedPromptTotal">正在加载…</span><div><button type="button" class="refresh-btn" id="markedPromptPrev" onclick="changeMarkedPromptPage(-1)" disabled>上一页</button><button type="button" class="refresh-btn" id="markedPromptNext" onclick="changeMarkedPromptPage(1)" disabled>下一页</button></div></div>
+                            <small class="config-note">单条下载为 TXT；多选下载为 ZIP，每条提示词对应一个 TXT 文件。无需点击“保存修改”。</small>
+                        </div>
+
+                        <div class="config-group" data-settings-panel="keepalive" hidden>
                             <h4>保活配置</h4>
 
                             <div class="form-group">
@@ -2270,7 +2297,7 @@
                             </div>
                         </div>
 
-                        <div class="config-group">
+                        <div class="config-group" data-settings-panel="server" hidden>
                             <h4>配置热更新说明</h4>
 
                             <div class="form-group">
@@ -2278,10 +2305,10 @@
                                     style="background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724;">
                                     <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> 热更新配置（立即生效）：</strong>
                                     <ul style="margin: 8px 0; padding-left: 20px; color: #212529;">
-                                        <li><strong>网络配置：</strong>代理设置、端点配置、HTTP超时时间、最大连接数</li>
-                                        <li><strong>API配置：</strong>凭证轮换次数、错误重试设置、自动封禁配置</li>
+                                        <li><strong>网络配置：</strong>代理设置与代理端点</li>
+                                        <li><strong>API配置：</strong>凭证尝试上限、重试间隔与粘性会话</li>
                                         <li><strong>密码配置：</strong>API密码、控制面板密码、通用密码</li>
-                                        <li><strong>功能配置：</strong>抗截断最大重试次数</li>
+                                        <li><strong>功能配置：</strong>思考显示、回复兼容与保活</li>
                                     </ul>
                                 </div>
                             </div>
@@ -2297,6 +2324,7 @@
                                 </div>
                             </div>
 
+                        </div>
                         </div>
                     </div>
                 </div>
@@ -2420,7 +2448,8 @@
     </div>
 
     <!-- 引入公共JavaScript模块 -->
-    <script src="./front/common.js?v=quota-20261014"></script>
+    <script src="./front/common.js?v=settings-20261015"></script>
+    <script src="./front/settings.js?v=20261015"></script>
 
 </body>
 
