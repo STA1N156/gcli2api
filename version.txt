@@ -1,4 +1,4 @@
-full_hash=3d220e6b2c9e4020bd083ada8a3912a4d1da38b2
-short_hash=3d220e6
-message=feat: refine empty retries and manage marked prompts
-date=2026-10-15 12:02:09 +0800
+full_hash=fe1ca46caed43182a84662fc277a9c77ef44d31b
+short_hash=fe1ca46
+message=feat: wrap anti-truncation inputs and extend marked prompt retries
+date=2026-10-15 13:22:41 +0800
