@@ -20,7 +20,7 @@ class AntigravityThinkingTests(unittest.TestCase):
             for level in ("minimal", "low", "medium", "high"):
                 with self.subTest(model=model, level=level):
                     result = self.normalize(f"{model}-{level}")
-                    expected = None if model == "gemini-4-argon" and level == "high" else level.upper()
+                    expected = None if model in {"gemini-3.8-flash", "gemini-4-argon"} and level == "high" else level.upper()
                     self.assertEqual(result.get("thinkingLevel"), expected)
                     self.assertNotIn("thinkingBudget", result)
                     self.assertTrue(result["includeThoughts"])
@@ -135,27 +135,28 @@ class AntigravityThinkingTests(unittest.TestCase):
         with patch("config.get_return_thoughts_to_frontend", new=AsyncMock(return_value=True)):
             asyncio.run(check())
 
-    def test_argon_high_uses_default_and_max_uses_high_unless_client_sets_level(self):
+    def test_high_uses_default_and_max_uses_high_unless_client_sets_level(self):
         async def check():
-            for suffix in ("high", "max", "xhigh"):
-                for effort in (None, "high", "max", "xhigh", "medium", "low"):
-                    with self.subTest(suffix=suffix, effort=effort):
-                        request = {"model": f"gemini-4-argon-{suffix}",
-                                   "messages": [{"role": "user", "content": "Hello"}]}
-                        if effort:
-                            request["reasoning_effort"] = effort
-                        with patch("src.converter.openai2gemini.merge_system_messages", new=AsyncMock(return_value=request)):
-                            result = await convert_openai_to_gemini_request(request)
-                        result["model"] = request["model"]
-                        result = await normalize_antigravity_request(result)
-                        payload, _ = await wrap_cli_request(result, result["model"], "test-project")
-                        self.assertEqual(payload["model"], "gemini-4-argon-high")
-                        thinking = payload["request"]["generationConfig"]["thinkingConfig"]
-                        expected = (effort or ("high" if suffix in ("max", "xhigh") else "")).upper()
-                        expected = "HIGH" if expected in ("MAX", "XHIGH") else expected or None
-                        self.assertEqual(thinking.get("thinkingLevel"), expected)
-                        self.assertNotIn("thinkingBudget", thinking)
-                        self.assertTrue(thinking["includeThoughts"])
+            for base in ("gemini-3.8-flash", "gemini-4-argon"):
+                for suffix in ("high", "max", "xhigh"):
+                    for effort in (None, "high", "max", "xhigh", "medium", "low"):
+                        with self.subTest(base=base, suffix=suffix, effort=effort):
+                            request = {"model": f"{base}-{suffix}",
+                                       "messages": [{"role": "user", "content": "Hello"}]}
+                            if effort:
+                                request["reasoning_effort"] = effort
+                            with patch("src.converter.openai2gemini.merge_system_messages", new=AsyncMock(return_value=request)):
+                                result = await convert_openai_to_gemini_request(request)
+                            result["model"] = request["model"]
+                            result = await normalize_antigravity_request(result)
+                            payload, _ = await wrap_cli_request(result, result["model"], "test-project")
+                            self.assertEqual(payload["model"], f"{base}-high")
+                            thinking = payload["request"]["generationConfig"]["thinkingConfig"]
+                            expected = (effort or ("high" if suffix in ("max", "xhigh") else "")).upper()
+                            expected = "HIGH" if expected in ("MAX", "XHIGH") else expected or None
+                            self.assertEqual(thinking.get("thinkingLevel"), expected)
+                            self.assertNotIn("thinkingBudget", thinking)
+                            self.assertTrue(thinking["includeThoughts"])
 
         with patch("config.get_return_thoughts_to_frontend", new=AsyncMock(return_value=True)):
             asyncio.run(check())
