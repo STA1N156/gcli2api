@@ -1,4 +1,4 @@
-full_hash=b9dfcbdeb5dd4d4e9a1ec390c6cc127263763d5f
-short_hash=b9dfcbd
-message=fix: preserve upstream model version in responses
-date=2026-10-16 02:35:37 +0800
+full_hash=27096fe50b63429295bc3c4e1c0b876149abb26b
+short_hash=27096fe
+message=fix: use default thinking for Gemini 3.8 Flash high
+date=2026-10-17 10:43:03 +0800
