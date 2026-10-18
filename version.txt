@@ -1,4 +1,4 @@
-full_hash=df534b4e5a7d5965e77a3ddbe06d6422f9ee3399
-short_hash=df534b4
-message=feat: show anti-truncation waiting notices in reasoning
-date=2026-10-17 14:17:55 +0800
+full_hash=712917b9244a666cdfcba21df507b01a8438ed78
+short_hash=712917b
+message=revert: remove anti-truncation waiting notices
+date=2026-10-18 10:53:52 +0800
