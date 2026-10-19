@@ -1,4 +1,4 @@
-full_hash=a276f68afb2ddd338790796e0f23682409d27d9f
-short_hash=a276f68
-message=fix: strip trailing model turns for all Antigravity Gemini models
-date=2026-10-11 08:32:50 +0800
+full_hash=712917b9244a666cdfcba21df507b01a8438ed78
+short_hash=712917b
+message=revert: remove anti-truncation waiting notices
+date=2026-10-18 10:53:52 +0800
