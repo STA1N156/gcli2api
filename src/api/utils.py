@@ -42,7 +42,7 @@ def rewrite_input_token_limit_response(response: Response) -> Response:
         "The input token count exceeds the maximum number of tokens allowed 131072."
     ):
         return response
-    error["message"] = "输入内容或系统提示词被谷歌安全审查模型拦截，请自行排查。"
+    error["message"] = "预设或其他内容被谷歌拦截，并试图路由至降智模型，已帮您拦截降智路由，请自行排查预设或其他内容"
     headers = dict(response.headers)
     headers.pop("content-length", None)
     headers.pop("content-encoding", None)

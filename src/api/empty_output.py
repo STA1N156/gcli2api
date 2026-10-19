@@ -10,7 +10,7 @@ from src.converter.thoughtSignature_fix import (
 
 
 EMPTY_MODEL_OUTPUT_STATUS_CODE = 400
-EMPTY_MODEL_OUTPUT_MESSAGE = "模型输出为空，请检查是否含有敏感内容"
+EMPTY_MODEL_OUTPUT_MESSAGE = "模型输出为空，请降低思考强度，并检查是否含有过多敏感内容"
 EMPTY_MODEL_OUTPUT_STATUS = "EMPTY_MODEL_OUTPUT"
 
 _STRUCTURED_OUTPUT_KEYS = (
