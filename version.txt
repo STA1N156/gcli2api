@@ -1,4 +1,4 @@
-full_hash=16c0e679d17417472ca825806e13fc7929be3122
-short_hash=16c0e67
-message=merge: sync remote history while preserving local updates
-date=2026-10-19 11:20:20 +0800
+full_hash=b3025a9224afdf3ff514334b4fb57b5aabecec84
+short_hash=b3025a9
+message=fix(antigravity): update CLI user agent and remove body userAgent
+date=2026-10-23 20:04:10 +0800
