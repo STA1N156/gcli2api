@@ -1,4 +1,4 @@
-full_hash=b3025a9224afdf3ff514334b4fb57b5aabecec84
-short_hash=b3025a9
-message=fix(antigravity): update CLI user agent and remove body userAgent
-date=2026-10-23 20:04:10 +0800
+full_hash=97144c10914e1cc406feeb9ca12e4ddbcbb61276
+short_hash=97144c1
+message=Revert "fix(antigravity): update CLI user agent and remove body userAgent"
+date=2026-10-23 20:04:58 +0800
