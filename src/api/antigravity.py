@@ -110,6 +110,7 @@ async def wrap_cli_request(
             "requestId": request_id,
             "request": inner,
             "model": model,
+            "userAgent": "antigravity",
             "requestType": request_type,
         },
         request_id,
