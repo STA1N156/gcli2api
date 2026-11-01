@@ -1,4 +1,4 @@
-full_hash=97144c10914e1cc406feeb9ca12e4ddbcbb61276
-short_hash=97144c1
-message=Revert "fix(antigravity): update CLI user agent and remove body userAgent"
-date=2026-10-23 20:04:58 +0800
+full_hash=ab07c4bad92b08e512fbddd7ec66acf438031502
+short_hash=ab07c4b
+message=fix: strip Chatbox runtime metadata description before upstream requests
+date=2026-11-01 12:21:52 +0800
