@@ -16,6 +16,7 @@ from fastapi import Response
 from config import get_empty_output_error_enabled
 from log import log
 from src.api.empty_output import build_empty_model_output_response, is_empty_model_output_payload
+from src.converter.chatbox_fix import strip_chatbox_runtime_description
 from src.converter.thoughtSignature_fix import decode_tool_id_and_signature
 
 try:
@@ -374,6 +375,7 @@ def _fix_function_response_names(contents: list) -> list:
 
 def _build_variables(model: str, gemini_payload: Dict[str, Any]) -> Dict[str, Any]:
     """从 gemini_payload 提取 variables（不含 region/recaptchaToken）。"""
+    gemini_payload = strip_chatbox_runtime_description(gemini_payload)
     if "contents" in gemini_payload and isinstance(gemini_payload["contents"], list):
         gemini_payload["contents"] = _drop_invalid_tool_turns(gemini_payload["contents"])
         gemini_payload["contents"] = _fix_thought_signatures(gemini_payload["contents"])

@@ -8,6 +8,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from log import log
+from src.converter.chatbox_fix import strip_chatbox_runtime_description
 from src.converter.image_input import normalize_inline_image_part
 from src.converter.thoughtSignature_fix import SKIP_THOUGHT_SIGNATURE_VALIDATOR
 from src.converter.utils import normalize_schema_enum
@@ -762,7 +763,7 @@ async def normalize_antigravity_request(
     # 导入配置函数
     from config import get_return_thoughts_to_frontend
 
-    result = request.copy()
+    result = strip_chatbox_runtime_description(request)
     model = result.get("model", "")
     generation_config = (result.get("generationConfig") or {}).copy()  # 创建副本避免修改原对象
     # 记录原始请求
