@@ -1,4 +1,4 @@
-full_hash=ab07c4bad92b08e512fbddd7ec66acf438031502
-short_hash=ab07c4b
-message=fix: strip Chatbox runtime metadata description before upstream requests
-date=2026-11-01 12:21:52 +0800
+full_hash=ad2f7f744b77f8eb29ae8cd539a6a910fe510198
+short_hash=ad2f7f7
+message=perf: reduce SQLite contention and simplify Antigravity service
+date=2026-11-06 16:45:32 +0800
