@@ -1,4 +1,4 @@
-full_hash=ad2f7f744b77f8eb29ae8cd539a6a910fe510198
-short_hash=ad2f7f7
-message=perf: reduce SQLite contention and simplify Antigravity service
-date=2026-11-06 16:45:32 +0800
+full_hash=337ecbff4144c8a33105e1e48208e44e17fecd03
+short_hash=337ecbf
+message=feat: refresh AN panel and import credentials by email
+date=2026-11-07 02:15:58 +0800
