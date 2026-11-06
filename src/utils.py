@@ -1,5 +1,7 @@
 from typing import List, Optional
 
+import httpx
+
 from config import get_api_password, get_panel_password
 from fastapi import Depends, HTTPException, Header, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -11,9 +13,31 @@ security = HTTPBearer()
 # ====================== OAuth Configuration ======================
 
 # Antigravity CLI 客户端仿真常量
-ANTIGRAVITY_CLI_VERSION = "1.3.1"
+_DEFAULT_ANTIGRAVITY_CLI_VERSION = "1.5.2"
+
+
+def _get_latest_antigravity_cli_version() -> str:
+    try:
+        response = httpx.get(
+            "https://api.github.com/repos/google-antigravity/antigravity-cli/releases/latest",
+            headers={"Accept": "application/vnd.github+json"},
+            timeout=10.0,
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+        release = response.json()
+        tag = release.get("tag_name") if isinstance(release, dict) else None
+        if isinstance(tag, str) and tag.strip().lstrip("vV"):
+            return tag.strip().lstrip("vV")
+    except (httpx.HTTPError, ValueError) as error:
+        log.warning(f"获取 Antigravity CLI 版本失败，使用默认版本: {type(error).__name__}")
+    return _DEFAULT_ANTIGRAVITY_CLI_VERSION
+
+
+ANTIGRAVITY_CLI_VERSION = _get_latest_antigravity_cli_version()
 ANTIGRAVITY_CLI_PLATFORM = "windows/amd64"
 ANTIGRAVITY_USER_AGENT = f"antigravity/cli/{ANTIGRAVITY_CLI_VERSION} {ANTIGRAVITY_CLI_PLATFORM}"
+log.info(f"当前 Antigravity CLI 版本: {ANTIGRAVITY_CLI_VERSION}")
 
 # Antigravity OAuth Configuration
 ANTIGRAVITY_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"

@@ -1,3 +1,10 @@
+FROM node:22-alpine AS frontend
+WORKDIR /build
+COPY frontend/package*.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
 # Multi-stage build for gcli2api
 FROM python:3.13-slim as base
 
@@ -30,6 +37,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
+COPY --from=frontend /dist ./dist
 
 # Expose port
 EXPOSE 7861

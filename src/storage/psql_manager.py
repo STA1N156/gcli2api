@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 import asyncpg
 
 from log import log
+from src.credential_identity import email_filename
+from src.subscription import SUBSCRIPTION_TIERS, normalize_subscription_tier
 from src.credential_status import (
     add_status_stats,
     credential_status_flags,
@@ -293,6 +295,35 @@ class PSQLManager:
             raise ValueError(f"Invalid mode: {mode}. Must be 'geminicli' or 'antigravity'")
 
     # ============ 凭证查询方法 ============
+
+    async def import_credential(self, email: str, credential_data: Dict[str, Any], tier: Optional[str]) -> Dict[str, Any]:
+        self._ensure_initialized()
+        async with self._pool.acquire() as conn, conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", "credential-import:" + email)
+            existing = await conn.fetchrow(
+                "SELECT filename,credential_data FROM antigravity_credentials WHERE "
+                "lower(trim(user_email))=$1 OR lower(trim(credential_data::jsonb->>'email'))=$1 "
+                "OR lower(trim(credential_data::jsonb->>'user_email'))=$1 OR filename=$2 "
+                "ORDER BY created_at,filename LIMIT 1 FOR UPDATE",
+                email, email_filename(email),
+            )
+            filename = existing["filename"] if existing else email_filename(email)
+            data = {**(json.loads(existing["credential_data"]) if existing else {}), **credential_data, "email": email}
+            data.pop("token", None)
+            if existing:
+                await conn.execute(
+                    "UPDATE antigravity_credentials SET credential_data=$1,user_email=$2,"
+                    "tier=COALESCE($3,tier),updated_at=EXTRACT(EPOCH FROM NOW()) WHERE filename=$4",
+                    json.dumps(data), email, tier, filename,
+                )
+            else:
+                await conn.execute(
+                    "INSERT INTO antigravity_credentials "
+                    "(filename,credential_data,user_email,tier,rotation_order,last_success) "
+                    "SELECT $1,$2,$3,$4,COALESCE(MAX(rotation_order),-1)+1,$5 FROM antigravity_credentials",
+                    filename, json.dumps(data), email, tier or "pro", time.time(),
+                )
+        return {"filename": filename, "email": email, "created": existing is None}
 
     async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "antigravity") -> bool:
         """存储或更新凭证"""
@@ -680,7 +711,8 @@ class PSQLManager:
                     else:
                         summary["enable_credit"] = bool(row["enable_credit"]) if row["enable_credit"] is not None else False
 
-                    if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                    summary["tier"] = normalize_subscription_tier(summary["tier"])
+                    if tier_filter and tier_filter in SUBSCRIPTION_TIERS:
                         if summary["tier"] != tier_filter:
                             continue
 

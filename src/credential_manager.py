@@ -10,13 +10,16 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from config import (
+    get_antigravity_api_url,
     get_session_affinity_enabled,
     get_session_affinity_ttl_seconds,
 )
 from log import log
-from src.google_oauth_api import Credentials
+from src.google_oauth_api import Credentials, fetch_project_id_and_tier, get_user_email
+from src.credential_identity import normalize_email
 from src.model_cooldown import has_active_model_cooldown
 from src.storage_adapter import get_storage_adapter
+from src.subscription import normalize_subscription_tier
 
 SESSION_BINDING_MAX_ENTRIES = int(os.getenv("SESSION_BINDING_MAX_ENTRIES", "50000"))
 SESSION_BINDING_PRUNE_INTERVAL_SECONDS = 60
@@ -391,11 +394,46 @@ class CredentialManager:
             return filename, credential_data
 
 
-    async def add_antigravity_credential(self, credential_name: str, credential_data: Dict[str, Any]):
-        """新增或更新一个 Antigravity 凭证。"""
+    async def add_antigravity_credential(self, credential_data: Dict[str, Any]):
+        """按邮箱导入；同一邮箱更新原账号，不改变启停、冷却或会话绑定。"""
+        from src.utils import ANTIGRAVITY_CLIENT_ID, ANTIGRAVITY_CLIENT_SECRET, ANTIGRAVITY_USER_AGENT
+
+        if (not isinstance(credential_data, dict)
+                or not isinstance(credential_data.get("refresh_token"), str)
+                or not credential_data["refresh_token"].strip()):
+            raise ValueError("凭证必须包含 refresh_token")
+        data = dict(credential_data)
+        data["refresh_token"] = data["refresh_token"].strip()
+        data["client_id"] = data.get("client_id") or ANTIGRAVITY_CLIENT_ID
+        data["client_secret"] = data.get("client_secret") or ANTIGRAVITY_CLIENT_SECRET
+        data["access_token"] = data.pop("token", None) or data.get("access_token", "")
+        email = normalize_email(data.get("email") or data.get("user_email"))
+        tier = normalize_subscription_tier(data.get("tier") or data.get("subscription_tier"))
+        if not data["access_token"] or not email or not data.get("project_id"):
+            credentials = Credentials.from_dict(data)
+            if credentials.access_token:
+                await credentials.refresh_if_needed()
+            else:
+                await credentials.refresh()
+            email = email or normalize_email(await get_user_email(credentials))
+            if not email:
+                raise ValueError("无法获取账号邮箱，未导入")
+            if not data.get("project_id"):
+                project_id, fetched_tier = await fetch_project_id_and_tier(
+                    credentials.access_token, ANTIGRAVITY_USER_AGENT, await get_antigravity_api_url(),
+                )
+                if not project_id:
+                    raise ValueError("无法获取账号项目，未导入")
+                data["project_id"] = project_id
+                tier = tier or normalize_subscription_tier(fetched_tier)
+            data.update({key: value for key, value in credentials.to_dict().items() if value is not None})
+        # 新凭证没有过期时间时，不沿用旧 access_token 的有效期。
+        data.setdefault("expiry", None)
+        data["email"] = email
+        if tier:
+            data["subscription_tier"] = tier
         await self._ensure_initialized()
-        await self._storage_adapter.store_credential(credential_name, credential_data, mode="antigravity")
-        log.info(f"Antigravity credential added/updated: {credential_name}")
+        return await self._storage_adapter.import_credential(email, data, tier)
 
     async def remove_credential(self, credential_name: str, mode: str = "antigravity") -> bool:
         """删除一个凭证"""
@@ -475,9 +513,12 @@ class CredentialManager:
             if not credential_data:
                 return None
 
-            # 创建凭证对象并自动刷新 token
-            from .google_oauth_api import Credentials, get_user_email
+            email = normalize_email(credential_data.get("email") or credential_data.get("user_email"))
+            if email:
+                await self._storage_adapter.update_credential_state(credential_name, {"user_email": email}, mode=mode)
+                return email
 
+            # 创建凭证对象并自动刷新 token
             credentials = Credentials.from_dict(credential_data)
             if not credentials:
                 return None
@@ -488,7 +529,8 @@ class CredentialManager:
             # 如果 token 被刷新了，更新存储
             if token_refreshed:
                 log.info(f"Token已自动刷新: {credential_name} (mode={mode})")
-                updated_data = credentials.to_dict()
+                updated_data = {**credential_data, **credentials.to_dict()}
+                updated_data.pop("token", None)
                 await self._storage_adapter.store_credential(credential_name, updated_data, mode=mode)
 
             # 获取邮箱

@@ -16,11 +16,13 @@ from fastapi.responses import JSONResponse
 
 from log import log
 from src.credential_manager import credential_manager
+from src.credential_identity import normalize_email
 from src.models import (
     CredFileActionRequest,
     CredFileBatchActionRequest
 )
 from src.storage_adapter import get_storage_adapter
+from src.subscription import SUBSCRIPTION_TIERS
 from src.utils import verify_panel_token, ANTIGRAVITY_USER_AGENT
 from src.antigravity_quota import (
     get_account_quota,
@@ -295,7 +297,8 @@ async def upload_credentials_common(
             )
 
 
-    batch_size = 1000
+    batch_size = 100
+    import_slots = asyncio.Semaphore(4)
     all_results = []
     total_success = 0
 
@@ -310,11 +313,11 @@ async def upload_credentials_common(
                 content_str = file_data["content"]
                 credential_data = json.loads(content_str)
 
-                # 根据凭证类型调用不同的添加方法
-                await credential_manager.add_antigravity_credential(filename, credential_data)
+                imported = await credential_manager.add_antigravity_credential(credential_data)
 
                 log.debug(f"成功上传 {mode} 凭证文件: {filename}")
-                return {"filename": filename, "status": "success", "message": "上传成功"}
+                return {**imported, "source_filename": filename, "status": "success",
+                        "message": "新增成功" if imported["created"] else "已按邮箱更新原账号"}
 
             except json.JSONDecodeError as e:
                 return {
@@ -329,8 +332,12 @@ async def upload_credentials_common(
                     "message": f"处理失败: {str(e)}",
                 }
 
+        async def limited_import(file_data):
+            async with import_slots:
+                return await process_single_file(file_data)
+
         log.info(f"开始并发处理 {len(batch_files)} 个 {mode} 文件...")
-        concurrent_tasks = [process_single_file(file_data) for file_data in batch_files]
+        concurrent_tasks = [limited_import(file_data) for file_data in batch_files]
         batch_results = await asyncio.gather(*concurrent_tasks, return_exceptions=True)
 
         processed_results = []
@@ -360,12 +367,16 @@ async def upload_credentials_common(
         )
 
     if total_success > 0:
+        created_count = sum(result.get("created", False) for result in all_results)
+        updated_count = total_success - created_count
         return JSONResponse(
             content={
                 "uploaded_count": total_success,
+                "created_count": created_count,
+                "updated_count": updated_count,
                 "total_count": len(files_data),
                 "results": all_results,
-                "message": f"批量上传完成: 成功 {total_success}/{len(files_data)} 个 {mode} 文件",
+                "message": f"导入完成：新增 {created_count} 个，更新 {updated_count} 个，失败 {len(files_data) - total_success} 个",
             }
         )
     else:
@@ -393,8 +404,8 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="无效的冷却状态筛选")
     if preview_filter and preview_filter not in ["all", "preview", "no_preview"]:
         raise HTTPException(status_code=400, detail="preview_filter 只能是 all、preview 或 no_preview")
-    if tier_filter and tier_filter not in ["all", "free", "pro", "ultra"]:
-        raise HTTPException(status_code=400, detail="tier_filter 只能是 all、free、pro 或 ultra")
+    if tier_filter and tier_filter not in ("all", *SUBSCRIPTION_TIERS):
+        raise HTTPException(status_code=400, detail="无效的订阅等级筛选")
 
 
     storage_adapter = await get_storage_adapter()
@@ -423,7 +434,7 @@ async def get_creds_status_common(
             "last_success": summary["last_success"],
             "backend_type": backend_type,
             "model_cooldowns": summary.get("model_cooldowns", {}),
-            "tier": summary.get("tier", "pro"),
+            "tier": summary.get("tier"),
         }
 
         cred_info["enable_credit"] = summary.get("enable_credit", False)
@@ -446,6 +457,15 @@ async def get_creds_status_common(
     })
 
 
+async def _export_credential(storage, filename: str, mode: str):
+    record = await storage.get_credential_with_state(filename, mode=mode)
+    if not record:
+        return None
+    data, state = record
+    email = normalize_email(state.get("user_email") or data.get("email") or data.get("user_email"))
+    return {**data, **({"email": email} if email else {}), "tier": state.get("tier")}
+
+
 async def download_all_creds_common(mode: str = "antigravity") -> Response:
     """打包下载所有凭证文件的通用函数"""
     mode = validate_mode(mode)
@@ -465,7 +485,7 @@ async def download_all_creds_common(mode: str = "antigravity") -> Response:
         success_count = 0
         for idx, filename in enumerate(credential_filenames, 1):
             try:
-                credential_data = await storage_adapter.get_credential(filename, mode=mode)
+                credential_data = await _export_credential(storage_adapter, filename, mode)
                 if credential_data:
                     content = json.dumps(credential_data, ensure_ascii=False, indent=2)
                     zip_file.writestr(os.path.basename(filename), content)
@@ -1152,7 +1172,7 @@ async def download_cred_file(
         storage_adapter = await get_storage_adapter()
 
         # 从存储系统获取凭证数据
-        credential_data = await storage_adapter.get_credential(filename, mode=mode)
+        credential_data = await _export_credential(storage_adapter, filename, mode)
         if not credential_data:
             raise HTTPException(status_code=404, detail="文件不存在")
 
@@ -1398,7 +1418,7 @@ async def test_credential(
         # 如果 token 被刷新了，更新存储
         if token_refreshed:
             log.info(f"Token已自动刷新: {filename} (mode={mode})")
-            credential_data = credentials.to_dict()
+            credential_data = {**credential_data, **credentials.to_dict()}
             await storage_adapter.store_credential(filename, credential_data, mode=mode)
 
         # 获取访问令牌
@@ -1415,14 +1435,14 @@ async def test_credential(
             raise HTTPException(status_code=400, detail="凭证中没有项目ID")
 
         # 根据模式选择 API 端点和请求头
-        # 对于 antigravity 模式，只使用 gemini-2.5-flash
-        test_model = "gemini-2.5-flash"
+        # 使用轻量 Flash 模型验证凭证。
+        test_model = "gemini-3.5-flash-lite"
 
         api_base_url = await get_antigravity_api_url()
         from src.api.antigravity import build_antigravity_headers
         headers = build_antigravity_headers(access_token)
 
-        # 第一次测试：使用 gemini-2.5-flash
+        # 单次最小请求，不额外触发大模型推理。
         response = await post_async(
             url=f"{api_base_url}/v1internal:generateContent",
             json={

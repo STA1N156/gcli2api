@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 import aiosqlite
 
 from log import log
+from src.credential_identity import email_filename
+from src.subscription import SUBSCRIPTION_TIERS, normalize_subscription_tier
 from src.credential_status import (
     add_status_stats,
     credential_status_flags,
@@ -485,6 +487,38 @@ class SQLiteManager:
             raise ValueError(f"Invalid mode: {mode}. Must be 'geminicli' or 'antigravity'")
 
     # ============ SQL 方法 ============
+
+    async def import_credential(self, email: str, credential_data: Dict[str, Any], tier: Optional[str]) -> Dict[str, Any]:
+        self._ensure_initialized()
+        async with self._connection(write=True) as db:
+            # 只在本地查询和写入期间持锁，不在事务中刷新令牌或访问网络。
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                "SELECT filename, credential_data FROM antigravity_credentials WHERE "
+                "lower(trim(user_email))=? OR lower(trim(json_extract(credential_data,'$.email')))=? "
+                "OR lower(trim(json_extract(credential_data,'$.user_email')))=? OR filename=? "
+                "ORDER BY created_at, filename LIMIT 1",
+                (email, email, email, email_filename(email)),
+            ) as cursor:
+                existing = await cursor.fetchone()
+            filename = existing[0] if existing else email_filename(email)
+            data = {**(json.loads(existing[1]) if existing else {}), **credential_data, "email": email}
+            data.pop("token", None)
+            if existing:
+                await db.execute(
+                    "UPDATE antigravity_credentials SET credential_data=?, user_email=?, "
+                    "tier=COALESCE(?,tier), updated_at=unixepoch() WHERE filename=?",
+                    (json.dumps(data), email, tier, filename),
+                )
+            else:
+                await db.execute(
+                    "INSERT INTO antigravity_credentials "
+                    "(filename,credential_data,user_email,tier,rotation_order,last_success) "
+                    "SELECT ?,?,?,?,COALESCE(MAX(rotation_order),-1)+1,? FROM antigravity_credentials",
+                    (filename, json.dumps(data), email, tier or "pro", time.time()),
+                )
+            await db.commit()
+        return {"filename": filename, "email": email, "created": existing is None}
 
     async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "antigravity") -> bool:
         """存储或更新凭证"""
@@ -998,7 +1032,8 @@ class SQLiteManager:
                                     continue
 
                         # 应用tier筛选
-                        if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                        summary["tier"] = normalize_subscription_tier(summary["tier"])
+                        if tier_filter and tier_filter in SUBSCRIPTION_TIERS:
                             if summary["tier"] != tier_filter:
                                 continue
 

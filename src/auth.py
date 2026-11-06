@@ -20,7 +20,6 @@ from .google_oauth_api import (
     Flow,
     fetch_project_id_and_tier,
 )
-from .storage_adapter import get_storage_adapter
 from .utils import (
     ANTIGRAVITY_CLIENT_ID,
     ANTIGRAVITY_CLIENT_SECRET,
@@ -54,6 +53,9 @@ def _prepare_credentials_data(credentials: Credentials, project_id: str, mode: s
         else:
             expiry_utc = credentials.expires_at
         creds_data["expiry"] = expiry_utc.isoformat()
+
+    if subscription_tier:
+        creds_data["subscription_tier"] = subscription_tier
 
     return creds_data
 
@@ -613,38 +615,12 @@ async def complete_auth_flow_from_callback_url(
 
 
 async def save_credentials(creds: Credentials, project_id: str, mode: str = "antigravity", subscription_tier: str = None) -> str:
-    """通过统一存储系统保存凭证"""
-    # 生成文件名（使用project_id和时间戳）
-    timestamp = int(time.time())
+    """OAuth 登录与文件导入共用邮箱身份，重新登录不新增副本。"""
+    from .credential_manager import credential_manager
 
-    # antigravity模式使用特殊前缀
-    filename = f"ag_{project_id}-{timestamp}.json"
-
-    # 准备凭证数据
     creds_data = _prepare_credentials_data(creds, project_id, mode, subscription_tier)
-
-    # 通过存储适配器保存
-    storage_adapter = await get_storage_adapter()
-    success = await storage_adapter.store_credential(filename, creds_data, mode=mode)
-
-    if success:
-        # 创建默认状态记录
-        try:
-            default_state = {
-                "error_codes": [],
-                "disabled": False,
-                "last_success": time.time(),
-                "user_email": None,
-                "tier": subscription_tier,
-            }
-            await storage_adapter.update_credential_state(filename, default_state, mode=mode)
-            log.info(f"凭证和状态已保存到: {filename} (mode={mode})")
-        except Exception as e:
-            log.warning(f"创建默认状态记录失败 {filename}: {e}")
-
-        return filename
-    else:
-        raise Exception(f"保存凭证失败: {filename}")
+    result = await credential_manager.add_antigravity_credential(creds_data)
+    return result["filename"]
 
 
 def async_shutdown_server(server, port):

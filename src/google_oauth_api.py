@@ -16,6 +16,7 @@ from config import (
 from log import log
 
 from src.httpx_client import get_async, post_async
+from src.subscription import normalize_subscription_tier
 
 
 class TokenError(Exception):
@@ -342,7 +343,7 @@ async def fetch_project_id_and_tier(
     Returns:
         默认返回 (project_id, subscription_tier)
         当 include_credits=True 时返回 (project_id, subscription_tier, credit_amount)
-        subscription_tier 可能是 "FREE", "PRO", "ULTRA" 或 None
+        subscription_tier 为 free、pro、ultra、ultra_lite 或 None
         credit_amount 为积分数量（整数）或 None
     """
     headers = {
@@ -352,29 +353,13 @@ async def fetch_project_id_and_tier(
         'Accept-Encoding': 'gzip'
     }
 
-    def _map_raw_tier(raw_tier: Optional[str]) -> Optional[str]:
-        """将 loadCodeAssist 返回的 raw tier 映射为统一 tier。"""
-        if not raw_tier:
-            return None
-
-        tier_mapping = {
-            "g1-ultra-tier": "ultra",
-            "ws-ai-ultra-business-tier": "ultra",
-            "g1-pro-tier": "pro",
-            "helium-tier": "pro",
-            "standard-tier": "pro",
-            "free-tier": "free",
-        }
-
-        return tier_mapping.get(raw_tier.lower(), "pro")
-
     subscription_tier = None
     credit_amount: Optional[int] = None
 
     # 步骤 1: 尝试 loadCodeAssist
     try:
         project_id, raw_tier, raw_credit_amount = await _try_load_code_assist(api_base_url, headers)
-        subscription_tier = _map_raw_tier(raw_tier)
+        subscription_tier = normalize_subscription_tier(raw_tier)
 
         if raw_credit_amount is not None:
             try:

@@ -11,6 +11,7 @@ GEMINI.md
 .kiro
 # Environment configuration
 .env
+.env.*
 
 # Python
 uv.lock
@@ -98,3 +99,4 @@ log.txt
 
 tools/
 aicode/
+node_modules/

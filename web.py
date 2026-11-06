@@ -28,6 +28,7 @@ from src.router.antigravity.model_list import router as antigravity_model_list_r
 from src.task_manager import shutdown_all_tasks
 from src.httpx_client import close_http_clients
 from src.panel import router as panel_router
+from src.panel.root import FRONTEND_DIST
 from src.keeplive import keepalive_service
 from src.router.request_capture import capture_request_if_needed, should_buffer_request_body
 
@@ -248,8 +249,8 @@ app.include_router(panel_router, prefix="", tags=["Panel Interface"])
 # 静态文件路由 - 服务docs目录下的文件
 app.mount("/docs", StaticFiles(directory="docs"), name="docs")
 
-# 静态文件路由 - 服务front目录下的文件（HTML、JS、CSS等）
-app.mount("/front", StaticFiles(directory="front"), name="front")
+# Compiled panel assets are independent of model request handling.
+app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets", check_dir=False), name="panel-assets")
 
 # 保活接口（仅响应 HEAD）
 @app.head("/keepalive")

@@ -11,6 +11,7 @@ import os
 from typing import Any, Dict, List, Optional, Protocol
 
 from log import log
+from src.credential_identity import normalize_email
 
 
 class StorageBackend(Protocol):
@@ -27,6 +28,10 @@ class StorageBackend(Protocol):
     # 凭证管理
     async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "antigravity") -> bool:
         """存储凭证数据"""
+        ...
+
+    async def import_credential(self, email: str, credential_data: Dict[str, Any], tier: Optional[str]) -> Dict[str, Any]:
+        """按邮箱新增或更新账号，保留原账号状态。"""
         ...
 
     async def get_credential(self, filename: str, mode: str = "antigravity") -> Optional[Dict[str, Any]]:
@@ -183,6 +188,13 @@ class StorageAdapter:
         """存储凭证数据"""
         self._ensure_initialized()
         return await self._backend.store_credential(filename, credential_data, mode)
+
+    async def import_credential(self, email: str, credential_data: Dict[str, Any], tier: Optional[str] = None) -> Dict[str, Any]:
+        self._ensure_initialized()
+        email = normalize_email(email)
+        if not email:
+            raise ValueError("无法识别账号邮箱，未导入")
+        return await self._backend.import_credential(email, credential_data, tier)
 
     async def get_credential(self, filename: str, mode: str = "antigravity") -> Optional[Dict[str, Any]]:
         """获取凭证数据"""

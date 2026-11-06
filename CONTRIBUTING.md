@@ -120,9 +120,8 @@ gcli2api/
 │   ├── openai_transfer.py # Format conversion
 │   ├── storage/           # Storage backends (Redis, MongoDB, Postgres, File)
 │   └── ...
-├── front/                 # Frontend static files
-├── tests/                 # Test directory (to be created)
-├── test_*.py             # Test files (root level)
+├── frontend/              # React/Vite control panel source
+├── dist/                  # Generated frontend assets (npm run build)
 ├── web.py                # Main application entry point
 ├── config.py             # Configuration management
 └── requirements.txt      # Production dependencies

@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from log import log
+from src.credential_identity import email_filename
+from src.subscription import SUBSCRIPTION_TIERS, normalize_subscription_tier
 from src.credential_status import (
     add_status_stats,
     credential_status_flags,
@@ -273,7 +275,7 @@ class MongoDBManager:
                     avail.append(filename)
 
                     # 按 tier 分桶
-                    tier = doc.get("tier") or "pro"
+                    tier = normalize_subscription_tier(doc.get("tier")) or "unknown"
                     tier_buckets.setdefault(tier, []).append(filename)
 
                     # preview 分桶（仅 geminicli）
@@ -308,7 +310,7 @@ class MongoDBManager:
             await pipe2.execute()
 
             # 重建 tier 分桶 Set（原子替换）
-            all_tiers = ("free", "pro", "ultra")
+            all_tiers = SUBSCRIPTION_TIERS
             pipe3 = self._redis.pipeline()
             for tier in all_tiers:
                 tier_key = self._rk_tier(mode, tier)
@@ -388,7 +390,7 @@ class MongoDBManager:
                 pipe.srem(self._rk_tier(mode, tier), filename)
             else:
                 # tier 未知时从所有分桶中移除
-                for t in ("free", "pro", "ultra"):
+                for t in SUBSCRIPTION_TIERS:
                     pipe.srem(self._rk_tier(mode, t), filename)
             pipe.srem(self._rk_preview(mode), filename)
             await pipe.execute()
@@ -403,11 +405,14 @@ class MongoDBManager:
             pipe = self._redis.pipeline()
             if disabled:
                 pipe.srem(self._rk_avail(mode), filename)
-                for t in ("free", "pro", "ultra"):
+                for t in SUBSCRIPTION_TIERS:
                     pipe.srem(self._rk_tier(mode, t), filename)
                 pipe.srem(self._rk_preview(mode), filename)
             else:
                 pipe.sadd(self._rk_avail(mode), filename)
+                for previous_tier in SUBSCRIPTION_TIERS:
+                    if previous_tier != tier:
+                        pipe.srem(self._rk_tier(mode, previous_tier), filename)
                 pipe.sadd(self._rk_tier(mode, tier), filename)
                 if mode == "geminicli" and preview:
                     pipe.sadd(self._rk_preview(mode), filename)
@@ -445,6 +450,44 @@ class MongoDBManager:
             raise ValueError(f"Invalid mode: {mode}. Must be 'geminicli' or 'antigravity'")
 
     # ============ SQL 方法 ============
+
+    async def import_credential(self, email: str, credential_data: Dict[str, Any], tier: Optional[str]) -> Dict[str, Any]:
+        import re
+        from pymongo.errors import DuplicateKeyError
+
+        self._ensure_initialized()
+        collection = self._db["antigravity_credentials"]
+        pattern = {"$regex": r"^\s*" + re.escape(email) + r"\s*$", "$options": "i"}
+        existing = await collection.find_one(
+            {"$or": [{field: pattern} for field in ("user_email", "credential_data.email", "credential_data.user_email")]
+             + [{"filename": email_filename(email)}]},
+            {"filename": 1}, sort=[("created_at", 1), ("filename", 1)],
+        )
+        filename = existing["filename"] if existing else email_filename(email)
+        now = time.time()
+        last = await collection.find_one({}, {"rotation_order": 1}, sort=[("rotation_order", -1)]) if not existing else None
+        updates = {f"credential_data.{key}": value for key, value in {**credential_data, "email": email}.items()}
+        updates.update(user_email=email, updated_at=now)
+        defaults = {"filename": filename, "disabled": False, "error_codes": [], "error_messages": [],
+                    "last_success": now, "model_cooldowns": {}, "enable_credit": False,
+                    "rotation_order": (last or {}).get("rotation_order", -1) + 1,
+                    "call_count": 0, "created_at": now}
+        if tier:
+            updates["tier"] = tier
+        else:
+            defaults["tier"] = "pro"
+        try:
+            result = await collection.update_one(
+                {"filename": filename}, {"$set": updates, "$setOnInsert": defaults,
+                                         "$unset": {"credential_data.token": ""}}, upsert=True,
+            )
+            created = result.upserted_id is not None
+        except DuplicateKeyError:
+            await collection.update_one({"filename": filename}, {"$set": updates, "$unset": {"credential_data.token": ""}})
+            created = False
+        state = await self.get_credential_state(filename, mode="antigravity")
+        await self._redis_sync_cred("antigravity", filename, state.get("disabled", False), state.get("tier", "pro"))
+        return {"filename": filename, "email": email, "created": created}
 
     async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "antigravity") -> bool:
         """存储或更新凭证"""
@@ -986,7 +1029,8 @@ class MongoDBManager:
                         continue
 
                 # 应用tier筛选
-                if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                summary["tier"] = normalize_subscription_tier(summary["tier"])
+                if tier_filter and tier_filter in SUBSCRIPTION_TIERS:
                     if summary["tier"] != tier_filter:
                         continue
 

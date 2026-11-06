@@ -1,23 +1,16 @@
-"""
-根路由模块 - 处理控制面板主页
-"""
+"""Serve the compiled React control panel."""
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
 
-from log import log
-# 创建路由器
 router = APIRouter(tags=["root"])
+FRONTEND_DIST = Path(__file__).resolve().parents[2] / "dist"
 
 
-@router.get("/", response_class=HTMLResponse)
+@router.get("/")
 async def serve_control_panel():
-    """提供响应式控制面板。"""
-    try:
-        with open("front/control_panel.html", "r", encoding="utf-8") as f:
-            html_content = f.read()
-        return HTMLResponse(content=html_content)
-
-    except Exception as e:
-        log.error(f"加载控制面板页面失败: {e}")
-        raise HTTPException(status_code=500, detail="服务器内部错误")
+    index = FRONTEND_DIST / "index.html"
+    if not index.is_file():
+        raise HTTPException(503, "请先在 frontend 目录运行 npm install 和 npm run build")
+    return FileResponse(index, headers={"Cache-Control": "no-cache"})
