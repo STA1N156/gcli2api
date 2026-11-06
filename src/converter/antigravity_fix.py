@@ -1,6 +1,6 @@
 """
 Antigravity Format Utilities - 独立的 Antigravity 请求处理和转换工具
-从 gemini_fix.py 中拆分出来，专供 src/router/antigravity 使用
+专供 src/router/antigravity 使用
 ────────────────────────────────────────────────────────────────
 """
 import json
@@ -785,7 +785,7 @@ async def normalize_antigravity_request(
     # 1. 安全设置覆盖
     if "tools" in result:
         result["tools"] = _normalize_tools_for_internal_api(result.get("tools"))
-        # 对于 Claude 模型：antigravity/Vertex AI 通道需要标准 functionDeclarations/parametersJsonSchema 格式
+        # 对于 Claude 模型：Antigravity 通道需要标准 functionDeclarations/parametersJsonSchema 格式
         # 对于 Gemini 模型：统一转换为 functionDeclarations 并确保只使用 parameters 字段（移除 parametersJsonSchema 以防报错）
         result["tools"] = _ensure_empty_tool_schema_for_claude(result.get("tools"), model, "antigravity")
 

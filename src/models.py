@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Literal, Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -355,18 +355,18 @@ class LoginRequest(BaseModel):
 
 class AuthStartRequest(BaseModel):
     project_id: Optional[str] = None  # 现在是可选的
-    mode: Optional[str] = "geminicli"  # 凭证模式: geminicli 或 antigravity
+    mode: Literal["antigravity"] = "antigravity"
 
 
 class AuthCallbackRequest(BaseModel):
     project_id: Optional[str] = None  # 现在是可选的
-    mode: Optional[str] = "geminicli"  # 凭证模式: geminicli 或 antigravity
+    mode: Literal["antigravity"] = "antigravity"
 
 
 class AuthCallbackUrlRequest(BaseModel):
     callback_url: str  # OAuth回调完整URL
     project_id: Optional[str] = None  # 可选的项目ID
-    mode: Optional[str] = "geminicli"  # 凭证模式: geminicli 或 antigravity
+    mode: Literal["antigravity"] = "antigravity"
 
 
 class CredFileActionRequest(BaseModel):

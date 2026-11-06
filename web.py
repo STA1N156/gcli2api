@@ -18,19 +18,13 @@ from log import log
 
 # Import managers and utilities
 from src.credential_manager import credential_manager
+from src.storage_adapter import close_storage_adapter
 
 # Import all routers
 from src.router.antigravity.openai import router as antigravity_openai_router
 from src.router.antigravity.gemini import router as antigravity_gemini_router
 from src.router.antigravity.anthropic import router as antigravity_anthropic_router
 from src.router.antigravity.model_list import router as antigravity_model_list_router
-from src.router.geminicli.openai import router as geminicli_openai_router
-from src.router.geminicli.gemini import router as geminicli_gemini_router
-from src.router.geminicli.anthropic import router as geminicli_anthropic_router
-from src.router.geminicli.model_list import router as geminicli_model_list_router
-from src.router.vertex.gemini import router as vertex_gemini_router
-from src.router.vertex.openai import router as vertex_openai_router
-from src.router.vertex.model_list import router as vertex_model_list_router
 from src.task_manager import shutdown_all_tasks
 from src.httpx_client import close_http_clients
 from src.panel import router as panel_router
@@ -48,7 +42,6 @@ try:
 except (OSError, AttributeError):
     pass
 
-
 def _get_rss_mb() -> float:
     """获取当前进程的 RSS（MB），仅 Linux 可用"""
     try:
@@ -59,7 +52,6 @@ def _get_rss_mb() -> float:
     except Exception:
         pass
     return 0.0
-
 
 async def _memory_trim_loop():
     """每 60 秒执行一次 GC，并在 Linux 上归还空闲内存页。"""
@@ -85,9 +77,7 @@ async def _memory_trim_loop():
         except Exception as e:
             log.warning(f"[MEM] malloc_trim 异常: {e}")
 
-
 _memory_trim_task = None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -155,6 +145,7 @@ async def lifespan(app: FastAPI):
 
     try:
         await credential_manager.close()
+        await close_storage_adapter()
         log.info("凭证管理器已关闭")
     except Exception as e:
         log.error(f"关闭凭证管理器时出错: {e}")
@@ -166,7 +157,6 @@ async def lifespan(app: FastAPI):
         log.error(f"Error closing HTTP client pool: {e}")
 
     log.info("GCLI2API 主服务已停止")
-
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -184,7 +174,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 class RequestCaptureMiddleware:
     def __init__(self, app):
@@ -237,18 +226,9 @@ class RequestCaptureMiddleware:
 
         await self.app(scope, replay_receive, capture_send)
 
-
 app.add_middleware(RequestCaptureMiddleware)
 
 # 挂载路由器
-# OpenAI兼容路由 - 处理OpenAI格式请求
-app.include_router(geminicli_openai_router, prefix="", tags=["Geminicli OpenAI API"])
-
-# Gemini原生路由 - 处理Gemini格式请求
-app.include_router(geminicli_gemini_router, prefix="", tags=["Geminicli Gemini API"])
-
-# Geminicli模型列表路由 - 处理Gemini格式的模型列表请求
-app.include_router(geminicli_model_list_router, prefix="", tags=["Geminicli Model List"])
 
 # Antigravity路由 - 处理OpenAI格式请求并转换为Antigravity API
 app.include_router(antigravity_openai_router, prefix="", tags=["Antigravity OpenAI API"])
@@ -262,20 +242,8 @@ app.include_router(antigravity_model_list_router, prefix="", tags=["Antigravity 
 # Antigravity Anthropic Messages 路由 - Anthropic Messages 格式兼容
 app.include_router(antigravity_anthropic_router, prefix="", tags=["Antigravity Anthropic Messages"])
 
-# Geminicli Anthropic Messages 路由 - Anthropic Messages 格式兼容 (Geminicli)
-app.include_router(geminicli_anthropic_router, prefix="", tags=["Geminicli Anthropic Messages"])
-
 # Panel路由 - 包含认证、凭证管理和控制面板功能
 app.include_router(panel_router, prefix="", tags=["Panel Interface"])
-
-# Vertex AI 路由 - Gemini 原生格式
-app.include_router(vertex_gemini_router, prefix="", tags=["Vertex Gemini API"])
-
-# Vertex AI 路由 - OpenAI 兼容格式
-app.include_router(vertex_openai_router, prefix="", tags=["Vertex OpenAI API"])
-
-# Vertex AI 路由 - 模型列表
-app.include_router(vertex_model_list_router, prefix="", tags=["Vertex Model List"])
 
 # 静态文件路由 - 服务docs目录下的文件
 app.mount("/docs", StaticFiles(directory="docs"), name="docs")
@@ -283,12 +251,10 @@ app.mount("/docs", StaticFiles(directory="docs"), name="docs")
 # 静态文件路由 - 服务front目录下的文件（HTML、JS、CSS等）
 app.mount("/front", StaticFiles(directory="front"), name="front")
 
-
 # 保活接口（仅响应 HEAD）
 @app.head("/keepalive")
 async def keepalive() -> Response:
     return Response(status_code=200)
-
 
 def _apply_hypercorn_config(config) -> None:
     config.backlog = int(os.environ.get("SERVER_BACKLOG", "4096"))
@@ -300,7 +266,6 @@ def _apply_hypercorn_config(config) -> None:
     if max_requests > 0:
         config.max_requests = max_requests
         config.max_requests_jitter = int(os.environ.get("MAX_REQUESTS_JITTER", "0"))
-
 
 def main():
     """主启动函数"""
@@ -349,7 +314,6 @@ def main():
         config.application_path = "web:app"
 
         run(config)
-
 
 if __name__ == "__main__":
     main()

@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GCLI2API 控制面板</title>
+    <title>Antigravity 控制面板</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -1289,7 +1289,7 @@
 
         <!-- 登录界面 -->
         <div id="loginSection" class="login-form">
-            <h1>GCLI2API 管理面板</h1>
+            <h1>Antigravity 管理面板</h1>
             <p>请输入访问密码：</p>
             <input type="password" id="loginPassword" placeholder="输入密码" onkeypress="handlePasswordEnter(event)" />
             <br>
@@ -1302,7 +1302,7 @@
                 <div class="brand-block">
                     <span class="brand-mark">G</span>
                     <div>
-                        <h1>GCLI2API</h1>
+                        <h1>Antigravity</h1>
                         <p>凭证与服务控制台</p>
                     </div>
                     <span id="versionInfo" class="version-info">
@@ -1317,133 +1317,16 @@
 
             <!-- 标签页 -->
             <div class="tabs">
-                <button class="tab active" onclick="switchTab('oauth', this)"><span>GCLI 认证</span><small>OAuth</small></button>
-                <button class="tab" onclick="switchTab('antigravity', this)"><span>Antigravity 认证</span><small>OAuth</small></button>
+                <button class="tab active" onclick="switchTab('antigravity', this)"><span>Antigravity 认证</span><small>OAuth</small></button>
                 <button class="tab" onclick="switchTab('upload', this)"><span>导入凭证</span><small>JSON / ZIP</small></button>
-                <button class="tab" onclick="switchTab('manage', this)"><span>GCLI 凭证</span><small>状态与操作</small></button>
                 <button class="tab" onclick="switchTab('antigravity-manage', this)"><span>Antigravity</span><small>凭证与额度</small></button>
                 <button class="tab" onclick="switchTab('config', this)"><span>系统设置</span><small>服务配置</small></button>
                 <button class="tab" onclick="switchTab('logs', this)"><span>运行日志</span><small>实时排障</small></button>
                 <button class="tab" onclick="switchTab('about', this)"><span>关于</span><small>项目说明</small></button>
             </div>
 
-            <!-- OAuth认证标签页 -->
-            <div id="oauthTab" class="tab-content active">
-                <!-- API 自动启用说明 -->
-                <div class="status success" style="margin-bottom: 20px;">
-                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> 自动化优化：</strong> 系统现在会在认证成功后自动为您的项目启用必需的API服务
-                    <ul style="margin: 10px 0; padding-left: 20px;">
-                        <li><strong>Gemini Cloud Assist API</strong></li>
-                        <li><strong>Gemini for Google Cloud API</strong></li>
-                    </ul>
-                    <p style="margin: 10px 0; color: #155724;"><strong>说明：</strong>无需手动启用API，系统会自动处理这些配置步骤，让认证流程更加顺畅。
-                    </p>
-                </div>
-
-                <!-- 折叠式 Project ID 输入框 -->
-                <div class="form-group">
-                    <div style="cursor: pointer; user-select: none; padding: 12px; border: 2px solid #ddd; border-radius: 5px; background: #f8f9fa; display: flex; justify-content: space-between; align-items: center;"
-                        onclick="toggleProjectIdSection()">
-                        <span style="font-weight: bold; color: #555;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#folder"></use></svg> 高级选项：Google Cloud Project ID
-                            (不用管，直接点击获取链接即可)</span>
-                        <span id="projectIdToggleIcon"
-                            style="font-size: 14px; color: #666; transition: transform 0.3s ease;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#chevron-right"></use></svg></span>
-                    </div>
-                    <div id="projectIdSection"
-                        style="display: none; margin-top: 15px; padding: 15px; border: 2px solid #ddd; border-top: none; border-radius: 0 0 5px 5px; background: #ffffff;">
-                        <label for="projectId"
-                            style="display: block; margin-bottom: 5px; font-weight: bold; color: #555;">Google Cloud
-                            Project ID (可选):</label>
-                        <input type="text" id="projectId"
-                            style="width: 100%; padding: 10px; border: 2px solid #ddd; border-radius: 5px; font-size: 16px; box-sizing: border-box;"
-                            placeholder="留空将尝试自动检测，或手动输入项目ID" />
-                        <small style="color: #666; font-size: 12px; margin-top: 5px; display: block;">
-                            <svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#info"></use></svg> 提示：如果你不懂这是什么，可以留空此字段让系统自动检测项目ID
-                        </small>
-                    </div>
-                </div>
-
-                <button class="btn" id="getAuthBtn" onclick="startAuth()">获取认证链接</button>
-
-                <div id="authUrlSection" class="hidden">
-                    <h3>认证链接：</h3>
-                    <div class="auth-url">
-                        <a id="authUrl" href="#" target="_blank">点击此链接进行认证</a>
-                    </div>
-                    <div class="status info">
-                        <strong>重要说明：</strong>
-                        <ol style="margin: 10px 0; padding-left: 20px;">
-                            <li>点击上方认证链接，会在新窗口中打开Google OAuth页面</li>
-                            <li>完成Google账号登录和授权</li>
-                            <li>授权成功后会跳转到localhost:11451显示成功页面</li>
-                            <li>关闭OAuth窗口，返回本页面</li>
-                            <li>点击下方"获取认证文件"按钮完成流程</li>
-                        </ol>
-                    </div>
-
-                    <!-- 快捷回调URL输入选项 -->
-                    <div class="form-group"
-                        style="margin: 20px 0; padding: 15px; border: 2px solid #e8f4fd; border-radius: 8px; background: #f8fcff;">
-                        <div style="cursor: pointer; user-select: none; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;"
-                            onclick="toggleCallbackUrlSection()">
-                            <span style="font-weight: bold; color: #0066cc;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> 无法回源？试试快捷方式</span>
-                            <span id="callbackUrlToggleIcon"
-                                style="font-size: 14px; color: #666; transition: transform 0.3s ease;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#chevron-down"></use></svg></span>
-                        </div>
-                        <div id="callbackUrlSection" style="display: none;">
-                            <div
-                                style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 6px; padding: 12px; margin-bottom: 12px;">
-                                <div style="color: #856404; font-size: 14px; font-weight: bold; margin-bottom: 6px;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#book"></use></svg>
-                                    适用场景：</div>
-                                <ul
-                                    style="color: #856404; font-size: 13px; margin: 0; padding-left: 18px; line-height: 1.5;">
-                                    <li>云服务器、VPS等非本地环境</li>
-                                    <li>防火墙阻止了11451端口访问</li>
-                                    <li>网络环境无法正常回源到localhost</li>
-                                    <li>Docker容器内运行，端口映射问题</li>
-                                </ul>
-                            </div>
-                            <div style="color: #666; font-size: 13px; margin-bottom: 12px; line-height: 1.6;">
-                                <strong style="color: #0066cc;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#search"></use></svg> 什么是回调URL？</strong><br>
-                                完成Google OAuth授权后，浏览器地址栏显示的完整URL，通常看起来像这样：<br>
-                                <code
-                                    style="background: #f1f3f4; padding: 2px 6px; border-radius: 3px; font-size: 12px; word-break: break-all;">
-                                    http://localhost:11451/?state=abc123...&code=4/0AVMBsJ...&scope=email%20profile...
-                                </code>
-                            </div>
-                            <div
-                                style="background: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 6px; padding: 10px; margin-bottom: 12px;">
-                                <div style="color: #0066cc; font-size: 13px; font-weight: bold; margin-bottom: 4px;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#file"></use></svg>
-                                    使用步骤：</div>
-                                <ol
-                                    style="color: #0066cc; font-size: 12px; margin: 0; padding-left: 18px; line-height: 1.4;">
-                                    <li>点击上方认证链接，完成Google授权</li>
-                                    <li>授权成功后，复制浏览器地址栏的<strong>完整URL</strong></li>
-                                    <li>粘贴到下方输入框，点击获取凭证即可</li>
-                                </ol>
-                            </div>
-                            <div class="input-group">
-                                <input type="url" id="callbackUrlInput"
-                                    placeholder="粘贴完整的回调URL，例如：http://localhost:11451/?state=xxx&code=xxx&scope=xxx..."
-                                    style="width: 100%; padding: 10px; border: 2px solid #ddd; border-radius: 4px; font-size: 13px;">
-                            </div>
-                            <button class="btn" style="margin-top: 10px;" onclick="processCallbackUrl()">
-                                从回调URL获取凭证
-                            </button>
-                        </div>
-                    </div>
-
-                    <button class="btn" id="getCredsBtn" onclick="getCredentials()">获取认证文件</button>
-                </div>
-
-                <div id="credentialsSection" class="hidden">
-                    <h3>认证文件内容：</h3>
-                    <div class="credentials" id="credentialsContent"></div>
-                </div>
-            </div>
-
             <!-- Antigravity 认证标签页 -->
-            <div id="antigravityTab" class="tab-content">
+            <div id="antigravityTab" class="tab-content active">
                 <div class="status info" style="margin-bottom: 20px;">
                     <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#bolt"></use></svg> Antigravity 认证模式</strong>
                     <p style="margin: 10px 0;">
@@ -1536,40 +1419,7 @@
             <!-- 批量上传标签页 -->
             <div id="uploadTab" class="tab-content">
                 <h3>批量上传认证文件</h3>
-                <p>支持批量上传 GCLI 和 Antigravity 认证文件</p>
-
-                <!-- GCLI凭证上传区域 -->
-                <div
-                    style="margin-bottom: 30px; padding: 20px; border: 2px solid #e1e4e8; border-radius: 8px; background: #f8f9fa;">
-                    <h4 style="margin-top: 0; color: #007bff; border-bottom: 2px solid #007bff; padding-bottom: 10px;">
-                        <svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#upload"></use></svg> GCLI 凭证批量上传</h4>
-
-                    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
-                        <p>点击选择文件或拖拽文件到此区域</p>
-                        <p style="color: #666; font-size: 14px;">支持 .json 和 .zip 格式文件</p>
-                        <p style="color: #888; font-size: 12px;">ZIP文件会自动解压提取其中的JSON凭证</p>
-                    </div>
-
-                    <input type="file" id="fileInput" multiple accept=".json,.zip" style="display: none;"
-                        onchange="handleFileSelect(event)" />
-
-                    <div id="fileListSection" class="hidden">
-                        <h4>选择的文件：</h4>
-                        <div class="file-list" id="fileList"></div>
-                        <button class="btn" onclick="uploadFiles()">上传文件</button>
-                        <button class="btn" onclick="clearFiles()">清空列表</button>
-                    </div>
-
-                    <div id="uploadProgressSection" class="hidden">
-                        <div class="upload-progress">
-                            <h4>上传进度：</h4>
-                            <div class="progress-bar">
-                                <div class="progress-fill" id="progressFill" style="width: 0%"></div>
-                            </div>
-                            <p id="progressText">0%</p>
-                        </div>
-                    </div>
-                </div>
+                <p>支持批量上传 Antigravity 认证文件</p>
 
                 <!-- Antigravity凭证上传区域 -->
                 <div style="padding: 20px; border: 2px solid #e1e4e8; border-radius: 8px; background: #f8f9fa;">
@@ -1604,183 +1454,6 @@
                             </div>
                             <p id="antigravityProgressText">0%</p>
                         </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- GCLI凭证管理标签页 -->
-            <div id="manageTab" class="tab-content">
-                <h3>GCLI凭证文件管理</h3>
-                <p>管理所有GCLI认证文件，查看状态和执行操作</p>
-                <div class="endpoint-card">
-                    <strong><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#link"></use></svg> API地址（点击复制）：</strong>
-                    <table style="margin-top:6px;border-collapse:collapse;width:100%;">
-                        <tr>
-                            <td style="color:#666;width:90px;">OpenAI格式</td>
-                            <td><code id="gcliOpenaiUrl" onclick="cpUrl(this)" title="点击复制"
-                                    style="background:#e8f0fe;padding:2px 6px;border-radius:3px;cursor:pointer;"></code>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td style="color:#666;">Claude格式</td>
-                            <td><code id="gcliClaudeUrl" onclick="cpUrl(this)" title="点击复制"
-                                    style="background:#e8f0fe;padding:2px 6px;border-radius:3px;cursor:pointer;"></code>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td style="color:#666;">Gemini格式</td>
-                            <td><code id="gcliGeminiUrl" onclick="cpUrl(this)" title="点击复制"
-                                    style="background:#e8f0fe;padding:2px 6px;border-radius:3px;cursor:pointer;"></code>
-                            </td>
-                        </tr>
-                    </table>
-                    <script>
-                        (function () { var o = window.location.origin; document.getElementById('gcliOpenaiUrl').textContent = o + '/v1'; document.getElementById('gcliClaudeUrl').textContent = o + '/v1'; document.getElementById('gcliGeminiUrl').textContent = o; })();
-                        function cpUrl(el) { navigator.clipboard.writeText(el.textContent).then(function () { var s = el.style.background; el.style.background = '#b7f0b7'; setTimeout(function () { el.style.background = s; }, 800); }); }
-                    </script>
-                </div>
-
-                <!-- 检验功能说明 -->
-                <details class="help-panel">
-                    <summary>使用说明</summary>
-                    <div class="help-panel-body">
-                        <strong>检验功能</strong>
-                        <p>
-                            点击每个凭证的"检验"按钮可以重新获取Project ID, 并查看账号的tier(free/pro/ultra)。<br>
-                            <strong style="color: #0c5460;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg> 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
-                            建议在遇到403错误时使用此功能。
-                        </p>
-                        <strong>设置预览</strong>
-                        <p>
-                            点击每个凭证的"设置预览"按钮可以配置Preview通道。<br>
-                            <strong style="color: #0c5460;"><svg class="panel-icon" aria-hidden="true"><use href="./front/icons.svg#check"></use></svg> 设置预览可以解决部分凭证调用preview模型时404的问题</strong>。<br>
-                            建议在调用gemini-3-pro-preview等模型遇到404错误时使用此功能。
-                        </p>
-                    </div>
-                </details>
-
-                <!-- 状态统计 -->
-                <div class="stats-container" id="statsContainer">
-                    <div class="stat-item total">
-                        <span class="stat-number" id="statTotal">0</span>
-                        <span class="stat-label">总计</span>
-                    </div>
-                    <div class="stat-item normal">
-                        <span class="stat-number" id="statNormal">0</span>
-                        <span class="stat-label">正常</span>
-                    </div>
-                    <div class="stat-item claude">
-                        <span class="stat-number" id="statClaudeAbnormal">0</span>
-                        <span class="stat-label">Claude 异常</span>
-                    </div>
-                    <div class="stat-item gemini">
-                        <span class="stat-number" id="statGeminiAbnormal">0</span>
-                        <span class="stat-label">Gemini 异常</span>
-                    </div>
-                </div>
-
-                <div class="manage-actions">
-                    <button class="refresh-btn" onclick="refreshCredsStatus()">刷新状态</button>
-                    <button class="download-all-btn" onclick="downloadAllCreds()">打包下载所有文件</button>
-                </div>
-
-                <!-- 批量操作控件 -->
-                <div class="batch-controls">
-                    <h4>批量操作</h4>
-                    <div class="batch-actions">
-                        <div class="checkbox-container">
-                            <input type="checkbox" id="selectAllCheckbox" class="select-all-checkbox"
-                                onchange="toggleSelectAll()">
-                            <label for="selectAllCheckbox">全选</label>
-                        </div>
-                        <span class="selected-count" id="selectedCount">已选择 0 项</span>
-                        <button class="batch-btn batch-enable" id="batchEnableBtn" onclick="batchAction('enable')"
-                            disabled>批量启用</button>
-                        <button class="batch-btn batch-disable" id="batchDisableBtn" onclick="batchAction('disable')"
-                            disabled>批量禁用</button>
-                        <button class="batch-btn" onclick="clearAllAbnormalStatus()">刷新异常状态</button>
-                        <details class="batch-more">
-                            <summary>更多批量操作</summary>
-                            <div class="batch-more-menu">
-                                <button class="batch-btn" id="batchVerifyBtn" onclick="batchVerifyProjectIds()"
-                                    disabled>批量检验</button>
-                                <button class="batch-btn" id="batchMessageVerifyBtn"
-                                    onclick="batchVerifyMessageCredentials()" disabled>批量消息校验</button>
-                                <button class="batch-btn" id="batchPreviewBtn" onclick="batchConfigurePreview()"
-                                    disabled>批量设置预览</button>
-                                <button class="batch-btn batch-email" onclick="refreshAllEmails()">刷新所有邮箱</button>
-                                <button class="batch-btn" onclick="deduplicateByEmail()">凭证一键去重</button>
-                                <button class="batch-btn batch-delete" id="batchDeleteBtn"
-                                    onclick="batchAction('delete')" disabled>批量删除</button>
-                            </div>
-                        </details>
-                    </div>
-                </div>
-
-                <!-- 筛选和分页控件 -->
-                <div class="filter-container">
-                    <label for="statusFilter">凭证状态：</label>
-                    <select id="statusFilter" class="filter-select" onchange="applyStatusFilter()">
-                        <option value="all">全部凭证</option>
-                        <option value="normal">正常凭证</option>
-                        <option value="claude_abnormal">Claude 异常</option>
-                        <option value="gemini_abnormal">Gemini 异常</option>
-                    </select>
-
-                    <label for="errorCodeFilter" style="margin-left: 20px;">错误码：</label>
-                    <select id="errorCodeFilter" class="filter-select" onchange="applyStatusFilter()">
-                        <option value="all">全部错误</option>
-                        <option value="none">无错误</option>
-                        <option value="400">400</option>
-                        <option value="403">403</option>
-                        <option value="429">429</option>
-                        <option value="500">500</option>
-                    </select>
-
-                    <label for="cooldownFilter" style="margin-left: 20px;">冷却状态：</label>
-                    <select id="cooldownFilter" class="filter-select" onchange="applyStatusFilter()">
-                        <option value="all">全部状态</option>
-                        <option value="claude_cooldown">Claude 冷却</option>
-                        <option value="gemini_cooldown">Gemini 冷却</option>
-                        <option value="in_cooldown">全部冷却</option>
-                        <option value="no_cooldown">未冷却</option>
-                    </select>
-
-                    <label for="previewFilter" style="margin-left: 20px;">Preview：</label>
-                    <select id="previewFilter" class="filter-select" onchange="applyStatusFilter()">
-                        <option value="all">全部</option>
-                        <option value="preview">支持</option>
-                        <option value="no_preview">不支持</option>
-                    </select>
-
-                    <label for="tierFilter" style="margin-left: 20px;">Tier：</label>
-                    <select id="tierFilter" class="filter-select" onchange="applyStatusFilter()">
-                        <option value="all">全部</option>
-                        <option value="free">Free</option>
-                        <option value="pro">Pro</option>
-                        <option value="ultra">Ultra</option>
-                    </select>
-
-                    <label for="pageSizeSelect" style="margin-left: 20px;">每页显示：</label>
-                    <select id="pageSizeSelect" class="page-size-select" onchange="changePageSize()">
-                        <option value="20">20</option>
-                        <option value="50">50</option>
-                        <option value="100">100</option>
-                        <option value="200">200</option>
-                        <option value="500">500</option>
-                        <option value="1000">1000</option>
-                    </select>
-                </div>
-
-                <div id="credsListSection">
-                    <div class="loading" id="credsLoading">正在加载凭证文件...</div>
-                    <div id="credsList"></div>
-
-                    <!-- 分页控件 -->
-                    <div class="pagination-container" id="paginationContainer" style="display: none;">
-                        <button class="pagination-btn" id="prevPageBtn" onclick="changePage(-1)">上一页</button>
-                        <div class="pagination-info" id="paginationInfo">第 1 页，共 1 页</div>
-                        <button class="pagination-btn" id="nextPageBtn" onclick="changePage(1)">下一页</button>
                     </div>
                 </div>
             </div>
@@ -2082,12 +1755,6 @@
                                 </div>
                                 <small class="config-note">镜像网址主要解决墙内无法访问官方端点的问题，部分地区可能无法使用</small>
                             </div>
-
-                            <div class="form-group">
-                                <label for="codeAssistEndpoint">Code Assist Endpoint:</label>
-                                <input type="text" id="codeAssistEndpoint" class="config-input" />
-                                <small class="config-note">Google Cloud Code Assist API端点地址</small>
-                            </div>
                             <div class="form-group">
                                 <label for="oauthProxyUrl">OAuth Endpoint:</label>
                                 <input type="text" id="oauthProxyUrl" class="config-input"
@@ -2099,18 +1766,6 @@
                                 <input type="text" id="googleapisProxyUrl" class="config-input"
                                     placeholder="https://www.googleapis.com" />
                                 <small class="config-note">Google APIs API端点地址，用于API服务调用</small>
-                            </div>
-                            <div class="form-group">
-                                <label for="resourceManagerApiUrl">Resource Manager API Endpoint:</label>
-                                <input type="text" id="resourceManagerApiUrl" class="config-input"
-                                    placeholder="https://cloudresourcemanager.googleapis.com" />
-                                <small class="config-note">Google Cloud Resource Manager API端点地址，用于项目管理</small>
-                            </div>
-                            <div class="form-group">
-                                <label for="serviceUsageApiUrl">Service Usage API Endpoint:</label>
-                                <input type="text" id="serviceUsageApiUrl" class="config-input"
-                                    placeholder="https://serviceusage.googleapis.com" />
-                                <small class="config-note">Google Cloud Service Usage API端点地址，用于服务启用管理</small>
                             </div>
                             <div class="form-group">
                                 <label for="antigravityApiUrl">Antigravity API Endpoint:</label>
@@ -2163,7 +1818,7 @@
                                     <input type="checkbox" id="emptyOutputErrorEnabled" class="config-checkbox" />
                                     空回报错 400
                                 </label>
-                                <small class="config-note">控制其他请求路径的空回报错。GCLI / Antigravity 普通模型空回后以工具结果包装最新用户原文再试一次；抗截断模型首轮即包装，空回直接返回 400。换凭证重试另按路由设置执行。</small>
+                                <small class="config-note">控制其他请求路径的空回报错。Antigravity 普通模型空回后以工具结果包装最新用户原文再试一次；抗截断模型首轮即包装，空回直接返回 400。换凭证重试另按路由设置执行。</small>
                             </div>
                         </div>
                         <div class="config-group" data-settings-panel="diagnostics" hidden>

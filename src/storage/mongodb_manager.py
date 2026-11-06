@@ -446,7 +446,7 @@ class MongoDBManager:
 
     # ============ SQL 方法 ============
 
-    async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "geminicli") -> bool:
+    async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "antigravity") -> bool:
         """存储或更新凭证"""
         self._ensure_initialized()
 
@@ -527,7 +527,7 @@ class MongoDBManager:
             log.error(f"Error storing credential {filename}: {e}")
             return False
 
-    async def get_credential(self, filename: str, mode: str = "geminicli") -> Optional[Dict[str, Any]]:
+    async def get_credential(self, filename: str, mode: str = "antigravity") -> Optional[Dict[str, Any]]:
         """获取凭证数据"""
         self._ensure_initialized()
 
@@ -552,7 +552,7 @@ class MongoDBManager:
             log.error(f"Error getting credential {filename}: {e}")
             return None
 
-    async def list_credentials(self, mode: str = "geminicli") -> List[str]:
+    async def list_credentials(self, mode: str = "antigravity") -> List[str]:
         """列出所有凭证文件名"""
         self._ensure_initialized()
 
@@ -573,7 +573,7 @@ class MongoDBManager:
             log.error(f"Error listing credentials: {e}")
             return []
 
-    async def delete_credential(self, filename: str, mode: str = "geminicli") -> bool:
+    async def delete_credential(self, filename: str, mode: str = "antigravity") -> bool:
         """删除凭证"""
         self._ensure_initialized()
 
@@ -601,7 +601,7 @@ class MongoDBManager:
             log.error(f"Error deleting credential {filename}: {e}")
             return False
 
-    async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:
+    async def get_duplicate_credentials_by_email(self, mode: str = "antigravity") -> Dict[str, Any]:
         """
         获取按邮箱分组的重复凭证信息（只查询邮箱和文件名，不加载完整凭证数据）
         用于去重操作
@@ -687,7 +687,7 @@ class MongoDBManager:
             }
 
     async def update_credential_state(
-        self, filename: str, state_updates: Dict[str, Any], mode: str = "geminicli"
+        self, filename: str, state_updates: Dict[str, Any], mode: str = "antigravity"
     ) -> bool:
         """更新凭证状态"""
         self._ensure_initialized()
@@ -749,7 +749,7 @@ class MongoDBManager:
             log.error(f"Error updating credential state {filename}: {e}")
             return False
 
-    async def get_credential_state(self, filename: str, mode: str = "geminicli") -> Dict[str, Any]:
+    async def get_credential_state(self, filename: str, mode: str = "antigravity") -> Dict[str, Any]:
         """获取凭证状态（不包含error_messages）"""
         self._ensure_initialized()
 
@@ -804,7 +804,7 @@ class MongoDBManager:
             log.error(f"Error getting credential state {filename}: {e}")
             return {}
 
-    async def get_all_credential_states(self, mode: str = "geminicli") -> Dict[str, Dict[str, Any]]:
+    async def get_all_credential_states(self, mode: str = "antigravity") -> Dict[str, Dict[str, Any]]:
         """获取所有凭证状态（不包含error_messages）"""
         self._ensure_initialized()
 
@@ -866,7 +866,7 @@ class MongoDBManager:
         offset: int = 0,
         limit: Optional[int] = None,
         status_filter: str = "all",
-        mode: str = "geminicli",
+        mode: str = "antigravity",
         error_code_filter: Optional[str] = None,
         cooldown_filter: Optional[str] = None,
         preview_filter: Optional[str] = None,
@@ -1181,7 +1181,7 @@ class MongoDBManager:
             log.error(f"Error deleting config {key}: {e}")
             return False
 
-    async def get_credential_errors(self, filename: str, mode: str = "geminicli") -> Dict[str, Any]:
+    async def get_credential_errors(self, filename: str, mode: str = "antigravity") -> Dict[str, Any]:
         """
         专门获取凭证的错误信息（包含 error_codes 和 error_messages）
 
@@ -1237,7 +1237,7 @@ class MongoDBManager:
         filename: str,
         model_name: str,
         cooldown_until: Optional[float],
-        mode: str = "geminicli"
+        mode: str = "antigravity"
     ) -> bool:
         """
         设置特定模型的冷却时间
@@ -1312,7 +1312,7 @@ class MongoDBManager:
     async def clear_all_model_cooldowns(
         self,
         filename: str,
-        mode: str = "geminicli"
+        mode: str = "antigravity"
     ) -> bool:
         """
         清除某个凭证的所有模型冷却时间
@@ -1367,7 +1367,7 @@ class MongoDBManager:
         self,
         filename: str,
         model_name: Optional[str] = None,
-        mode: str = "geminicli",
+        mode: str = "antigravity",
         observed_at: Optional[float] = None,
     ) -> None:
         """

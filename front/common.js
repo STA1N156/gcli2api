@@ -2,6 +2,14 @@ function panelIcon(name, extraClass = '') {
     return `<svg class="panel-icon ${extraClass}" aria-hidden="true"><use href="./front/icons.svg#${name}"></use></svg>`;
 }
 
+function cpUrl(element) {
+    navigator.clipboard.writeText(element.textContent).then(() => {
+        const background = element.style.background;
+        element.style.background = '#b7f0b7';
+        setTimeout(() => { element.style.background = background; }, 800);
+    });
+}
+
 // =====================================================================
 // GCLI2API 控制面板公共JavaScript模块
 // =====================================================================
@@ -12,20 +20,16 @@ function panelIcon(name, extraClass = '') {
 const AppState = {
     // 认证相关
     authToken: '',
-    authInProgress: false,
-    currentProjectId: '',
 
     // Antigravity认证
     antigravityAuthState: null,
     antigravityAuthInProgress: false,
 
     // 凭证管理
-    creds: createCredsManager('normal'),
-    antigravityCreds: createCredsManager('antigravity'),
+    antigravityCreds: createCredsManager(),
 
     // 文件上传
-    uploadFiles: createUploadManager('normal'),
-    antigravityUploadFiles: createUploadManager('antigravity'),
+    antigravityUploadFiles: createUploadManager(),
 
     // 配置管理
     currentConfig: {},
@@ -61,11 +65,11 @@ const AppState = {
 // =====================================================================
 // 凭证管理器工厂
 // =====================================================================
-function createCredsManager(type) {
-    const modeParam = type === 'antigravity' ? 'mode=antigravity' : 'mode=geminicli';
+function createCredsManager() {
+    const modeParam = 'mode=antigravity';
 
     return {
-        type: type,
+        type: 'antigravity',
         data: {},
         filteredData: {},
         currentPage: 1,
@@ -110,12 +114,9 @@ function createCredsManager(type) {
 
         // DOM元素ID前缀
         getElementId: (suffix) => {
-            // 普通凭证的ID首字母小写,如 credsLoading
             // Antigravity的ID是 antigravity + 首字母大写,如 antigravityCredsLoading
-            if (type === 'antigravity') {
-                return 'antigravity' + suffix.charAt(0).toUpperCase() + suffix.slice(1);
-            }
-            return suffix.charAt(0).toLowerCase() + suffix.slice(1);
+            return 'antigravity' + suffix.charAt(0).toUpperCase() + suffix.slice(1);
+
         },
 
         // 刷新凭证列表
@@ -173,7 +174,7 @@ function createCredsManager(type) {
                     this.renderList();
                     this.updatePagination();
 
-                    let msg = `已加载 ${data.total} 个${type === 'antigravity' ? 'Antigravity' : ''}凭证文件`;
+                    let msg = `已加载 ${data.total} 个${'Antigravity'}凭证文件`;
                     const statusLabels = {
                         normal: '正常',
                         abnormal: '全部异常',
@@ -216,10 +217,10 @@ function createCredsManager(type) {
                 } else {
                     this.statsData.normal++;
                 }
-                if (families.has('claude') || (this.type === 'antigravity' && unscoped)) {
+                if (families.has('claude') || (unscoped)) {
                     this.statsData.claude_abnormal++;
                 }
-                if (abnormal && (families.has('gemini') || this.type !== 'antigravity' || unscoped)) {
+                if (abnormal && (families.has('gemini') || unscoped)) {
                     this.statsData.gemini_abnormal++;
                 }
             });
@@ -317,11 +318,9 @@ function createCredsManager(type) {
             const selectedCount = this.selectedFiles.size;
             document.getElementById(this.getElementId('SelectedCount')).textContent = `已选择 ${selectedCount} 项`;
 
-            const batchBtnNames = ['Enable', 'Disable', 'Delete', 'Verify', 'MessageVerify', 'Preview'];
-            if (this.type === 'antigravity') {
-                batchBtnNames.push('EnableCredit');
+            const batchBtnNames = ['Enable', 'Disable', 'Delete', 'Verify', 'MessageVerify'];
+            batchBtnNames.push('EnableCredit');
                 batchBtnNames.push('DisableCredit');
-            }
             const batchBtns = batchBtnNames.map(action =>
                 document.getElementById(this.getElementId(`Batch${action}Btn`))
             );
@@ -420,7 +419,7 @@ function createCredsManager(type) {
         },
 
         async clearAllAbnormalStatus() {
-            const label = this.type === 'antigravity' ? 'Antigravity' : 'GCLI';
+            const label = 'Antigravity';
             if (!confirm(`确定要刷新全部 ${label} 凭证的异常状态吗？`)) return;
 
             try {
@@ -448,21 +447,18 @@ function createCredsManager(type) {
 // =====================================================================
 // 文件上传管理器工厂
 // =====================================================================
-function createUploadManager(type) {
-    const modeParam = type === 'antigravity' ? 'mode=antigravity' : 'mode=geminicli';
+function createUploadManager() {
+    const modeParam = 'mode=antigravity';
     const endpoint = `./creds/upload?${modeParam}`;
 
     return {
-        type: type,
+        type: 'antigravity',
         selectedFiles: [],
 
         getElementId: (suffix) => {
-            // 普通上传的ID首字母小写,如 fileList
             // Antigravity的ID是 antigravity + 首字母大写,如 antigravityFileList
-            if (type === 'antigravity') {
-                return 'antigravity' + suffix.charAt(0).toUpperCase() + suffix.slice(1);
-            }
-            return suffix.charAt(0).toLowerCase() + suffix.slice(1);
+            return 'antigravity' + suffix.charAt(0).toUpperCase() + suffix.slice(1);
+
         },
 
         handleFileSelect(event) {
@@ -514,7 +510,7 @@ function createUploadManager(type) {
                         <span class="file-name">${fileIcon} ${file.name}</span>
                         <span class="file-size">(${formatFileSize(file.size)}${fileType})</span>
                     </div>
-                    <button class="remove-btn" onclick="${type === 'antigravity' ? 'removeAntigravityFile' : 'removeFile'}(${index})">删除</button>
+                    <button class="remove-btn" onclick="${'removeAntigravityFile'}(${index})">删除</button>
                 `;
                 list.appendChild(fileItem);
             });
@@ -565,7 +561,7 @@ function createUploadManager(type) {
                     if (xhr.status === 200) {
                         try {
                             const data = JSON.parse(xhr.responseText);
-                            showStatus(`成功上传 ${data.uploaded_count} 个${type === 'antigravity' ? 'Antigravity' : ''}文件`, 'success');
+                            showStatus(`成功上传 ${data.uploaded_count} 个${'Antigravity'}文件`, 'success');
                             this.clearFiles();
                             progressSection.classList.add('hidden');
                         } catch (e) {
@@ -713,17 +709,12 @@ function formatCooldownTime(remainingSeconds) {
     return `${seconds}s`;
 }
 
-function isGcliManagerType(managerType) {
-    return managerType === 'normal' || managerType === 'geminicli';
-}
+
 
 function getCooldownModelGroup(modelName, managerType = null) {
     const model = String(modelName || '').toLowerCase();
     if (model.includes('gemini')) {
-        if (isGcliManagerType(managerType)) {
-            if (model.includes('flash')) return 'Gemini Flash';
-            if (model.includes('pro')) return 'Gemini Pro';
-        }
+
         return 'Gemini 模型';
     }
     if (model.includes('claude')) return 'Claude 模型';
@@ -764,9 +755,7 @@ function getGroupedCooldowns(modelCooldowns, managerType = null) {
         }
     }
 
-    const groupOrder = isGcliManagerType(managerType)
-        ? ['Gemini Flash', 'Gemini Pro', 'Gemini 模型', 'Claude 模型']
-        : ['Gemini 模型', 'Claude 模型'];
+    const groupOrder = ['Gemini 模型', 'Claude 模型'];
 
     return groupOrder
         .map(groupName => groups[groupName])
@@ -806,20 +795,14 @@ function createCredCard(credInfo, manager) {
         statusBadges += `<span class="error-codes">错误码: ${status.error_codes.join(', ')}</span>`;
     }
 
-    // Preview状态显示 (仅对geminicli模式显示)
-    if (managerType !== 'antigravity' && credInfo.preview !== undefined) {
-        if (!credInfo.preview) statusBadges += '<span class="status-badge muted">Preview 关闭</span>';
-    }
 
-    // tier 状态显示 (geminicli 和 antigravity 都显示)
+
     const tier = (credInfo.tier || 'pro').toString().toLowerCase();
     const tierLabel = tier.toUpperCase();
     statusBadges += `<span class="status-badge tier tier-${tier}" title="凭证等级: ${tierLabel}">${tierLabel}</span>`;
 
     // Credit 状态显示（仅 antigravity）
-    if (managerType === 'antigravity') {
-        if (credInfo.enable_credit) statusBadges += '<span class="status-badge credit">Credit</span>';
-    }
+    if (credInfo.enable_credit) statusBadges += '<span class="status-badge credit">Credit</span>';
 
     // 模型级冷却状态
     if (credInfo.model_cooldowns && Object.keys(credInfo.model_cooldowns).length > 0) {
@@ -827,12 +810,12 @@ function createCredCard(credInfo, manager) {
     }
 
     // 路径ID
-    const pathId = (managerType === 'antigravity' ? 'ag_' : '') + btoa(encodeURIComponent(filename)).replace(/[+/=]/g, '_');
+    const pathId = ('ag_') + btoa(encodeURIComponent(filename)).replace(/[+/=]/g, '_');
 
     // 操作按钮
-    const modeName = managerType === 'antigravity' ? 'Antigravity' : '';
+    const modeName = 'Antigravity';
     const actionButtons = `
-        ${managerType === 'antigravity' ? `<button class="cred-btn primary" onclick="toggleAntigravityQuotaDetails('${pathId}')">额度</button>` : ''}
+        ${`<button class="cred-btn primary" onclick="toggleAntigravityQuotaDetails('${pathId}')">额度</button>`}
         <button class="cred-btn primary" onclick="test${modeName}Credential('${filename}')">消息测试</button>
         <button class="cred-btn" onclick="verify${modeName}ProjectId('${filename}')">检验</button>
         <button class="cred-btn view" onclick="toggle${modeName}CredDetails('${pathId}')">详情</button>
@@ -842,10 +825,9 @@ function createCredCard(credInfo, manager) {
                 <button class="cred-btn email" onclick="fetch${modeName}UserEmail('${filename}')">刷新邮箱</button>
                 <button class="cred-btn" onclick="toggle${modeName}ErrorDetails('${pathId}')">错误详情</button>
                 <button class="cred-btn download" onclick="download${modeName}Cred('${filename}')">下载凭证</button>
-                ${managerType === 'antigravity' ? (credInfo.enable_credit
+                ${credInfo.enable_credit
                     ? `<button class="cred-btn" data-filename="${filename}" data-action="disable_credit">关闭 Credit</button>`
-                    : `<button class="cred-btn" data-filename="${filename}" data-action="enable_credit">开启 Credit</button>`
-                ) : `<button class="cred-btn" onclick="configurePreviewChannel('${filename}')">设置预览</button>`}
+                    : `<button class="cred-btn" data-filename="${filename}" data-action="enable_credit">开启 Credit</button>`}
                 ${status.disabled
                     ? `<button class="cred-btn enable" data-filename="${filename}" data-action="enable">启用凭证</button>`
                     : `<button class="cred-btn disable" data-filename="${filename}" data-action="disable">禁用凭证</button>`
@@ -865,7 +847,7 @@ function createCredCard(credInfo, manager) {
     div.innerHTML = `
         <div class="cred-header">
             <div class="cred-identity">
-                <input type="checkbox" class="${checkboxClass}" data-filename="${filename}" onchange="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}FileSelection('${filename}')">
+                <input type="checkbox" class="${checkboxClass}" data-filename="${filename}" onchange="toggle${'Antigravity'}FileSelection('${filename}')">
                 <div>
                     <div class="cred-filename">${filename}</div>
                     ${emailInfo}
@@ -880,16 +862,16 @@ function createCredCard(credInfo, manager) {
         <div class="cred-details" id="errors-${pathId}">
             <div class="cred-content" data-filename="${filename}" data-loaded="false" style="background-color: #fff3cd; border-color: #ffc107;">点击"查看报错"按钮加载报错信息...</div>
         </div>
-        ${managerType === 'antigravity' ? `
+        ${`
         <div class="cred-quota-details" id="quota-${pathId}" style="display: ${AppState.quotaOpen.has(filename) ? 'block' : 'none'};">
             <div class="cred-quota-content" data-filename="${filename}" data-loaded="false">
                 点击"查看额度"按钮加载额度信息...
             </div>
         </div>
-        ` : ''}
+        `}
     `;
 
-    if (managerType === 'antigravity' && AppState.quotaOpen.has(filename)) {
+    if (AppState.quotaOpen.has(filename)) {
         const cached = AppState.quotaCache.get(filename);
         const content = div.querySelector('.cred-quota-content');
         content.innerHTML = accountQuotaMarkup(pathId, cached, AppState.quotaRequests.has(filename));
@@ -901,7 +883,7 @@ function createCredCard(credInfo, manager) {
             const fn = this.getAttribute('data-filename');
             const action = this.getAttribute('data-action');
             if (action === 'delete') {
-                if (confirm(`确定要删除${managerType === 'antigravity' ? ' Antigravity ' : ''}凭证文件吗？\n${fn}`)) {
+                if (confirm(`确定要删除${' Antigravity '}凭证文件吗？\n${fn}`)) {
                     manager.action(fn, action);
                 }
             } else {
@@ -916,9 +898,7 @@ function createCredCard(credInfo, manager) {
 // =====================================================================
 // 凭证详情切换
 // =====================================================================
-async function toggleCredDetails(pathId) {
-    await toggleCredDetailsCommon(pathId, AppState.creds);
-}
+
 
 async function toggleAntigravityCredDetails(pathId) {
     await toggleCredDetailsCommon(pathId, AppState.antigravityCreds);
@@ -939,7 +919,7 @@ async function toggleCredDetailsCommon(pathId, manager) {
             contentDiv.textContent = '正在加载文件内容...';
 
             try {
-                const modeParam = manager.type === 'antigravity' ? 'mode=antigravity' : 'mode=geminicli';
+                const modeParam = 'mode=antigravity';
                 const endpoint = `./creds/detail/${encodeURIComponent(filename)}?${modeParam}`;
 
                 const response = await fetch(endpoint, { headers: getAuthHeaders() });
@@ -1057,7 +1037,6 @@ function switchTab(tabName, targetTab = null) {
 
 // 标签页数据加载（从动画中分离出来）
 function triggerTabDataLoad(tabName) {
-    if (tabName === 'manage') AppState.creds.refresh();
     if (tabName === 'antigravity-manage') {
         AppState.antigravityCreds.refresh();
     }
@@ -1069,120 +1048,9 @@ function triggerTabDataLoad(tabName) {
 // =====================================================================
 // OAuth认证相关函数
 // =====================================================================
-async function startAuth() {
-    const projectId = document.getElementById('projectId').value.trim();
-    AppState.currentProjectId = projectId || null;
 
-    const btn = document.getElementById('getAuthBtn');
-    btn.disabled = true;
-    btn.textContent = '正在获取认证链接...';
 
-    try {
-        const requestBody = projectId ? { project_id: projectId } : {};
-        showStatus(projectId ? '使用指定的项目ID生成认证链接...' : '将尝试自动检测项目ID，正在生成认证链接...', 'info');
 
-        const response = await fetch('./auth/start', {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify(requestBody)
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            document.getElementById('authUrl').href = data.auth_url;
-            document.getElementById('authUrl').textContent = data.auth_url;
-            document.getElementById('authUrlSection').classList.remove('hidden');
-
-            const msg = data.auto_project_detection
-                ? '认证链接已生成（将在认证完成后自动检测项目ID），请点击链接完成授权'
-                : `认证链接已生成（项目ID: ${data.detected_project_id}），请点击链接完成授权`;
-            showStatus(msg, 'info');
-            AppState.authInProgress = true;
-        } else {
-            showStatus(`错误: ${data.error || '获取认证链接失败'}`, 'error');
-        }
-    } catch (error) {
-        showStatus(`网络错误: ${error.message}`, 'error');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '获取认证链接';
-    }
-}
-
-async function getCredentials() {
-    if (!AppState.authInProgress) {
-        showStatus('请先获取认证链接并完成授权', 'error');
-        return;
-    }
-
-    const btn = document.getElementById('getCredsBtn');
-    btn.disabled = true;
-    btn.textContent = '等待OAuth回调中...';
-
-    try {
-        showStatus('正在等待OAuth回调，这可能需要一些时间...', 'info');
-
-        const requestBody = AppState.currentProjectId ? { project_id: AppState.currentProjectId } : {};
-
-        const response = await fetch('./auth/callback', {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify(requestBody)
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            document.getElementById('credentialsContent').textContent = JSON.stringify(data.credentials, null, 2);
-
-            const msg = data.auto_detected_project
-                ? ` 认证成功！项目ID已自动检测为: ${data.credentials.project_id}，文件已保存到: ${data.file_path}`
-                : ` 认证成功！文件已保存到: ${data.file_path}`;
-            showStatus(msg, 'success');
-
-            document.getElementById('credentialsSection').classList.remove('hidden');
-            AppState.authInProgress = false;
-        } else if (data.requires_project_selection && data.available_projects) {
-            let projectOptions = "请选择一个项目：\n\n";
-            data.available_projects.forEach((project, index) => {
-                projectOptions += `${index + 1}. ${project.name} (${project.project_id})\n`;
-            });
-            projectOptions += `\n请输入序号 (1-${data.available_projects.length}):`;
-
-            const selection = prompt(projectOptions);
-            const projectIndex = parseInt(selection) - 1;
-
-            if (projectIndex >= 0 && projectIndex < data.available_projects.length) {
-                AppState.currentProjectId = data.available_projects[projectIndex].project_id;
-                btn.textContent = '重新尝试获取认证文件';
-                showStatus(`使用选择的项目重新尝试...`, 'info');
-                setTimeout(() => getCredentials(), 1000);
-                return;
-            } else {
-                showStatus('无效的选择，请重新开始认证', 'error');
-            }
-        } else if (data.requires_manual_project_id) {
-            const userProjectId = prompt('无法自动检测项目ID，请手动输入您的Google Cloud项目ID:');
-            if (userProjectId && userProjectId.trim()) {
-                AppState.currentProjectId = userProjectId.trim();
-                btn.textContent = '重新尝试获取认证文件';
-                showStatus('使用手动输入的项目ID重新尝试...', 'info');
-                setTimeout(() => getCredentials(), 1000);
-                return;
-            } else {
-                showStatus('需要项目ID才能完成认证，请重新开始并输入正确的项目ID', 'error');
-            }
-        } else {
-            showStatus(` 错误: ${data.error || '获取认证文件失败'}`, 'error');
-        }
-    } catch (error) {
-        showStatus(`网络错误: ${error.message}`, 'error');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '获取认证文件';
-    }
-}
 
 // =====================================================================
 // Antigravity 认证相关函数
@@ -1275,35 +1143,9 @@ function downloadAntigravityCredentials() {
 // =====================================================================
 // 回调URL处理
 // =====================================================================
-function toggleProjectIdSection() {
-    const section = document.getElementById('projectIdSection');
-    const icon = document.getElementById('projectIdToggleIcon');
 
-    if (section.style.display === 'none') {
-        section.style.display = 'block';
-        icon.style.transform = 'rotate(90deg)';
-        icon.innerHTML = panelIcon('chevron-down');
-    } else {
-        section.style.display = 'none';
-        icon.style.transform = 'rotate(0deg)';
-        icon.innerHTML = panelIcon('chevron-right');
-    }
-}
 
-function toggleCallbackUrlSection() {
-    const section = document.getElementById('callbackUrlSection');
-    const icon = document.getElementById('callbackUrlToggleIcon');
 
-    if (section.style.display === 'none') {
-        section.style.display = 'block';
-        icon.style.transform = 'rotate(180deg)';
-        icon.innerHTML = panelIcon('chevron-up');
-    } else {
-        section.style.display = 'none';
-        icon.style.transform = 'rotate(0deg)';
-        icon.innerHTML = panelIcon('chevron-down');
-    }
-}
 
 function toggleAntigravityCallbackUrlSection() {
     const section = document.getElementById('antigravityCallbackUrlSection');
@@ -1320,58 +1162,7 @@ function toggleAntigravityCallbackUrlSection() {
     }
 }
 
-async function processCallbackUrl() {
-    const callbackUrl = document.getElementById('callbackUrlInput').value.trim();
 
-    if (!callbackUrl) {
-        showStatus('请输入回调URL', 'error');
-        return;
-    }
-
-    if (!callbackUrl.startsWith('http://') && !callbackUrl.startsWith('https://')) {
-        showStatus('请输入有效的URL（以http://或https://开头）', 'error');
-        return;
-    }
-
-    if (!callbackUrl.includes('code=') || !callbackUrl.includes('state=')) {
-        showStatus(' 这不是有效的回调URL！请确保：\n1. 已完成Google OAuth授权\n2. 复制的是浏览器地址栏的完整URL\n3. URL包含code和state参数', 'error');
-        return;
-    }
-
-    showStatus('正在从回调URL获取凭证...', 'info');
-
-    try {
-        const projectId = document.getElementById('projectId')?.value.trim() || null;
-
-        const response = await fetch('./auth/callback-url', {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ callback_url: callbackUrl, project_id: projectId })
-        });
-
-        const result = await response.json();
-
-        if (result.credentials) {
-            showStatus(result.message || '从回调URL获取凭证成功！', 'success');
-            document.getElementById('credentialsContent').innerHTML = '<pre>' + JSON.stringify(result.credentials, null, 2) + '</pre>';
-            document.getElementById('credentialsSection').classList.remove('hidden');
-        } else if (result.requires_manual_project_id) {
-            showStatus('需要手动指定项目ID，请在高级选项中填入Google Cloud项目ID后重试', 'error');
-        } else if (result.requires_project_selection) {
-            let msg = '<br><strong>可用项目：</strong><br>';
-            result.available_projects.forEach(p => {
-                msg += `• ${p.name} (ID: ${p.project_id})<br>`;
-            });
-            showStatus('检测到多个项目，请在高级选项中指定项目ID：' + msg, 'error');
-        } else {
-            showStatus(result.error || '从回调URL获取凭证失败', 'error');
-        }
-
-        document.getElementById('callbackUrlInput').value = '';
-    } catch (error) {
-        showStatus(`从回调URL获取凭证失败: ${error.message}`, 'error');
-    }
-}
 
 async function processAntigravityCallbackUrl() {
     const callbackUrl = document.getElementById('antigravityCallbackUrlInput').value.trim();
@@ -1420,65 +1211,16 @@ async function processAntigravityCallbackUrl() {
 // 全局兼容函数（供HTML调用）
 // =====================================================================
 // 普通凭证管理
-function refreshCredsStatus() { AppState.creds.refresh(); }
-function applyStatusFilter() { AppState.creds.applyStatusFilter(); }
-function changePage(direction) { AppState.creds.changePage(direction); }
-function changePageSize() { AppState.creds.changePageSize(); }
-function toggleFileSelection(filename) {
-    if (AppState.creds.selectedFiles.has(filename)) {
-        AppState.creds.selectedFiles.delete(filename);
-    } else {
-        AppState.creds.selectedFiles.add(filename);
-    }
-    AppState.creds.updateBatchControls();
-}
-function toggleSelectAll() {
-    const checkbox = document.getElementById('selectAllCheckbox');
-    const checkboxes = document.querySelectorAll('.file-checkbox');
 
-    if (checkbox.checked) {
-        checkboxes.forEach(cb => AppState.creds.selectedFiles.add(cb.getAttribute('data-filename')));
-    } else {
-        AppState.creds.selectedFiles.clear();
-    }
-    checkboxes.forEach(cb => cb.checked = checkbox.checked);
-    AppState.creds.updateBatchControls();
-}
-function batchAction(action) { AppState.creds.batchAction(action); }
-function clearAllAbnormalStatus() { AppState.creds.clearAllAbnormalStatus(); }
-function downloadCred(filename) {
-    fetch(`./creds/download/${filename}`, { headers: { 'Authorization': `Bearer ${AppState.authToken}` } })
-        .then(r => r.ok ? r.blob() : Promise.reject())
-        .then(blob => {
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            a.click();
-            window.URL.revokeObjectURL(url);
-            showStatus(`已下载文件: ${filename}`, 'success');
-        })
-        .catch(() => showStatus(`下载失败: ${filename}`, 'error'));
-}
-async function downloadAllCreds() {
-    try {
-        const response = await fetch('./creds/download-all', {
-            headers: { 'Authorization': `Bearer ${AppState.authToken}` }
-        });
-        if (response.ok) {
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'credentials.zip';
-            a.click();
-            window.URL.revokeObjectURL(url);
-            showStatus('已下载所有凭证文件', 'success');
-        }
-    } catch (error) {
-        showStatus(`打包下载失败: ${error.message}`, 'error');
-    }
-}
+
+
+
+
+
+
+
+
+
 
 // Antigravity凭证管理
 function refreshAntigravityCredsList() {
@@ -1719,10 +1461,10 @@ async function downloadAllAntigravityCreds() {
 }
 
 // 文件上传
-function handleFileSelect(event) { AppState.uploadFiles.handleFileSelect(event); }
-function removeFile(index) { AppState.uploadFiles.removeFile(index); }
-function clearFiles() { AppState.uploadFiles.clearFiles(); }
-function uploadFiles() { AppState.uploadFiles.upload(); }
+
+
+
+
 
 function handleAntigravityFileSelect(event) { AppState.antigravityUploadFiles.handleFileSelect(event); }
 function handleAntigravityFileDrop(event) {
@@ -1737,9 +1479,9 @@ function uploadAntigravityFiles() { AppState.antigravityUploadFiles.upload(); }
 
 // 邮箱相关
 // 辅助函数：根据文件名更新卡片中的邮箱显示
-function updateEmailDisplay(filename, email, managerType = 'normal') {
+function updateEmailDisplay(filename, email, managerType = 'antigravity') {
     // 查找对应的凭证卡片
-    const containerId = managerType === 'antigravity' ? 'antigravityCredsList' : 'credsList';
+    const containerId = 'antigravityCredsList';
     const container = document.getElementById(containerId);
     if (!container) return false;
 
@@ -1762,25 +1504,7 @@ function updateEmailDisplay(filename, email, managerType = 'normal') {
     return false;
 }
 
-async function fetchUserEmail(filename) {
-    try {
-        showStatus('正在获取用户邮箱...', 'info');
-        const response = await fetch(`./creds/fetch-email/${encodeURIComponent(filename)}`, {
-            method: 'POST',
-            headers: getAuthHeaders()
-        });
-        const data = await response.json();
-        if (response.ok && data.user_email) {
-            showStatus(`成功获取邮箱: ${data.user_email}`, 'success');
-            // 直接更新卡片中的邮箱显示，不刷新整个列表
-            updateEmailDisplay(filename, data.user_email, 'normal');
-        } else {
-            showStatus(data.message || '无法获取用户邮箱', 'error');
-        }
-    } catch (error) {
-        showStatus(`获取邮箱失败: ${error.message}`, 'error');
-    }
-}
+
 
 async function fetchAntigravityUserEmail(filename) {
     try {
@@ -1802,43 +1526,7 @@ async function fetchAntigravityUserEmail(filename) {
     }
 }
 
-async function verifyProjectId(filename) {
-    try {
-        // 显示加载状态
-        showStatus(' 正在检验Project ID，请稍候...', 'info');
 
-        const response = await fetch(`./creds/verify-project/${encodeURIComponent(filename)}`, {
-            method: 'POST',
-            headers: getAuthHeaders()
-        });
-        const data = await response.json();
-
-        if (response.ok && data.success) {
-            // 成功时显示绿色成功消息和Project ID
-            const tierLine = data.subscription_tier ? `\nTier: ${data.subscription_tier}` : '';
-            const creditLine = data.credit_amount !== undefined && data.credit_amount !== null
-                ? `\n积分: ${data.credit_amount}`
-                : '';
-            const successMsg = ` 检验成功！\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`;
-            showStatus(successMsg.replace(/\n/g, '<br>'), 'success');
-
-            // 弹出成功提示
-            showMessageModal('检验成功', ` 检验成功！\n\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`, 'success');
-
-            await AppState.creds.refresh();
-        } else {
-            // 失败时显示红色错误消息
-            const errorMsg = data.message || '检验失败';
-            showStatus(` ${errorMsg}`, 'error');
-            showMessageModal('检验失败', ` 检验失败\n\n${errorMsg}`, 'error');
-            await AppState.creds.refresh();
-        }
-    } catch (error) {
-        const errorMsg = `检验失败: ${error.message}`;
-        showStatus(` ${errorMsg}`, 'error');
-        showMessageModal('检验失败', ` ${errorMsg}`, 'error');
-    }
-}
 
 async function verifyAntigravityProjectId(filename) {
     try {
@@ -1878,54 +1566,7 @@ async function verifyAntigravityProjectId(filename) {
     }
 }
 
-async function testCredential(filename) {
-    try {
-        // 显示加载状态
-        showStatus(' 正在测试凭证，请稍候...', 'info');
 
-        const response = await fetch(`./creds/test/${encodeURIComponent(filename)}`, {
-            method: 'POST',
-            headers: getAuthHeaders()
-        });
-
-        // 解析JSON响应
-        const data = await response.json();
-
-        if (data.success) {
-            // 凭证可用
-            const successMsg = ` 测试成功！\n文件: ${filename}\n状态: ${data.message || '凭证可用'} (${data.status_code || 200})`;
-            showStatus(' 测试成功！', 'success');
-            showMessageModal('测试成功', successMsg, 'success');
-            await AppState.creds.refresh();
-        }
-        else {
-            // 其他错误 - 显示完整错误信息
-            let errorDetails = ` 测试失败\n文件: ${filename}\n`;
-
-            // 如果有完整的错误响应，添加到详情中
-            if (data.error) {
-                try {
-                    // 尝试格式化JSON错误
-                    const errorObj = JSON.parse(data.error);
-                    errorDetails += `\n错误详情:\n${JSON.stringify(errorObj, null, 2)}`;
-                } catch {
-                    // 如果不是JSON，直接显示文本
-                    errorDetails += `\n错误详情:\n${data.error}`;
-                }
-            } else {
-                errorDetails += `错误码: ${data.status_code || response.status}`;
-            }
-
-            showStatus(` 测试失败 - ${data.message || '错误码: ' + (data.status_code || response.status)}`, 'error');
-            showMessageModal('测试失败', errorDetails, 'error');
-            await AppState.creds.refresh();
-        }
-    } catch (error) {
-        const errorMsg = `测试失败: ${error.message}`;
-        showStatus(` ${errorMsg}`, 'error');
-        showMessageModal('测试失败', ` ${errorMsg}`, 'error');
-    }
-}
 
 async function testAntigravityCredential(filename) {
     try {
@@ -1976,49 +1617,7 @@ async function testAntigravityCredential(filename) {
     }
 }
 
-async function configurePreviewChannel(filename) {
-    try {
-        // 显示加载状态
-        showStatus(' 正在配置Preview通道，请稍候...', 'info');
 
-        const response = await fetch(`./creds/configure-preview/${encodeURIComponent(filename)}`, {
-            method: 'POST',
-            headers: getAuthHeaders()
-        });
-
-        const data = await response.json();
-
-        if (response.ok && data.success) {
-            // 配置成功
-            const successMsg = ` 配置成功！\n文件: ${filename}\n状态: ${data.message}`;
-            showStatus(successMsg.replace(/\n/g, '<br>'), 'success');
-            showMessageModal('Preview通道配置成功', ` Preview通道配置成功！\n\n文件: ${filename}\n\n${data.message}\n\nSetting ID: ${data.setting_id || 'N/A'}\nBinding ID: ${data.binding_id || 'N/A'}`, 'success');
-
-            // 刷新凭证列表
-            await AppState.creds.refresh();
-        } else {
-            // 配置失败
-            const errorMsg = data.message || '配置失败';
-            const errorDetail = data.error || '';
-            const step = data.step || '';
-
-            let alertMsg = ` Preview通道配置失败\n\n文件: ${filename}\n\n${errorMsg}`;
-            if (step) {
-                alertMsg += `\n失败步骤: ${step}`;
-            }
-            if (errorDetail) {
-                alertMsg += `\n\n错误详情: ${errorDetail}`;
-            }
-
-            showStatus(` ${errorMsg}`, 'error');
-            showMessageModal('Preview通道配置失败', alertMsg, 'error');
-        }
-    } catch (error) {
-        const errorMsg = `配置Preview通道失败: ${error.message}`;
-        showStatus(` ${errorMsg}`, 'error');
-        showMessageModal('配置Preview通道失败', ` ${errorMsg}`, 'error');
-    }
-}
 
 function accountQuotaMarkup(pathId, data, loading = false) {
     const age = data?.updated_at ? '更新于 ' + formatAntigravitySummaryTime(data.updated_at) : '';
@@ -2080,9 +1679,7 @@ async function toggleAntigravityQuotaDetails(pathId) {
 // =====================================================================
 // 查看报错详情
 // =====================================================================
-async function toggleErrorDetails(pathId) {
-    await toggleErrorDetailsCommon(pathId, AppState.creds);
-}
+
 
 async function toggleAntigravityErrorDetails(pathId) {
     await toggleErrorDetailsCommon(pathId, AppState.antigravityCreds);
@@ -2104,7 +1701,7 @@ async function toggleErrorDetailsCommon(pathId, manager) {
             contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #666;"> 正在加载报错信息...</div>';
 
             try {
-                const modeParam = manager.type === 'antigravity' ? 'mode=antigravity' : 'mode=geminicli';
+                const modeParam = 'mode=antigravity';
                 const response = await fetch(`./creds/errors/${encodeURIComponent(filename)}?${modeParam}`, {
                     method: 'GET',
                     headers: getAuthHeaders()
@@ -2253,88 +1850,12 @@ function highlightHttpLinks(text) {
     });
 }
 
-async function batchVerifyProjectIds() {
-    const selectedFiles = Array.from(AppState.creds.selectedFiles);
-    if (selectedFiles.length === 0) {
-        showStatus(' 请先选择要检验的凭证', 'error');
-        showMessageModal('提示', '请先选择要检验的凭证', 'error');
-        return;
-    }
 
-    if (!confirm(`确定要批量检验 ${selectedFiles.length} 个凭证的Project ID吗？\n\n将并行检验以加快速度。`)) {
-        return;
-    }
 
-    showStatus(` 正在并行检验 ${selectedFiles.length} 个凭证，请稍候...`, 'info');
-
-    // 并行执行所有检验请求
-    const promises = selectedFiles.map(async (filename) => {
-        try {
-            const response = await fetch(`./creds/verify-project/${encodeURIComponent(filename)}`, {
-                method: 'POST',
-                headers: getAuthHeaders()
-            });
-            const data = await response.json();
-
-            if (response.ok && data.success) {
-                return {
-                    success: true,
-                    filename,
-                    projectId: data.project_id,
-                    creditAmount: data.credit_amount,
-                    message: data.message
-                };
-            } else {
-                return { success: false, filename, error: data.message || '失败' };
-            }
-        } catch (error) {
-            return { success: false, filename, error: error.message };
-        }
-    });
-
-    // 等待所有请求完成
-    const results = await Promise.all(promises);
-
-    // 统计结果
-    let successCount = 0;
-    let failCount = 0;
-    const resultMessages = [];
-
-    results.forEach(result => {
-        if (result.success) {
-            successCount++;
-            const creditSuffix = result.creditAmount !== undefined && result.creditAmount !== null
-                ? ` (积分: ${result.creditAmount})`
-                : '';
-            resultMessages.push(` ${result.filename}: ${result.projectId}${creditSuffix}`);
-        } else {
-            failCount++;
-            resultMessages.push(` ${result.filename}: ${result.error}`);
-        }
-    });
-
-    await AppState.creds.refresh();
-
-    const summary = `批量检验完成！\n\n成功: ${successCount} 个\n失败: ${failCount} 个\n总计: ${selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
-
-    if (failCount === 0) {
-        showStatus(` 全部检验成功！成功检验 ${successCount}/${selectedFiles.length} 个凭证`, 'success');
-        showMessageModal('批量检验完成', summary, 'success');
-    } else if (successCount === 0) {
-        showStatus(` 全部检验失败！失败 ${failCount}/${selectedFiles.length} 个凭证`, 'error');
-        showMessageModal('批量检验完成', summary, 'error');
-    } else {
-        showStatus(` 批量检验完成：成功 ${successCount}/${selectedFiles.length} 个，失败 ${failCount} 个`, 'info');
-        showMessageModal('批量检验完成', summary, 'info');
-    }
-
-    console.log(summary);
-}
-
-async function batchVerifyMessageCredentials(isAntigravity = false) {
-    const manager = isAntigravity ? AppState.antigravityCreds : AppState.creds;
+async function batchVerifyAntigravityMessageCredentials() {
+    const manager = AppState.antigravityCreds;
     const selectedFiles = Array.from(manager.selectedFiles);
-    const label = isAntigravity ? 'Antigravity凭证' : '凭证';
+    const label = 'Antigravity凭证';
 
     if (selectedFiles.length === 0) {
         showStatus(` 请先选择要消息校验的${label}`, 'error');
@@ -2348,7 +1869,7 @@ async function batchVerifyMessageCredentials(isAntigravity = false) {
 
     showStatus(`正在并行消息校验 ${selectedFiles.length} 个${label}，请稍候...`, 'info');
 
-    const modeParam = isAntigravity ? '&mode=antigravity' : '';
+    const modeParam = '&mode=antigravity';
     const promises = selectedFiles.map(async (filename) => {
         try {
             const response = await fetch(`./creds/test/${encodeURIComponent(filename)}?enable_on_success=true${modeParam}`, {
@@ -2394,7 +1915,7 @@ async function batchVerifyMessageCredentials(isAntigravity = false) {
 
     await manager.refresh();
 
-    const title = isAntigravity ? 'Antigravity批量消息校验完成' : '批量消息校验完成';
+    const title = 'Antigravity批量消息校验完成';
     const summary = `${title}！\n\n成功: ${successCount} 个\n失败: ${failCount} 个\n总计: ${selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
 
     if (failCount === 0) {
@@ -2411,9 +1932,7 @@ async function batchVerifyMessageCredentials(isAntigravity = false) {
     console.log(summary);
 }
 
-async function batchVerifyAntigravityMessageCredentials() {
-    return batchVerifyMessageCredentials(true);
-}
+
 
 async function batchVerifyAntigravityProjectIds() {
     const selectedFiles = Array.from(AppState.antigravityCreds.selectedFiles);
@@ -2493,109 +2012,10 @@ async function batchVerifyAntigravityProjectIds() {
     console.log(summary);
 }
 
-async function batchConfigurePreview() {
-    const selectedFiles = Array.from(AppState.creds.selectedFiles);
-    if (selectedFiles.length === 0) {
-        showStatus(' 请先选择要配置Preview的凭证', 'error');
-        showMessageModal('提示', '请先选择要配置Preview的凭证', 'error');
-        return;
-    }
-
-    if (!confirm(`确定要为 ${selectedFiles.length} 个凭证批量设置Preview通道吗？\n\n将并行配置以加快速度。`)) {
-        return;
-    }
-
-    showStatus(` 正在为 ${selectedFiles.length} 个凭证配置Preview通道，请稍候...`, 'info');
-
-    // 并行执行所有配置请求
-    const promises = selectedFiles.map(async (filename) => {
-        try {
-            const response = await fetch(`./creds/configure-preview/${encodeURIComponent(filename)}`, {
-                method: 'POST',
-                headers: getAuthHeaders()
-            });
-            const data = await response.json();
-
-            if (response.ok && data.success) {
-                return {
-                    success: true,
-                    filename,
-                    message: data.message,
-                    setting_id: data.setting_id,
-                    binding_id: data.binding_id
-                };
-            } else {
-                return {
-                    success: false,
-                    filename,
-                    error: data.message || '配置失败',
-                    step: data.step,
-                    errorDetail: data.error
-                };
-            }
-        } catch (error) {
-            return { success: false, filename, error: error.message };
-        }
-    });
-
-    // 等待所有请求完成
-    const results = await Promise.all(promises);
-
-    // 统计结果
-    let successCount = 0;
-    let failCount = 0;
-    const resultMessages = [];
-
-    results.forEach(result => {
-        if (result.success) {
-            successCount++;
-            resultMessages.push(` ${result.filename}: ${result.message || '配置成功'}`);
-        } else {
-            failCount++;
-            const errorMsg = result.step ? `${result.error} (步骤: ${result.step})` : result.error;
-            resultMessages.push(` ${result.filename}: ${errorMsg}`);
-        }
-    });
-
-    await AppState.creds.refresh();
-
-    const summary = `批量配置Preview通道完成！\n\n成功: ${successCount} 个\n失败: ${failCount} 个\n总计: ${selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
-
-    if (failCount === 0) {
-        showStatus(` 全部配置成功！成功配置 ${successCount}/${selectedFiles.length} 个凭证的Preview通道`, 'success');
-        showMessageModal('批量配置Preview通道完成', summary, 'success');
-    } else if (successCount === 0) {
-        showStatus(` 全部配置失败！失败 ${failCount}/${selectedFiles.length} 个凭证`, 'error');
-        showMessageModal('批量配置Preview通道完成', summary, 'error');
-    } else {
-        showStatus(` 批量配置完成：成功 ${successCount}/${selectedFiles.length} 个，失败 ${failCount} 个`, 'info');
-        showMessageModal('批量配置Preview通道完成', summary, 'info');
-    }
-
-    console.log(summary);
-}
 
 
-async function refreshAllEmails() {
-    if (!confirm('确定要刷新所有凭证的用户邮箱吗？这可能需要一些时间。')) return;
 
-    try {
-        showStatus('正在刷新所有用户邮箱...', 'info');
-        const response = await fetch('./creds/refresh-all-emails', {
-            method: 'POST',
-            headers: getAuthHeaders()
-        });
-        const data = await response.json();
-        if (response.ok) {
-            showStatus(`邮箱刷新完成：成功获取 ${data.success_count}/${data.total_count} 个邮箱地址`, 'success');
-            await AppState.creds.refresh();
-        } else {
-            showStatus(data.message || '邮箱刷新失败', 'error');
-        }
-    } catch (error) {
-        showStatus(`邮箱刷新网络错误: ${error.message}`, 'error');
-    }
-}
+
 
 async function refreshAllAntigravityEmails() {
     if (!confirm('确定要刷新所有Antigravity凭证的用户邮箱吗？这可能需要一些时间。')) return;
@@ -2618,36 +2038,7 @@ async function refreshAllAntigravityEmails() {
     }
 }
 
-async function deduplicateByEmail() {
-    if (!confirm('确定要对凭证进行凭证一键去重吗？\n\n相同邮箱的凭证只保留一个，其他将被删除。\n此操作不可撤销！')) return;
 
-    try {
-        showStatus('正在进行凭证一键去重...', 'info');
-        const response = await fetch('./creds/deduplicate-by-email', {
-            method: 'POST',
-            headers: getAuthHeaders()
-        });
-        const data = await response.json();
-        if (response.ok) {
-            const msg = `去重完成：删除 ${data.deleted_count} 个重复凭证，保留 ${data.kept_count} 个凭证（${data.unique_emails_count} 个唯一邮箱）`;
-            showStatus(msg, 'success');
-            await AppState.creds.refresh();
-            
-            // 显示详细信息
-            if (data.duplicate_groups && data.duplicate_groups.length > 0) {
-                let details = '去重详情：\n\n';
-                data.duplicate_groups.forEach(group => {
-                    details += `邮箱: ${group.email}\n保留: ${group.kept_file}\n删除: ${group.deleted_files.join(', ')}\n\n`;
-                });
-                console.log(details);
-            }
-        } else {
-            showStatus(data.message || '去重失败', 'error');
-        }
-    } catch (error) {
-        showStatus(`去重网络错误: ${error.message}`, 'error');
-    }
-}
 
 async function deduplicateAntigravityByEmail() {
     if (!confirm('确定要对Antigravity凭证进行凭证一键去重吗？\n\n相同邮箱的凭证只保留一个，其他将被删除。\n此操作不可撤销！')) return;
@@ -2663,7 +2054,7 @@ async function deduplicateAntigravityByEmail() {
             const msg = `去重完成：删除 ${data.deleted_count} 个重复凭证，保留 ${data.kept_count} 个凭证（${data.unique_emails_count} 个唯一邮箱）`;
             showStatus(msg, 'success');
             await AppState.antigravityCreds.refresh();
-            
+
             // 显示详细信息
             if (data.duplicate_groups && data.duplicate_groups.length > 0) {
                 let details = '去重详情：\n\n';
@@ -2834,97 +2225,11 @@ function displayLogs() {
 // =====================================================================
 // 环境变量凭证管理
 // =====================================================================
-async function checkEnvCredsStatus() {
-    const loading = document.getElementById('envStatusLoading');
-    const content = document.getElementById('envStatusContent');
 
-    try {
-        loading.style.display = 'block';
-        content.classList.add('hidden');
 
-        const response = await fetch('./auth/env-creds-status', { headers: getAuthHeaders() });
-        const data = await response.json();
 
-        if (response.ok) {
-            const envVarsList = document.getElementById('envVarsList');
-            envVarsList.textContent = Object.keys(data.available_env_vars).length > 0
-                ? Object.keys(data.available_env_vars).join(', ')
-                : '未找到GCLI_CREDS_*环境变量';
 
-            const autoLoadStatus = document.getElementById('autoLoadStatus');
-            autoLoadStatus.textContent = data.auto_load_enabled ? ' 已启用' : ' 未启用';
-            autoLoadStatus.style.color = data.auto_load_enabled ? '#28a745' : '#dc3545';
 
-            document.getElementById('envFilesCount').textContent = `${data.existing_env_files_count} 个文件`;
-
-            const envFilesList = document.getElementById('envFilesList');
-            envFilesList.textContent = data.existing_env_files.length > 0
-                ? data.existing_env_files.join(', ')
-                : '无';
-
-            content.classList.remove('hidden');
-            showStatus('环境变量状态检查完成', 'success');
-        } else {
-            showStatus(`获取环境变量状态失败: ${data.detail || data.error || '未知错误'}`, 'error');
-        }
-    } catch (error) {
-        showStatus(`网络错误: ${error.message}`, 'error');
-    } finally {
-        loading.style.display = 'none';
-    }
-}
-
-async function loadEnvCredentials() {
-    try {
-        showStatus('正在从环境变量导入凭证...', 'info');
-
-        const response = await fetch('./auth/load-env-creds', {
-            method: 'POST',
-            headers: getAuthHeaders()
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            if (data.loaded_count > 0) {
-                showStatus(` 成功导入 ${data.loaded_count}/${data.total_count} 个凭证文件`, 'success');
-                setTimeout(() => checkEnvCredsStatus(), 1000);
-            } else {
-                showStatus(` ${data.message}`, 'info');
-            }
-        } else {
-            showStatus(`导入失败: ${data.detail || data.error || '未知错误'}`, 'error');
-        }
-    } catch (error) {
-        showStatus(`网络错误: ${error.message}`, 'error');
-    }
-}
-
-async function clearEnvCredentials() {
-    if (!confirm('确定要清除所有从环境变量导入的凭证文件吗？\n这将删除所有文件名以 "env-" 开头的认证文件。')) {
-        return;
-    }
-
-    try {
-        showStatus('正在清除环境变量凭证文件...', 'info');
-
-        const response = await fetch('./auth/env-creds', {
-            method: 'DELETE',
-            headers: getAuthHeaders()
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            showStatus(` 成功删除 ${data.deleted_count} 个环境变量凭证文件`, 'success');
-            setTimeout(() => checkEnvCredsStatus(), 1000);
-        } else {
-            showStatus(`清除失败: ${data.detail || data.error || '未知错误'}`, 'error');
-        }
-    } catch (error) {
-        showStatus(`网络错误: ${error.message}`, 'error');
-    }
-}
 
 // =====================================================================
 // 配置管理
@@ -2967,11 +2272,8 @@ function populateConfigForm() {
     setConfigField('configPassword', c.password || 'pwd');
     setConfigField('credentialsDir', c.credentials_dir || '');
     setConfigField('proxy', c.proxy || '');
-    setConfigField('codeAssistEndpoint', c.code_assist_endpoint || '');
     setConfigField('oauthProxyUrl', c.oauth_proxy_url || '');
     setConfigField('googleapisProxyUrl', c.googleapis_proxy_url || '');
-    setConfigField('resourceManagerApiUrl', c.resource_manager_api_url || '');
-    setConfigField('serviceUsageApiUrl', c.service_usage_api_url || '');
     setConfigField('antigravityApiUrl', c.antigravity_api_url || '');
 
     document.getElementById('credentialRetryLimitEnabled').checked = Boolean(c.credential_retry_limit_enabled);
@@ -3029,13 +2331,10 @@ async function saveConfig() {
             api_password: getValue('configApiPassword'),
             panel_password: getValue('configPanelPassword'),
             password: getValue('configPassword', 'pwd'),
-            code_assist_endpoint: getValue('codeAssistEndpoint'),
             credentials_dir: getValue('credentialsDir'),
             proxy: getValue('proxy'),
             oauth_proxy_url: getValue('oauthProxyUrl'),
             googleapis_proxy_url: getValue('googleapisProxyUrl'),
-            resource_manager_api_url: getValue('resourceManagerApiUrl'),
-            service_usage_api_url: getValue('serviceUsageApiUrl'),
             antigravity_api_url: getValue('antigravityApiUrl'),
             credential_retry_limit_enabled: getChecked('credentialRetryLimitEnabled'),
             max_retry_credentials: getInt('maxRetryCredentials', 5),
@@ -3247,20 +2546,14 @@ async function downloadRequestCapture(options = {}) {
 
 // 镜像网址配置
 const mirrorUrls = {
-    codeAssistEndpoint: 'https://gcli-api.sukaka.top/cloudcode-pa',
     oauthProxyUrl: 'https://gcli-api.sukaka.top/oauth2',
     googleapisProxyUrl: 'https://gcli-api.sukaka.top/googleapis',
-    resourceManagerApiUrl: 'https://gcli-api.sukaka.top/cloudresourcemanager',
-    serviceUsageApiUrl: 'https://gcli-api.sukaka.top/serviceusage',
     antigravityApiUrl: 'https://gcli-api.sukaka.top/daily-cloudcode-pa'
 };
 
 const officialUrls = {
-    codeAssistEndpoint: 'https://cloudcode-pa.googleapis.com',
     oauthProxyUrl: 'https://oauth2.googleapis.com',
     googleapisProxyUrl: 'https://www.googleapis.com',
-    resourceManagerApiUrl: 'https://cloudresourcemanager.googleapis.com',
-    serviceUsageApiUrl: 'https://serviceusage.googleapis.com',
     antigravityApiUrl: 'https://daily-cloudcode-pa.googleapis.com'
 };
 
@@ -3439,9 +2732,7 @@ function updateCooldownDisplays() {
         if (!filenameEl) return;
 
         const filename = filenameEl.textContent;
-        const manager = card?.querySelector('.antigravityFile-checkbox')
-            ? AppState.antigravityCreds
-            : AppState.creds;
+        const manager = AppState.antigravityCreds;
         const credInfo = manager.data[filename];
         const groupName = badge.dataset.cooldownGroup;
         const cooldownGroup = getGroupedCooldowns(credInfo?.model_cooldowns, manager.type)
@@ -3569,29 +2860,6 @@ window.onload = async function () {
         antigravityAuthBtn.addEventListener('click', startAntigravityAuth);
     }
 };
-
-// 拖拽功能 - 初始化
-document.addEventListener('DOMContentLoaded', function () {
-    const uploadArea = document.getElementById('uploadArea');
-
-    if (uploadArea) {
-        uploadArea.addEventListener('dragover', (event) => {
-            event.preventDefault();
-            uploadArea.classList.add('dragover');
-        });
-
-        uploadArea.addEventListener('dragleave', (event) => {
-            event.preventDefault();
-            uploadArea.classList.remove('dragover');
-        });
-
-        uploadArea.addEventListener('drop', (event) => {
-            event.preventDefault();
-            uploadArea.classList.remove('dragover');
-            AppState.uploadFiles.addFiles(Array.from(event.dataTransfer.files));
-        });
-    }
-});
 
 function autoSetKeepaliveUrl() {
     const url = `${window.location.protocol}//${window.location.host}`;

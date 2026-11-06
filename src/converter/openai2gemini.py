@@ -1178,7 +1178,7 @@ async def convert_openai_to_gemini_request(openai_request: Dict[str, Any]) -> Di
     """
     将 OpenAI 格式请求体转换为 Gemini 格式请求体
 
-    注意: 此函数只负责基础转换,不包含 normalize_gemini_request 中的处理
+    注意: 此函数只负责基础转换,不包含 normalize_antigravity_request 中的处理
     (如 thinking config, search tools, 参数范围限制等)
 
     Args:

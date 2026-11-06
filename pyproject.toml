@@ -1,7 +1,7 @@
 [project]
 name = "gcli2api"
 version = "0.1.0"
-description = "Convert GeminiCLI to OpenAI and Gemini API interfaces"
+description = "Convert Antigravity to OpenAI, Gemini and Anthropic API interfaces"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "CNC-1.0"}
@@ -24,7 +24,6 @@ dependencies = [
     "motor>=3.7.1",
     "oauthlib>=3.3.1",
     "pydantic>=2.11.7",
-    "pyjwt>=2.10.1",
     "python-dotenv>=1.1.1",
     "python-multipart>=0.0.20",
     "pypinyin>=0.51.0",
@@ -35,25 +34,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-cov>=4.1.0",
     "black>=24.0.0",
     "flake8>=7.0.0",
     "mypy>=1.8.0",
     "pre-commit>=3.6.0",
-]
-
-[tool.pytest.ini_options]
-minversion = "8.0"
-testpaths = ["."]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-asyncio_mode = "auto"
-addopts = [
-    "-v",
-    "--strict-markers",
 ]
 
 [tool.black]
@@ -83,21 +67,4 @@ ignore_missing_imports = true
 exclude = [
     "build",
     "dist",
-]
-
-[tool.coverage.run]
-source = ["src"]
-omit = [
-    "*/tests/*",
-    "*/test_*.py",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-    "if TYPE_CHECKING:",
 ]

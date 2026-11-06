@@ -1,3 +1,5 @@
+> このローカル版は Antigravity のみ対応します。Gemini CLI と Vertex は削除済みです。最新の設定と接続先は[README](../README.md)を参照してください。
+
 # GeminiCLI to API
 
 **GeminiCLIおよびAntigravityをOpenAI、GEMINI、Claude API互換インターフェースに変換**

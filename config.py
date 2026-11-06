@@ -20,13 +20,10 @@ _CONFIG_REFRESH_INTERVAL = 5.0
 # 统一维护环境变量名和配置键名的映射关系
 # 格式: "环境变量名": "配置键名"
 ENV_MAPPINGS = {
-    "CODE_ASSIST_ENDPOINT": "code_assist_endpoint",
     "CREDENTIALS_DIR": "credentials_dir",
     "PROXY": "proxy",
     "OAUTH_PROXY_URL": "oauth_proxy_url",
     "GOOGLEAPIS_PROXY_URL": "googleapis_proxy_url",
-    "RESOURCE_MANAGER_API_URL": "resource_manager_api_url",
-    "SERVICE_USAGE_API_URL": "service_usage_api_url",
     "ANTIGRAVITY_API_URL": "antigravity_api_url",
     "CREDENTIAL_RETRY_LIMIT_ENABLED": "credential_retry_limit_enabled",
     "MAX_RETRY_CREDENTIALS": "max_retry_credentials",
@@ -298,19 +295,6 @@ async def get_credentials_dir() -> str:
     return str(await get_config_value("credentials_dir", "./creds", "CREDENTIALS_DIR"))
 
 
-async def get_code_assist_endpoint() -> str:
-    """
-    Get Code Assist endpoint setting.
-
-    Environment variable: CODE_ASSIST_ENDPOINT
-    Database config key: code_assist_endpoint
-    Default: https://cloudcode-pa.googleapis.com
-    """
-    return str(
-        await get_config_value(
-            "code_assist_endpoint", "https://cloudcode-pa.googleapis.com", "CODE_ASSIST_ENDPOINT"
-        )
-    )
 
 
 async def get_compatibility_mode_enabled() -> bool:
@@ -402,40 +386,8 @@ async def get_googleapis_proxy_url() -> str:
     )
 
 
-async def get_resource_manager_api_url() -> str:
-    """
-    Get Google Cloud Resource Manager API URL setting.
-
-    用于Google Cloud Resource Manager API的URL。
-
-    Environment variable: RESOURCE_MANAGER_API_URL
-    Database config key: resource_manager_api_url
-    Default: https://cloudresourcemanager.googleapis.com
-    """
-    return str(
-        await get_config_value(
-            "resource_manager_api_url",
-            "https://cloudresourcemanager.googleapis.com",
-            "RESOURCE_MANAGER_API_URL",
-        )
-    )
 
 
-async def get_service_usage_api_url() -> str:
-    """
-    Get Google Cloud Service Usage API URL setting.
-
-    用于Google Cloud Service Usage API的URL。
-
-    Environment variable: SERVICE_USAGE_API_URL
-    Database config key: service_usage_api_url
-    Default: https://serviceusage.googleapis.com
-    """
-    return str(
-        await get_config_value(
-            "service_usage_api_url", "https://serviceusage.googleapis.com", "SERVICE_USAGE_API_URL"
-        )
-    )
 
 
 async def get_antigravity_api_url() -> str:

@@ -714,7 +714,7 @@ async def anthropic_to_gemini_request(payload: Dict[str, Any]) -> Dict[str, Any]
     """
     将 Anthropic 格式请求体转换为 Gemini 格式请求体
 
-    注意: 此函数只负责基础转换，不包含 normalize_gemini_request 中的处理
+    注意: 此函数只负责基础转换，不包含 normalize_antigravity_request 中的处理
     (如 thinking config 自动设置、search tools、参数范围限制等)
 
     Args:

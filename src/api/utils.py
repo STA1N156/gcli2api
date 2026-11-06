@@ -77,7 +77,7 @@ def retry_limit_reached(retry_config: Dict[str, Any], attempted_count: int) -> b
 async def record_api_call_success(
     credential_manager: CredentialManager,
     credential_name: str,
-    mode: str = "geminicli",
+    mode: str = "antigravity",
     model_name: Optional[str] = None,
     observed_at: Optional[float] = None,
 ) -> None:
@@ -87,7 +87,7 @@ async def record_api_call_success(
     Args:
         credential_manager: 凭证管理器实例
         credential_name: 凭证名称
-        mode: 模式（geminicli 或 antigravity）
+        mode: 模式（antigravity）
         model_name: 模型名称（用于模型级CD）
     """
     if credential_manager and credential_name:
@@ -113,7 +113,7 @@ async def record_api_call_error(
     credential_name: str,
     status_code: int,
     cooldown_until: Optional[float] = None,
-    mode: str = "geminicli",
+    mode: str = "antigravity",
     model_name: Optional[str] = None,
     error_message: Optional[str] = None
 ) -> None:
@@ -125,7 +125,7 @@ async def record_api_call_error(
         credential_name: 凭证名称
         status_code: HTTP状态码
         cooldown_until: 冷却截止时间（Unix时间戳）
-        mode: 模式（geminicli 或 antigravity）
+        mode: 模式（antigravity）
         model_name: 模型名称（用于模型级CD）
         error_message: 错误信息（可选）
     """
@@ -166,14 +166,14 @@ async def record_api_call_error(
 
 async def parse_and_log_cooldown(
     error_text: str,
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ) -> Optional[float]:
     """
     解析并记录冷却时间
 
     Args:
         error_text: 错误响应文本
-        mode: 模式（geminicli 或 antigravity）
+        mode: 模式（antigravity）
 
     Returns:
         冷却截止时间（Unix时间戳），如果解析失败则返回None
@@ -434,13 +434,12 @@ async def collect_streaming_response(stream_generator) -> Response:
     )
 
 
-RESOURCE_EXHAUSTED_COOLDOWN_SECONDS = 60  # GCLI 未提供恢复时间时冷却1分钟
 ANTIGRAVITY_RESOURCE_EXHAUSTED_COOLDOWN_SECONDS = 20
 
 
 def parse_quota_reset_timestamp(
     error_response: dict,
-    mode: str = "geminicli",
+    mode: str = "antigravity",
 ) -> Optional[float]:
     """
     从Google API错误响应中提取quota重置时间戳
@@ -495,9 +494,7 @@ def parse_quota_reset_timestamp(
 
         # 精准匹配且没有恢复时间时，使用短暂默认冷却
         if is_generic_resource_exhausted:
-            seconds = (ANTIGRAVITY_RESOURCE_EXHAUSTED_COOLDOWN_SECONDS
-                       if mode == "antigravity" else RESOURCE_EXHAUSTED_COOLDOWN_SECONDS)
-            return time.time() + seconds
+            return time.time() + ANTIGRAVITY_RESOURCE_EXHAUSTED_COOLDOWN_SECONDS
 
         return None
 

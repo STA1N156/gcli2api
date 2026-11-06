@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import time
+from contextlib import asynccontextmanager, suppress
 from typing import Any, Dict, List, Optional
 
 import aiosqlite
@@ -73,6 +74,11 @@ class SQLiteManager:
         self._credentials_dir = None
         self._initialized = False
         self._lock = asyncio.Lock()
+        self._read_connections = asyncio.LifoQueue()
+        self._write_connections = asyncio.LifoQueue()
+        self._read_slots = asyncio.Semaphore(4)
+        self._write_slots = asyncio.Semaphore(1)
+        self._cleanup_task = None
 
         # 内存配置缓存 - 初始化时加载一次
         self._config_cache: Dict[str, Any] = {}
@@ -116,6 +122,9 @@ class SQLiteManager:
                 await self._load_config_cache()
 
                 self._initialized = True
+                self._cleanup_task = asyncio.create_task(
+                    self._cleanup_session_bindings(), name="sqlite-session-cleanup"
+                )
                 log.info(f"SQLite storage initialized at {self._db_path}")
 
             except Exception as e:
@@ -280,7 +289,7 @@ class SQLiteManager:
         log.debug("SQLite tables and indexes created")
 
     async def save_marked_prompt(self, record: Dict[str, Any]) -> None:
-        async with aiosqlite.connect(self._db_path) as db:
+        async with self._connection(write=True) as db:
             await db.execute(
                 "INSERT OR IGNORE INTO marked_prompts (id,text,model,created_at,chars,preview) VALUES (?,?,?,?,?,?)",
                 tuple(record[key] for key in ("id", "text", "model", "created_at", "chars", "preview")),
@@ -288,12 +297,12 @@ class SQLiteManager:
             await db.commit()
 
     async def has_marked_prompt(self, prompt_id: str) -> bool:
-        async with aiosqlite.connect(self._db_path) as db:
+        async with self._connection() as db:
             async with db.execute("SELECT 1 FROM marked_prompts WHERE id=?", (prompt_id,)) as cursor:
                 return await cursor.fetchone() is not None
 
     async def list_marked_prompts(self, offset: int, limit: int) -> Dict[str, Any]:
-        async with aiosqlite.connect(self._db_path) as db:
+        async with self._connection() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT COUNT(*) FROM marked_prompts") as cursor:
                 total = (await cursor.fetchone())[0]
@@ -306,7 +315,7 @@ class SQLiteManager:
     async def get_marked_prompts(self, prompt_ids: List[str]) -> List[Dict[str, Any]]:
         if not prompt_ids:
             return []
-        async with aiosqlite.connect(self._db_path) as db:
+        async with self._connection() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 f"SELECT * FROM marked_prompts WHERE id IN ({','.join('?' for _ in prompt_ids)})",
@@ -396,7 +405,7 @@ class SQLiteManager:
             return
 
         try:
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection() as db:
                 async with db.execute("SELECT key, value FROM config") as cursor:
                     rows = await cursor.fetchall()
 
@@ -415,8 +424,51 @@ class SQLiteManager:
 
     async def close(self) -> None:
         """关闭数据库连接"""
+        if self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._cleanup_task
+            self._cleanup_task = None
+        for pool in (self._read_connections, self._write_connections):
+            while not pool.empty():
+                await pool.get_nowait().close()
         self._initialized = False
         log.debug("SQLite storage closed")
+
+    @asynccontextmanager
+    async def _connection(self, *, write=False):
+        pool = self._write_connections if write else self._read_connections
+        slots = self._write_slots if write else self._read_slots
+        async with slots:
+            if pool.empty():
+                db = await aiosqlite.connect(self._db_path)
+                await db.execute("PRAGMA foreign_keys=ON")
+            else:
+                db = pool.get_nowait()
+            db.row_factory = None
+            try:
+                yield db
+            finally:
+                if db.in_transaction:
+                    await db.rollback()
+                pool.put_nowait(db)
+
+    async def _cleanup_session_bindings(self):
+        while True:
+            await asyncio.sleep(60 + os.getpid() % 17)
+            try:
+                await self._purge_expired_session_bindings()
+            except Exception as exc:
+                log.warning(f"Session cleanup deferred: {type(exc).__name__}")
+
+    async def _purge_expired_session_bindings(self):
+        async with self._connection(write=True) as db:
+            await db.execute(
+                "DELETE FROM session_bindings WHERE binding_key IN "
+                "(SELECT binding_key FROM session_bindings WHERE expires_at <= ? "
+                "ORDER BY expires_at LIMIT 256)", (time.time(),)
+            )
+            await db.commit()
 
     def _ensure_initialized(self):
         """确保已初始化"""
@@ -434,7 +486,7 @@ class SQLiteManager:
 
     # ============ SQL 方法 ============
 
-    async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "geminicli") -> bool:
+    async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "antigravity") -> bool:
         """存储或更新凭证"""
         self._ensure_initialized()
 
@@ -443,7 +495,7 @@ class SQLiteManager:
 
         try:
             table_name = self._get_table_name(mode)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection(write=True) as db:
                 # 检查凭证是否存在
                 async with db.execute(f"""
                     SELECT disabled, error_codes, last_success, user_email,
@@ -482,7 +534,7 @@ class SQLiteManager:
             log.error(f"Error storing credential {filename}: {e}")
             return False
 
-    async def get_credential(self, filename: str, mode: str = "geminicli") -> Optional[Dict[str, Any]]:
+    async def get_credential(self, filename: str, mode: str = "antigravity") -> Optional[Dict[str, Any]]:
         """获取凭证数据"""
         self._ensure_initialized()
 
@@ -491,7 +543,7 @@ class SQLiteManager:
 
         try:
             table_name = self._get_table_name(mode)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection() as db:
                 # 精确匹配
                 async with db.execute(f"""
                     SELECT credential_data FROM {table_name} WHERE filename = ?
@@ -506,13 +558,36 @@ class SQLiteManager:
             log.error(f"Error getting credential {filename}: {e}")
             return None
 
-    async def list_credentials(self, mode: str = "geminicli") -> List[str]:
+    async def get_credential_with_state(self, filename: str, mode: str = "antigravity"):
+        """一次查询读取凭证和实时禁用、冷却状态。"""
+        self._ensure_initialized()
+        table = self._get_table_name(mode)
+        extra = "preview" if mode == "geminicli" else "enable_credit"
+        async with self._connection() as db:
+            async with db.execute(
+                f"SELECT credential_data,disabled,error_codes,last_success,user_email,"
+                f"model_cooldowns,tier,{extra} FROM {table} WHERE filename=?",
+                (os.path.basename(filename),),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        state = {
+            "disabled": bool(row[1]), "error_codes": json.loads(row[2] or "[]"),
+            "last_success": row[3] or time.time(), "user_email": row[4],
+            "model_cooldowns": json.loads(row[5] or "{}"),
+            "tier": row[6] if row[6] is not None else "pro",
+            extra: bool(row[7]) if row[7] is not None else mode == "geminicli",
+        }
+        return json.loads(row[0]), state
+
+    async def list_credentials(self, mode: str = "antigravity") -> List[str]:
         """列出所有凭证文件名（包括禁用的）"""
         self._ensure_initialized()
 
         try:
             table_name = self._get_table_name(mode)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection() as db:
                 async with db.execute(f"""
                     SELECT filename FROM {table_name} ORDER BY rotation_order
                 """) as cursor:
@@ -523,7 +598,7 @@ class SQLiteManager:
             log.error(f"Error listing credentials: {e}")
             return []
 
-    async def delete_credential(self, filename: str, mode: str = "geminicli") -> bool:
+    async def delete_credential(self, filename: str, mode: str = "antigravity") -> bool:
         """删除凭证"""
         self._ensure_initialized()
 
@@ -532,7 +607,7 @@ class SQLiteManager:
 
         try:
             table_name = self._get_table_name(mode)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection(write=True) as db:
                 # 精确匹配删除
                 result = await db.execute(f"""
                     DELETE FROM {table_name} WHERE filename = ?
@@ -552,7 +627,7 @@ class SQLiteManager:
             log.error(f"Error deleting credential {filename}: {e}")
             return False
 
-    async def update_credential_state(self, filename: str, state_updates: Dict[str, Any], mode: str = "geminicli") -> bool:
+    async def update_credential_state(self, filename: str, state_updates: Dict[str, Any], mode: str = "antigravity") -> bool:
         """更新凭证状态"""
         self._ensure_initialized()
 
@@ -583,23 +658,25 @@ class SQLiteManager:
                 log.info("[DB] 没有需要更新的状态字段")
                 return True
 
+            changed = " OR ".join(f"{clause.split(' = ')[0]} IS NOT ?" for clause in set_clauses)
+            original_values = list(values)
             set_clauses.append("updated_at = ?")
             values.append(time.time())
             values.append(filename)
 
             log.debug(f"[DB] SQL参数: set_clauses={set_clauses}, values={values}")
 
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection(write=True) as db:
                 # 精确匹配更新
                 sql_exact = f"""
                     UPDATE {table_name}
                     SET {', '.join(set_clauses)}
-                    WHERE filename = ?
+                    WHERE filename = ? AND ({changed})
                 """
                 log.debug(f"[DB] 执行精确匹配SQL: {sql_exact}")
                 log.debug(f"[DB] SQL参数值: {values}")
 
-                result = await db.execute(sql_exact, values)
+                result = await db.execute(sql_exact, values + original_values)
                 updated_count = result.rowcount
                 log.debug(f"[DB] 精确匹配 rowcount={updated_count}")
 
@@ -609,6 +686,9 @@ class SQLiteManager:
                 log.debug("[DB] commit完成")
 
                 success = updated_count > 0
+                if not success:
+                    async with db.execute(f"SELECT 1 FROM {table_name} WHERE filename=?", (filename,)) as cursor:
+                        success = await cursor.fetchone() is not None
                 log.debug(f"[DB] update_credential_state 结束: success={success}, updated_count={updated_count}")
                 return success
 
@@ -616,7 +696,7 @@ class SQLiteManager:
             log.error(f"[DB] Error updating credential state {filename}: {e}")
             return False
 
-    async def get_credential_state(self, filename: str, mode: str = "geminicli") -> Dict[str, Any]:
+    async def get_credential_state(self, filename: str, mode: str = "antigravity") -> Dict[str, Any]:
         """获取凭证状态（不包含error_messages）"""
         self._ensure_initialized()
 
@@ -625,7 +705,7 @@ class SQLiteManager:
 
         try:
             table_name = self._get_table_name(mode)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection() as db:
                 # 精确匹配
                 if mode == "geminicli":
                     async with db.execute(f"""
@@ -693,13 +773,13 @@ class SQLiteManager:
             log.error(f"Error getting credential state {filename}: {e}")
             return {}
 
-    async def get_all_credential_states(self, mode: str = "geminicli") -> Dict[str, Dict[str, Any]]:
+    async def get_all_credential_states(self, mode: str = "antigravity") -> Dict[str, Dict[str, Any]]:
         """获取所有凭证状态（不包含error_messages）"""
         self._ensure_initialized()
 
         try:
             table_name = self._get_table_name(mode)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection() as db:
                 if mode == "geminicli":
                     async with db.execute(f"""
                         SELECT filename, disabled, error_codes, last_success,
@@ -781,7 +861,7 @@ class SQLiteManager:
         offset: int = 0,
         limit: Optional[int] = None,
         status_filter: str = "all",
-        mode: str = "geminicli",
+        mode: str = "antigravity",
         error_code_filter: Optional[str] = None,
         cooldown_filter: Optional[str] = None,
         preview_filter: Optional[str] = None,
@@ -809,7 +889,7 @@ class SQLiteManager:
             # 根据 mode 选择表名
             table_name = self._get_table_name(mode)
 
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection() as db:
                 global_stats = new_status_stats()
 
                 filter_value = None
@@ -951,7 +1031,7 @@ class SQLiteManager:
                 "stats": new_status_stats(),
             }
 
-    async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:
+    async def get_duplicate_credentials_by_email(self, mode: str = "antigravity") -> Dict[str, Any]:
         """
         获取按邮箱分组的重复凭证信息（只查询邮箱和文件名，不加载完整凭证数据）
         用于去重操作
@@ -968,7 +1048,7 @@ class SQLiteManager:
             # 根据 mode 选择表名
             table_name = self._get_table_name(mode)
 
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection() as db:
                 # 查询所有凭证的文件名和邮箱（不加载完整凭证数据）
                 query = f"""
                     SELECT filename, user_email
@@ -1032,7 +1112,7 @@ class SQLiteManager:
 
     async def get_session_binding(self, binding_key: str, now: float) -> Optional[str]:
         self._ensure_initialized()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with self._connection() as db:
             async with db.execute(
                 "SELECT filename FROM session_bindings "
                 "WHERE binding_key = ? AND expires_at > ?",
@@ -1046,11 +1126,7 @@ class SQLiteManager:
     ) -> bool:
         self._ensure_initialized()
         try:
-            async with aiosqlite.connect(self._db_path) as db:
-                await db.execute(
-                    "DELETE FROM session_bindings WHERE expires_at <= ?",
-                    (time.time(),),
-                )
+            async with self._connection(write=True) as db:
                 await db.execute("""
                     INSERT INTO session_bindings
                         (binding_key, filename, expires_at, updated_at)
@@ -1076,7 +1152,7 @@ class SQLiteManager:
             if expected_filename is not None:
                 query += " AND filename = ?"
                 params.append(expected_filename)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection(write=True) as db:
                 await db.execute(query, params)
                 await db.commit()
             return True
@@ -1091,7 +1167,7 @@ class SQLiteManager:
         self._ensure_initialized()
 
         try:
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection(write=True) as db:
                 await db.execute("""
                     INSERT INTO config (key, value, updated_at)
                     VALUES (?, ?, unixepoch())
@@ -1131,7 +1207,7 @@ class SQLiteManager:
         self._ensure_initialized()
 
         try:
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection(write=True) as db:
                 await db.execute("DELETE FROM config WHERE key = ?", (key,))
                 await db.commit()
 
@@ -1143,7 +1219,7 @@ class SQLiteManager:
             log.error(f"Error deleting config {key}: {e}")
             return False
 
-    async def get_credential_errors(self, filename: str, mode: str = "geminicli") -> Dict[str, Any]:
+    async def get_credential_errors(self, filename: str, mode: str = "antigravity") -> Dict[str, Any]:
         """
         专门获取凭证的错误信息（包含 error_codes 和 error_messages）
 
@@ -1161,7 +1237,7 @@ class SQLiteManager:
 
         try:
             table_name = self._get_table_name(mode)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection() as db:
                 # 精确匹配
                 async with db.execute(f"""
                     SELECT error_codes, error_messages FROM {table_name} WHERE filename = ?
@@ -1200,7 +1276,7 @@ class SQLiteManager:
         filename: str,
         model_name: str,
         cooldown_until: Optional[float],
-        mode: str = "geminicli"
+        mode: str = "antigravity"
     ) -> bool:
         """
         设置特定模型的冷却时间
@@ -1221,7 +1297,7 @@ class SQLiteManager:
 
         try:
             table_name = self._get_table_name(mode)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection(write=True) as db:
                 # 获取当前的 model_cooldowns
                 async with db.execute(f"""
                     SELECT model_cooldowns FROM {table_name} WHERE filename = ?
@@ -1259,7 +1335,7 @@ class SQLiteManager:
     async def clear_all_model_cooldowns(
         self,
         filename: str,
-        mode: str = "geminicli"
+        mode: str = "antigravity"
     ) -> bool:
         """清除某个凭证的所有模型冷却时间"""
         self._ensure_initialized()
@@ -1268,7 +1344,7 @@ class SQLiteManager:
 
         try:
             table_name = self._get_table_name(mode)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection(write=True) as db:
                 result = await db.execute(f"""
                     UPDATE {table_name}
                     SET model_cooldowns = '{{}}',
@@ -1293,7 +1369,7 @@ class SQLiteManager:
         self,
         filename: str,
         model_name: Optional[str] = None,
-        mode: str = "geminicli",
+        mode: str = "antigravity",
         observed_at: Optional[float] = None,
     ) -> None:
         """
@@ -1308,7 +1384,7 @@ class SQLiteManager:
 
         try:
             table_name = self._get_table_name(mode)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with self._connection(write=True) as db:
                 async with db.execute(f"""
                     SELECT error_codes, error_messages, model_cooldowns, updated_at
                     FROM {table_name}

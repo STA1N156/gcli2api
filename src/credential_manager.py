@@ -20,6 +20,8 @@ from src.storage_adapter import get_storage_adapter
 
 SESSION_BINDING_MAX_ENTRIES = int(os.getenv("SESSION_BINDING_MAX_ENTRIES", "50000"))
 SESSION_BINDING_PRUNE_INTERVAL_SECONDS = 60
+SESSION_BINDING_CACHE_SECONDS = 10
+SESSION_BINDING_RENEW_SECONDS = 60
 ROUND_ROBIN_MAX_KEYS = 4096
 
 
@@ -33,7 +35,7 @@ class CredentialManager:
         # 核心状态
         self._initialized = False
         self._storage_adapter = None
-        self._session_bindings: Dict[str, Tuple[str, float]] = {}
+        self._session_bindings: Dict[str, Tuple[str, float, float]] = {}
         self._round_robin_cursors: Dict[str, int] = {}
         self._session_lock = asyncio.Lock()
         self._last_session_prune = 0.0
@@ -82,8 +84,8 @@ class CredentialManager:
             return
 
         self._last_session_prune = now
-        for key, (_, expires_at) in list(self._session_bindings.items()):
-            if expires_at <= now:
+        for key, (_, expires_at, renew_at) in list(self._session_bindings.items()):
+            if max(expires_at, renew_at) <= now:
                 self._session_bindings.pop(key, None)
 
         overflow = len(self._session_bindings) - SESSION_BINDING_MAX_ENTRIES
@@ -92,23 +94,28 @@ class CredentialManager:
                 self._session_bindings.pop(key, None)
 
     async def _get_session_binding(self, binding_key: str) -> Optional[str]:
+        now = time.time()
+        async with self._session_lock:
+            binding = self._session_bindings.get(binding_key)
+            if binding and binding[1] > now:
+                return binding[0]
         shared_get = getattr(self._storage_adapter, "get_session_binding", None)
         if callable(shared_get):
             filename = await shared_get(
-                self._shared_session_binding_key(binding_key), time.time()
+                self._shared_session_binding_key(binding_key), now
             )
-            if filename:
-                return filename
-
-        async with self._session_lock:
-            binding = self._session_bindings.get(binding_key)
-            if not binding:
-                return None
-            filename, expires_at = binding
-            if expires_at <= time.time():
-                self._session_bindings.pop(binding_key, None)
-                return None
+            async with self._session_lock:
+                self._prune_session_bindings_locked(now)
+                if filename:
+                    previous = self._session_bindings.get(binding_key)
+                    renew_at = previous[2] if previous and previous[0] == filename else 0
+                    self._session_bindings[binding_key] = (
+                        filename, now + SESSION_BINDING_CACHE_SECONDS, renew_at
+                    )
+                else:
+                    self._session_bindings.pop(binding_key, None)
             return filename
+        return None
 
     async def _remember_session_binding(
         self,
@@ -123,18 +130,35 @@ class CredentialManager:
         now = time.time()
         filename = os.path.basename(filename)
         expires_at = now + ttl_seconds
+        cache_until = min(expires_at, now + SESSION_BINDING_CACHE_SECONDS)
+        if not callable(getattr(self._storage_adapter, "get_session_binding", None)):
+            cache_until = expires_at
+        async with self._session_lock:
+            previous = self._session_bindings.get(binding_key)
+            renew_at = previous[2] if previous and previous[0] == filename else 0
+            should_write = renew_at <= now
+            # Hits must not postpone the next shared read of another worker's binding.
+            entry = (
+                filename,
+                cache_until if should_write else previous[1],
+                now + min(SESSION_BINDING_RENEW_SECONDS, ttl_seconds / 2) if should_write else renew_at,
+            )
+            self._prune_session_bindings_locked(now)
+            self._session_bindings[binding_key] = entry
+        if not should_write:
+            return
         shared_set = getattr(self._storage_adapter, "set_session_binding", None)
         if callable(shared_set):
-            if await shared_set(
-                self._shared_session_binding_key(binding_key), filename, expires_at
-            ):
-                return
-        async with self._session_lock:
-            self._prune_session_bindings_locked(now)
-            self._session_bindings[binding_key] = (
-                filename,
-                expires_at,
-            )
+            saved = False
+            try:
+                saved = await shared_set(
+                    self._shared_session_binding_key(binding_key), filename, expires_at
+                )
+            finally:
+                if not saved:
+                    async with self._session_lock:
+                        if self._session_bindings.get(binding_key) == entry:
+                            self._session_bindings[binding_key] = (filename, entry[1], 0)
 
     async def _forget_session_binding(
         self,
@@ -167,18 +191,16 @@ class CredentialManager:
         if os.path.basename(filename) in exclude_credentials:
             return None
 
-        state = await self._storage_adapter.get_credential_state(filename, mode=mode)
+        result = await self._storage_adapter.get_credential_with_state(filename, mode=mode)
+        if result is None:
+            return None
+        credential_data, state = result
         if not self._credential_state_allows_model(
             state, mode=mode, model_name=model_name
         ):
             return None
 
-        credential_data = await self._storage_adapter.get_credential(filename, mode=mode)
-        if not credential_data:
-            return None
-
-        if mode == "antigravity":
-            credential_data["enable_credit"] = bool(state.get("enable_credit", False))
+        credential_data["enable_credit"] = bool(state.get("enable_credit", False))
 
         return os.path.basename(filename), credential_data
 
@@ -192,15 +214,9 @@ class CredentialManager:
         if state.get("disabled"):
             return False
 
-        model_lower = (model_name or "").lower()
         if has_active_model_cooldown(state.get("model_cooldowns"), model_name, mode=mode):
             return False
 
-        if mode == "geminicli":
-            if "pro" in model_lower and state.get("tier") == "free":
-                return False
-            if "preview" in model_lower and state.get("preview") is False:
-                return False
 
         return True
 
@@ -263,15 +279,14 @@ class CredentialManager:
             if not credential_data:
                 continue
 
-            if mode == "antigravity":
-                credential_data["enable_credit"] = bool(state.get("enable_credit", False))
+            credential_data["enable_credit"] = bool(state.get("enable_credit", False))
             return filename, credential_data
 
         return None
 
     async def get_valid_credential(
         self,
-        mode: str = "geminicli",
+        mode: str = "antigravity",
         model_name: Optional[str] = None,
         session_key: Optional[str] = None,
         exclude_credential: Optional[str] = None,
@@ -283,9 +298,8 @@ class CredentialManager:
         开启粘性会话后优先复用仍可用的绑定凭证；不可用时自动换下一个。
 
         Args:
-            mode: 凭证模式 ("geminicli" 或 "antigravity")
+            mode: 凭证模式 ("antigravity")
             model_name: 完整模型名，用于模型级冷却检查和preview筛选
-                       - geminicli: Pro 模型排除 free，preview 模型排除不支持的凭证
                        - antigravity: 按完整模型名过滤冷却
         """
         await self._ensure_initialized()
@@ -376,11 +390,6 @@ class CredentialManager:
             )
             return filename, credential_data
 
-    async def add_credential(self, credential_name: str, credential_data: Dict[str, Any]):
-        """新增或更新一个凭证。"""
-        await self._ensure_initialized()
-        await self._storage_adapter.store_credential(credential_name, credential_data)
-        log.info(f"Credential added/updated: {credential_name}")
 
     async def add_antigravity_credential(self, credential_name: str, credential_data: Dict[str, Any]):
         """新增或更新一个 Antigravity 凭证。"""
@@ -388,7 +397,7 @@ class CredentialManager:
         await self._storage_adapter.store_credential(credential_name, credential_data, mode="antigravity")
         log.info(f"Antigravity credential added/updated: {credential_name}")
 
-    async def remove_credential(self, credential_name: str, mode: str = "geminicli") -> bool:
+    async def remove_credential(self, credential_name: str, mode: str = "antigravity") -> bool:
         """删除一个凭证"""
         await self._ensure_initialized()
         try:
@@ -399,7 +408,7 @@ class CredentialManager:
             log.error(f"Error removing credential {credential_name}: {e}")
             return False
 
-    async def update_credential_state(self, credential_name: str, state_updates: Dict[str, Any], mode: str = "geminicli"):
+    async def update_credential_state(self, credential_name: str, state_updates: Dict[str, Any], mode: str = "antigravity"):
         """更新凭证状态"""
         await self._ensure_initialized()
         try:
@@ -413,7 +422,7 @@ class CredentialManager:
             log.error(f"Error updating credential state {credential_name}: {e}")
             return False
 
-    async def set_cred_disabled(self, credential_name: str, disabled: bool, mode: str = "geminicli"):
+    async def set_cred_disabled(self, credential_name: str, disabled: bool, mode: str = "antigravity"):
         """设置凭证的启用/禁用状态"""
         try:
             success = await self.update_credential_state(
@@ -448,7 +457,7 @@ class CredentialManager:
             log.error(f"Error getting credentials summary: {e}")
             return []
 
-    async def get_or_fetch_user_email(self, credential_name: str, mode: str = "geminicli") -> Optional[str]:
+    async def get_or_fetch_user_email(self, credential_name: str, mode: str = "antigravity") -> Optional[str]:
         """获取或获取用户邮箱地址"""
         try:
             # 确保已初始化
@@ -504,7 +513,7 @@ class CredentialManager:
         success: bool,
         error_code: Optional[int] = None,
         cooldown_until: Optional[float] = None,
-        mode: str = "geminicli",
+        mode: str = "antigravity",
         model_name: Optional[str] = None,
         error_message: Optional[str] = None,
         observed_at: Optional[float] = None,
@@ -517,7 +526,7 @@ class CredentialManager:
             success: 是否成功
             error_code: 错误码（如果失败）
             cooldown_until: 冷却截止时间戳（Unix时间戳，针对429 QUOTA_EXHAUSTED）
-            mode: 凭证模式 ("geminicli" 或 "antigravity")
+            mode: 凭证模式 ("antigravity")
             model_name: 模型名（用于设置模型级冷却）
             error_message: 错误信息（如果失败）
         """
@@ -560,7 +569,7 @@ class CredentialManager:
     async def refresh_credential(
         self,
         credential_name: str,
-        mode: str = "geminicli",
+        mode: str = "antigravity",
     ) -> Optional[Dict[str, Any]]:
         """收到 401 后强制刷新一次当前凭证。"""
         await self._ensure_initialized()
@@ -629,7 +638,7 @@ class CredentialManager:
             return True
 
     async def _refresh_token(
-        self, credential_data: Dict[str, Any], filename: str, mode: str = "geminicli"
+        self, credential_data: Dict[str, Any], filename: str, mode: str = "antigravity"
     ) -> Optional[Dict[str, Any]]:
         """刷新token并更新存储"""
         await self._ensure_initialized()

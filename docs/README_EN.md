@@ -1,3 +1,5 @@
+> This local fork now supports Antigravity only. Gemini CLI and Vertex have been removed. See the [current README](../README.md) for endpoints and configuration.
+
 # GeminiCLI to API
 
 **Convert GeminiCLI and Antigravity to OpenAI, GEMINI, and Claude API Compatible Interfaces**

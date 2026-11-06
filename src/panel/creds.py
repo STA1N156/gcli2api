@@ -21,7 +21,7 @@ from src.models import (
     CredFileBatchActionRequest
 )
 from src.storage_adapter import get_storage_adapter
-from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
+from src.utils import verify_panel_token, ANTIGRAVITY_USER_AGENT
 from src.antigravity_quota import (
     get_account_quota,
     summarize_accounts,
@@ -31,12 +31,9 @@ from src.antigravity_quota import (
 from src.task_manager import create_managed_task
 from src.google_oauth_api import (
     Credentials,
-    enable_required_apis,
     fetch_project_id_and_tier,
-    get_user_projects,
-    select_default_project,
 )
-from config import get_code_assist_endpoint, get_antigravity_api_url
+from config import get_antigravity_api_url
 from .utils import validate_mode
 
 
@@ -252,7 +249,7 @@ async def _refresh_quota_summary(storage, states, snapshot, lock, force):
 
 
 async def upload_credentials_common(
-    files: List[UploadFile], mode: str = "geminicli"
+    files: List[UploadFile], mode: str = "antigravity"
 ) -> JSONResponse:
     """批量上传凭证文件的通用函数"""
     mode = validate_mode(mode)
@@ -298,7 +295,6 @@ async def upload_credentials_common(
             )
 
 
-
     batch_size = 1000
     all_results = []
     total_success = 0
@@ -315,10 +311,7 @@ async def upload_credentials_common(
                 credential_data = json.loads(content_str)
 
                 # 根据凭证类型调用不同的添加方法
-                if mode == "antigravity":
-                    await credential_manager.add_antigravity_credential(filename, credential_data)
-                else:
-                    await credential_manager.add_credential(filename, credential_data)
+                await credential_manager.add_antigravity_credential(filename, credential_data)
 
                 log.debug(f"成功上传 {mode} 凭证文件: {filename}")
                 return {"filename": filename, "status": "success", "message": "上传成功"}
@@ -380,7 +373,7 @@ async def upload_credentials_common(
 
 
 async def get_creds_status_common(
-    offset: int, limit: int, status_filter: str, mode: str = "geminicli",
+    offset: int, limit: int, status_filter: str, mode: str = "antigravity",
     error_code_filter: str = None, cooldown_filter: str = None, preview_filter: str = None, tier_filter: str = None
 ) -> JSONResponse:
     """获取凭证文件状态的通用函数"""
@@ -402,7 +395,6 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="preview_filter 只能是 all、preview 或 no_preview")
     if tier_filter and tier_filter not in ["all", "free", "pro", "ultra"]:
         raise HTTPException(status_code=400, detail="tier_filter 只能是 all、free、pro 或 ultra")
-
 
 
     storage_adapter = await get_storage_adapter()
@@ -434,10 +426,7 @@ async def get_creds_status_common(
             "tier": summary.get("tier", "pro"),
         }
 
-        if mode == "geminicli":
-            cred_info["preview"] = summary.get("preview", True)
-        else:
-            cred_info["enable_credit"] = summary.get("enable_credit", False)
+        cred_info["enable_credit"] = summary.get("enable_credit", False)
 
         creds_list.append(cred_info)
 
@@ -457,7 +446,7 @@ async def get_creds_status_common(
     })
 
 
-async def download_all_creds_common(mode: str = "geminicli") -> Response:
+async def download_all_creds_common(mode: str = "antigravity") -> Response:
     """打包下载所有凭证文件的通用函数"""
     mode = validate_mode(mode)
     zip_filename = "antigravity_credentials.zip" if mode == "antigravity" else "credentials.zip"
@@ -499,7 +488,7 @@ async def download_all_creds_common(mode: str = "geminicli") -> Response:
     )
 
 
-async def fetch_user_email_common(filename: str, mode: str = "geminicli") -> JSONResponse:
+async def fetch_user_email_common(filename: str, mode: str = "antigravity") -> JSONResponse:
     """获取指定凭证文件用户邮箱的通用函数"""
     mode = validate_mode(mode)
 
@@ -533,7 +522,7 @@ async def fetch_user_email_common(filename: str, mode: str = "geminicli") -> JSO
         )
 
 
-async def refresh_all_user_emails_common(mode: str = "geminicli") -> JSONResponse:
+async def refresh_all_user_emails_common(mode: str = "antigravity") -> JSONResponse:
     """刷新所有凭证文件用户邮箱的通用函数 - 只为没有邮箱的凭证获取
 
     利用 get_all_credential_states 批量获取状态
@@ -601,7 +590,7 @@ async def refresh_all_user_emails_common(mode: str = "geminicli") -> JSONRespons
     )
 
 
-async def deduplicate_credentials_by_email_common(mode: str = "geminicli") -> JSONResponse:
+async def deduplicate_credentials_by_email_common(mode: str = "antigravity") -> JSONResponse:
     """批量去重凭证文件的通用函数 - 删除邮箱相同的凭证（只保留一个）"""
     mode = validate_mode(mode)
     storage_adapter = await get_storage_adapter()
@@ -688,7 +677,7 @@ async def deduplicate_credentials_by_email_common(mode: str = "geminicli") -> JS
         )
 
 
-async def verify_credential_project_common(filename: str, mode: str = "geminicli") -> JSONResponse:
+async def verify_credential_project_common(filename: str, mode: str = "antigravity") -> JSONResponse:
     """验证并重新获取凭证的project id的通用函数"""
     mode = validate_mode(mode)
 
@@ -717,43 +706,14 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
         await storage_adapter.store_credential(filename, credential_data, mode=mode)
 
     # 重新获取project id（仅 antigravity 模式请求积分）
-    if mode == "antigravity":
-        api_base_url = await get_antigravity_api_url()
-        user_agent = ANTIGRAVITY_USER_AGENT
-        project_id, subscription_tier, credit_amount = await fetch_project_id_and_tier(
-            access_token=credentials.access_token,
-            user_agent=user_agent,
-            api_base_url=api_base_url,
-            include_credits=True,
-        )
-    else:
-        # geminicli 模式：通过项目列表获取 project_id
-        credit_amount = None
-        subscription_tier = None
-        user_projects = await get_user_projects(credentials)
-        if user_projects:
-            if len(user_projects) == 1:
-                project_id = user_projects[0].get("projectId")
-            else:
-                project_id = await select_default_project(user_projects)
-        else:
-            project_id = None
-
-        if not project_id:
-            log.info(f"项目列表未返回可用项目，尝试使用 Antigravity UA 获取 GCLI Project ID: {filename}")
-            api_base_url = await get_code_assist_endpoint()
-            project_id, subscription_tier = await fetch_project_id_and_tier(
-                access_token=credentials.access_token,
-                user_agent=ANTIGRAVITY_USER_AGENT,
-                api_base_url=api_base_url,
-            )
-
-        if project_id:
-            log.info(f"正在为项目 {project_id} 启用必需的API服务...")
-            try:
-                await enable_required_apis(credentials, project_id)
-            except Exception as e:
-                log.warning(f"启用API服务失败: {e}")
+    api_base_url = await get_antigravity_api_url()
+    user_agent = ANTIGRAVITY_USER_AGENT
+    project_id, subscription_tier, credit_amount = await fetch_project_id_and_tier(
+        access_token=credentials.access_token,
+        user_agent=user_agent,
+        api_base_url=api_base_url,
+        include_credits=True,
+    )
 
     if project_id:
         credential_data["project_id"] = project_id
@@ -770,9 +730,6 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
         # 同步更新状态表中的 tier 字段
         state_update["tier"] = subscription_tier
 
-        # 如果是 geminicli 模式，直接设置 preview=True
-        if mode == "geminicli":
-            state_update["preview"] = True
 
         await storage_adapter.update_credential_state(filename, state_update, mode=mode)
 
@@ -814,7 +771,7 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
 async def upload_credentials(
     files: List[UploadFile] = File(...),
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """批量上传凭证文件"""
     try:
@@ -837,7 +794,7 @@ async def get_creds_status(
     cooldown_filter: str = "all",
     preview_filter: str = "all",
     tier_filter: str = "all",
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """
     获取凭证文件的状态（轻量级摘要，不包含完整凭证数据，支持分页和状态筛选）
@@ -848,9 +805,9 @@ async def get_creds_status(
         status_filter: 状态筛选（all/normal/abnormal/claude_abnormal/gemini_abnormal）
         error_code_filter: 错误码筛选（all=全部, 或具体错误码如"400", "403"）
         cooldown_filter: 冷却状态筛选（all/in_cooldown/claude_cooldown/gemini_cooldown/no_cooldown）
-        preview_filter: Preview筛选（all=全部, preview=支持preview, no_preview=不支持preview，仅geminicli模式有效）
+
         tier_filter: tier筛选（all=全部, free/pro/ultra）
-        mode: 凭证模式（geminicli 或 antigravity）
+        mode: 凭证模式（antigravity）
 
     Returns:
         包含凭证列表、总数、分页信息的响应
@@ -875,7 +832,7 @@ async def get_creds_status(
 async def get_cred_detail(
     filename: str,
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """
     按需获取单个凭证的详细数据（包含完整凭证内容）
@@ -886,7 +843,6 @@ async def get_cred_detail(
         # 验证文件名
         if not filename.endswith(".json"):
             raise HTTPException(status_code=400, detail="无效的文件名")
-
 
 
         storage_adapter = await get_storage_adapter()
@@ -917,10 +873,7 @@ async def get_cred_detail(
             "model_cooldowns": file_status.get("model_cooldowns", {}),
         }
 
-        if mode == "geminicli":
-            result["preview"] = file_status.get("preview", True)
-        else:
-            result["enable_credit"] = file_status.get("enable_credit", False)
+        result["enable_credit"] = file_status.get("enable_credit", False)
 
         if backend_type == "file" and os.path.exists(filename):
             result.update({
@@ -941,7 +894,7 @@ async def get_cred_detail(
 async def creds_action(
     request: CredFileActionRequest,
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """对凭证文件执行操作（启用/禁用/删除/enable_credit开关）"""
     try:
@@ -1009,8 +962,6 @@ async def creds_action(
                 raise HTTPException(status_code=500, detail=f"删除文件失败: {str(e)}")
 
         elif action == "enable_credit":
-            if mode != "antigravity":
-                raise HTTPException(status_code=400, detail="enable_credit 仅支持 antigravity 模式")
             updated = await storage_adapter.update_credential_state(
                 filename, {"enable_credit": True}, mode=mode
             )
@@ -1020,8 +971,6 @@ async def creds_action(
             raise HTTPException(status_code=500, detail="开启信用额度模式失败，可能凭证不存在")
 
         elif action == "disable_credit":
-            if mode != "antigravity":
-                raise HTTPException(status_code=400, detail="disable_credit 仅支持 antigravity 模式")
             updated = await storage_adapter.update_credential_state(
                 filename, {"enable_credit": False}, mode=mode
             )
@@ -1044,7 +993,7 @@ async def creds_action(
 async def creds_batch_action(
     request: CredFileBatchActionRequest,
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """批量对凭证文件执行操作（启用/禁用/删除/enable_credit开关）"""
     try:
@@ -1100,9 +1049,6 @@ async def creds_batch_action(
                         errors.append(f"{filename}: 删除文件失败 - {str(e)}")
                         continue
                 elif action == "enable_credit":
-                    if mode != "antigravity":
-                        errors.append(f"{filename}: enable_credit 仅支持 antigravity 模式")
-                        continue
                     updated = await storage_adapter.update_credential_state(
                         filename, {"enable_credit": True}, mode=mode
                     )
@@ -1113,9 +1059,6 @@ async def creds_batch_action(
                         errors.append(f"{filename}: 开启信用额度模式失败")
                         continue
                 elif action == "disable_credit":
-                    if mode != "antigravity":
-                        errors.append(f"{filename}: disable_credit 仅支持 antigravity 模式")
-                        continue
                     updated = await storage_adapter.update_credential_state(
                         filename, {"enable_credit": False}, mode=mode
                     )
@@ -1158,7 +1101,7 @@ async def creds_batch_action(
 @router.post("/clear-all-abnormal-status")
 async def clear_all_credential_abnormal_status(
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli",
+    mode: str = "antigravity",
 ):
     """让当前凭证类型下的全部异常凭证重新参与使用。"""
     try:
@@ -1196,7 +1139,7 @@ async def clear_all_credential_abnormal_status(
 async def download_cred_file(
     filename: str,
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """下载单个凭证文件"""
     try:
@@ -1235,7 +1178,7 @@ async def download_cred_file(
 async def fetch_user_email(
     filename: str,
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """获取指定凭证文件的用户邮箱地址"""
     try:
@@ -1251,7 +1194,7 @@ async def fetch_user_email(
 @router.post("/refresh-all-emails")
 async def refresh_all_user_emails(
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """刷新所有凭证文件的用户邮箱地址"""
     try:
@@ -1265,7 +1208,7 @@ async def refresh_all_user_emails(
 @router.post("/deduplicate-by-email")
 async def deduplicate_credentials_by_email(
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """批量去重凭证文件 - 删除邮箱相同的凭证（只保留一个）"""
     try:
@@ -1279,7 +1222,7 @@ async def deduplicate_credentials_by_email(
 @router.get("/download-all")
 async def download_all_creds(
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """
     打包下载所有凭证文件（流式处理，按需加载每个凭证数据）
@@ -1299,7 +1242,7 @@ async def download_all_creds(
 async def verify_credential_project(
     filename: str,
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """
     检验凭证的project id，重新获取project id
@@ -1319,14 +1262,14 @@ async def verify_credential_project(
 async def get_credential_errors(
     filename: str,
     token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
+    mode: str = "antigravity"
 ):
     """
     获取指定凭证的错误信息（包含 error_codes 和 error_messages）
 
     Args:
         filename: 凭证文件名
-        mode: 凭证模式（geminicli 或 antigravity）
+        mode: 凭证模式（antigravity）
 
     Returns:
         包含 error_codes 和 error_messages 的 JSON 响应
@@ -1414,238 +1357,10 @@ async def get_antigravity_credit_summary_progress(token: str = Depends(verify_pa
     return JSONResponse(content=await asyncio.to_thread(_read_quota_snapshot))
 
 
-@router.post("/configure-preview/{filename}")
-async def configure_preview_channel(
-    filename: str,
-    token: str = Depends(verify_panel_token),
-    mode: str = "geminicli"
-):
-    """
-    为 geminicli 凭证配置 preview 通道
-
-    通过调用 Google Cloud API 设置 release_channel 为 EXPERIMENTAL
-
-    Args:
-        filename: 凭证文件名
-        mode: 凭证模式（仅支持 geminicli）
-
-    Returns:
-        配置结果信息
-    """
-    try:
-        mode = validate_mode(mode)
-
-        # 只支持 geminicli 模式
-        if mode != "geminicli":
-            raise HTTPException(
-                status_code=400,
-                detail="配置 preview 通道仅支持 geminicli 模式"
-            )
-
-        # 验证文件名
-        if not filename.endswith(".json"):
-            raise HTTPException(status_code=400, detail="无效的文件名")
-
-        storage_adapter = await get_storage_adapter()
-
-        # 获取凭证数据
-        credential_data = await storage_adapter.get_credential(filename, mode=mode)
-        if not credential_data:
-            raise HTTPException(status_code=404, detail="凭证不存在")
-
-        # 创建凭证对象并刷新 token（如果需要）
-        credentials = Credentials.from_dict(credential_data)
-        token_refreshed = await credentials.refresh_if_needed()
-
-        if token_refreshed:
-            log.info(f"Token已自动刷新: {filename}")
-            credential_data = credentials.to_dict()
-            await storage_adapter.store_credential(filename, credential_data, mode=mode)
-
-        # 获取 access_token 和 project_id
-        access_token = credential_data.get("access_token") or credential_data.get("token")
-        project_id = credential_data.get("project_id", "")
-
-        if not access_token:
-            raise HTTPException(status_code=400, detail="凭证中没有访问令牌")
-        if not project_id:
-            raise HTTPException(status_code=400, detail="凭证中没有项目ID")
-
-        # 调用 Google Cloud API 配置 preview 通道
-        # 根据文档，需要两个步骤：
-        # 1. 创建 Release Channel Setting (EXPERIMENTAL)
-        # 2. 创建 Setting Binding (绑定到目标项目)
-        from src.httpx_client import post_async
-        import uuid
-
-        # 生成唯一的 ID
-        setting_id = f"preview-setting-{uuid.uuid4().hex[:8]}"
-        binding_id = f"preview-binding-{uuid.uuid4().hex[:8]}"
-
-        base_url = f"https://cloudaicompanion.googleapis.com/v1/projects/{project_id}/locations/global"
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json"
-        }
-
-        log.info(f"开始配置 preview 通道: {filename} (project_id={project_id})")
-
-        # 步骤 1: 创建 Release Channel Setting
-        setting_url = f"{base_url}/releaseChannelSettings"
-        setting_response = await post_async(
-            url=setting_url,
-            json={"release_channel": "EXPERIMENTAL"},
-            headers=headers,
-            params={"release_channel_setting_id": setting_id},
-            timeout=30.0
-        )
-
-        setting_status = setting_response.status_code
-
-        # 调用 Google Cloud API 配置 preview 通道
-        # 根据文档，需要两个步骤：
-        # 1. 创建 Release Channel Setting (EXPERIMENTAL)
-        # 2. 创建 Setting Binding (绑定到目标项目)
-        from src.httpx_client import post_async, get_async
-        import uuid
-
-        # 生成唯一的 ID
-        setting_id = f"preview-setting-{uuid.uuid4().hex[:8]}"
-        binding_id = f"preview-binding-{uuid.uuid4().hex[:8]}"
-
-        base_url = f"https://cloudaicompanion.googleapis.com/v1/projects/{project_id}/locations/global"
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json"
-        }
-
-        log.info(f"开始配置 preview 通道: {filename} (project_id={project_id})")
-
-        # 步骤 1: 创建 Release Channel Setting
-        setting_url = f"{base_url}/releaseChannelSettings"
-        setting_response = await post_async(
-            url=setting_url,
-            json={"release_channel": "EXPERIMENTAL"},
-            headers=headers,
-            params={"release_channel_setting_id": setting_id},
-            timeout=30.0
-        )
-
-        setting_status = setting_response.status_code
-
-        if setting_status == 200 or setting_status == 201:
-            log.info(f"步骤 1/2: Release Channel Setting 创建成功 (setting_id={setting_id})")
-        elif setting_status == 409:
-            # Setting 已存在，需要 LIST 获取真实的 setting_id，否则 Step 2 的 URL 会用错误的 ID
-            log.info("步骤 1/2: Release Channel Setting 已存在，正在获取已有 setting_id...")
-            list_response = await get_async(
-                url=setting_url,
-                headers=headers,
-                timeout=30.0
-            )
-            if list_response.status_code == 200:
-                try:
-                    list_data = list_response.json()
-                    settings = list_data.get("releaseChannelSettings", [])
-                    if settings:
-                        existing_name = settings[0].get("name", "")
-                        setting_id = existing_name.split("/")[-1]
-                        log.info(f"步骤 1/2: 获取到已有 setting_id={setting_id}")
-                    else:
-                        log.warning("步骤 1/2: LIST 返回空列表，保持随机 setting_id")
-                except Exception as e:
-                    log.warning(f"步骤 1/2: 解析 LIST 响应失败: {e}，保持随机 setting_id")
-            else:
-                log.warning(f"步骤 1/2: LIST 请求失败 (status={list_response.status_code})，保持随机 setting_id")
-        else:
-            # 步骤 1 失败
-            error_text = setting_response.text if hasattr(setting_response, 'text') else ""
-            log.error(f"步骤 1/2 失败: {filename} - Status: {setting_status}, Error: {error_text}")
-
-            return JSONResponse(
-                status_code=setting_status,
-                content={
-                    "success": False,
-                    "filename": filename,
-                    "preview": False,
-                    "message": f"创建 Release Channel Setting 失败: HTTP {setting_status}",
-                    "error": error_text,
-                    "step": "create_setting"
-                }
-            )
-
-        # 步骤 2: 创建 Setting Binding (绑定到当前项目)
-        binding_url = f"{base_url}/releaseChannelSettings/{setting_id}/settingBindings"
-        binding_response = await post_async(
-            url=binding_url,
-            json={
-                "target": f"projects/{project_id}",
-                "product": "GEMINI_CODE_ASSIST"
-            },
-            headers=headers,
-            params={"setting_binding_id": binding_id},
-            timeout=30.0
-        )
-
-        binding_status = binding_response.status_code
-
-        if binding_status == 200 or binding_status == 201:
-            await storage_adapter.update_credential_state(filename, {
-                "preview": True
-            }, mode=mode)
-
-            log.info(f"步骤 2/2: Setting Binding 创建成功 - Preview 通道配置完成: {filename}")
-
-            return JSONResponse(content={
-                "success": True,
-                "filename": filename,
-                "preview": True,
-                "message": "Preview 通道配置成功，已将 preview 属性设置为 true",
-                "setting_id": setting_id,
-                "binding_id": binding_id
-            })
-        elif binding_status == 409:
-            # Binding 已存在，说明已经配置过了
-            await storage_adapter.update_credential_state(filename, {
-                "preview": True
-            }, mode=mode)
-
-            log.info(f"步骤 2/2: Setting Binding 已存在 - Preview 通道已配置: {filename}")
-
-            return JSONResponse(content={
-                "success": True,
-                "filename": filename,
-                "preview": True,
-                "message": "Preview 通道配置已存在，已将 preview 属性设置为 true"
-            })
-        else:
-            # 步骤 2 失败
-            error_text = binding_response.text if hasattr(binding_response, 'text') else ""
-            log.error(f"步骤 2/2 失败: {filename} - Status: {binding_status}, Error: {error_text}")
-
-            return JSONResponse(
-                status_code=binding_status,
-                content={
-                    "success": False,
-                    "filename": filename,
-                    "preview": False,
-                    "message": f"创建 Setting Binding 失败: HTTP {binding_status}",
-                    "error": error_text,
-                    "step": "create_binding"
-                }
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        log.error(f"配置 preview 通道失败 {filename}: {e}")
-        raise HTTPException(status_code=500, detail=f"配置失败: {str(e)}")
-
-
 @router.post("/test/{filename}")
 async def test_credential(
     filename: str,
-    mode: str = "geminicli",
+    mode: str = "antigravity",
     enable_on_success: bool = False,
     _token: str = Depends(verify_panel_token)
 ):
@@ -1654,7 +1369,7 @@ async def test_credential(
 
     Args:
         filename: 凭证文件名
-        mode: 凭证模式（geminicli 或 antigravity）
+        mode: 凭证模式（antigravity）
 
     Returns:
         返回状态码：
@@ -1700,21 +1415,12 @@ async def test_credential(
             raise HTTPException(status_code=400, detail="凭证中没有项目ID")
 
         # 根据模式选择 API 端点和请求头
-        # 对于 geminicli 模式，使用两次测试：gemini-2.5-flash 和 gemini-3-flash-preview
         # 对于 antigravity 模式，只使用 gemini-2.5-flash
         test_model = "gemini-2.5-flash"
 
-        if mode == "antigravity":
-            api_base_url = await get_antigravity_api_url()
-            from src.api.antigravity import build_antigravity_headers
-            headers = build_antigravity_headers(access_token)
-        else:
-            api_base_url = await get_code_assist_endpoint()
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-                "User-Agent": GEMINICLI_USER_AGENT,
-            }
+        api_base_url = await get_antigravity_api_url()
+        from src.api.antigravity import build_antigravity_headers
+        headers = build_antigravity_headers(access_token)
 
         # 第一次测试：使用 gemini-2.5-flash
         response = await post_async(
@@ -1743,45 +1449,6 @@ async def test_credential(
                     "error_messages": {}
                 }, mode=mode)
 
-                # 如果是 geminicli 模式且第一次测试成功，继续测试 gemini-3-flash-preview
-                if mode == "geminicli":
-                    preview_model = "gemini-3-flash-preview"
-                    log.info(f"开始测试 preview 模型: {filename} (model={preview_model})")
-
-                    try:
-                        preview_response = await post_async(
-                            url=f"{api_base_url}/v1internal:generateContent",
-                            json={
-                                "model": preview_model,
-                                "project": project_id,
-                                "request": {
-                                    "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-                                    "generationConfig": {"maxOutputTokens": 1}
-                                }
-                            },
-                            headers=headers,
-                            timeout=30.0
-                        )
-
-                        preview_status = preview_response.status_code
-
-                        if preview_status == 200 or preview_status == 429:
-                            # preview 模型测试成功，设置 preview=True
-                            log.info(f"Preview 模型测试成功: {filename} (status={preview_status})")
-                            await storage_adapter.update_credential_state(filename, {
-                                "preview": True
-                            }, mode=mode)
-                        elif preview_status == 404:
-                            # preview 模型返回 404，说明不支持，设置 preview=False
-                            log.warning(f"Preview 模型不支持: {filename} (status=404)")
-                            await storage_adapter.update_credential_state(filename, {
-                                "preview": False
-                            }, mode=mode)
-                        else:
-                            # 其他错误，保持默认 preview 状态
-                            log.warning(f"Preview 模型测试失败: {filename} (status={preview_status})")
-                    except Exception as e:
-                        log.error(f"Preview 模型测试异常: {filename} - {e}")
 
             if enable_on_success:
                 if status_code != 200:

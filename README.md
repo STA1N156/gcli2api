@@ -1,6 +1,6 @@
-# GeminiCLI to API
+# Antigravity API
 
-**将 GeminiCLI 和 Antigravity 转换为 OpenAI 、GEMINI 和 Claude API 兼容接口**
+**将 Antigravity 转换为 OpenAI 、GEMINI 和 Claude API 兼容接口**
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: CNC-1.0](https://img.shields.io/badge/License-CNC--1.0-red.svg)](LICENSE)
@@ -123,7 +123,7 @@ ghcr.io/su-kaka/gcli2api:latest
         volumes:
           - ./data/creds:/app/creds
         healthcheck:
-          test: ["CMD-SHELL", "python -c \"import sys, urllib.request, os; port = os.environ.get('PORT', '7861'); req = urllib.request.Request(f'http://localhost:{port}/v1/models', headers={'Authorization': 'Bearer ' + os.environ.get('PASSWORD', 'pwd')}); sys.exit(0 if urllib.request.urlopen(req, timeout=5).getcode() == 200 else 1)\""]
+          test: ["CMD-SHELL", "python -c \"import sys, urllib.request, os; port = os.environ.get('PORT', '7861'); req = urllib.request.Request(f'http://localhost:{port}/antigravity/v1/models', headers={'Authorization': 'Bearer ' + os.environ.get('PASSWORD', 'pwd')}); sys.exit(0 if urllib.request.urlopen(req, timeout=5).getcode() == 200 else 1)\""]
           interval: 30s
           timeout: 10s
           retries: 3
@@ -139,12 +139,12 @@ ghcr.io/su-kaka/gcli2api:latest
 ### 🔄 API 端点和格式支持
 
 **多端点多格式支持**
-- **OpenAI 兼容端点**：`/v1/chat/completions` 和 `/v1/models`
+- **OpenAI 兼容端点**：`/antigravity/v1/chat/completions` 和 `/antigravity/v1/models`
   - 支持标准 OpenAI 格式（messages 结构）
   - 支持 Gemini 原生格式（contents 结构）
   - 自动格式检测和转换，无需手动切换
   - 支持多模态输入（文本 + 图像）
-- **Gemini 原生端点**：`/v1/models/{model}:generateContent` 和 `streamGenerateContent`
+- **Gemini 原生端点**：`/antigravity/v1/models/{model}:generateContent` 和 `streamGenerateContent`
   - 支持完整的 Gemini 原生 API 规范
   - 多种认证方式：Bearer Token、x-goog-api-key 头部、URL 参数 key
 - **Claude 格式兼容**：完整支持 Claude API 格式
@@ -199,7 +199,7 @@ ghcr.io/su-kaka/gcli2api:latest
 ### 🎛️ Web 管理控制台
 
 **全功能 Web 界面**
-- OAuth 认证流程管理（支持 GCLI 和 Antigravity 双模式）
+- OAuth 认证流程管理（支持 Antigravity）
 - 凭证文件上传、下载、管理
 - 实时日志查看（WebSocket）
 - 系统配置管理
@@ -207,7 +207,7 @@ ghcr.io/su-kaka/gcli2api:latest
 - 移动端适配界面
 
 **批量操作支持**
-- ZIP 文件批量上传凭证（GCLI 和 Antigravity）
+- ZIP 文件批量上传凭证（Antigravity）
 - 批量启用/禁用/删除凭证
 - 批量获取用户邮箱
 - 批量配置管理
@@ -288,7 +288,7 @@ ghcr.io/su-kaka/gcli2api:latest
   - 流式请求收到普通正文就立即发送，结束时不重复回放；工具正文仍按原有规则完整校验后返回，不强制分段。若模型同时输出普通正文与工具正文，两者可能重复；非流式请求仍收集完整结果。
   - 保留思考、原有工具调用与用量，不再依赖 `[done]` 标记或自动续写。
   - 客户端已提供 `output_reply` 或明确指定工具选择时，保持客户端的工具协议；该模式不能突破上游输出长度限制。
-- **空回重试**（GCLI/Antigravity 的普通模型和抗截断模型，流式与非流式均生效）：
+- **空回重试**（Antigravity 的普通模型和抗截断模型，流式与非流式均生效）：
   - 没有正文、工具调用或图片等有效输出才重试；只有思考仍算空回，英文拒绝正文不重试。
   - 普通模型空回后，将最新用户原文放入配对的 `read_user_input` 工具结果再试一次，仍空回则返回 400；普通流式正文直接输出。
   - 抗截断模型首次请求就使用上述输入包装；本轮已有完整配对时不重复添加，空回直接返回 400。图片和抗截断提醒保留在工具结果外，原始聊天记录不变。
@@ -305,39 +305,23 @@ ghcr.io/su-kaka/gcli2api:latest
 
 1. 访问 `http://127.0.0.1:7861` （默认端口，可通过 PORT 环境变量修改）
 2. 完成 OAuth 认证流程（默认密码：`pwd`，可通过环境变量修改）
-   - **GCLI 模式**：用于获取 Google Cloud Gemini API 凭证
    - **Antigravity 模式**：用于获取 Google Antigravity API 凭证
 3. 配置客户端：
 
 **OpenAI 兼容客户端：**
-   - **端点地址**：`http://127.0.0.1:7861/v1`
+   - **端点地址**：`http://127.0.0.1:7861/antigravity/v1`
    - **API 密钥**：`pwd`（默认值，可通过 API_PASSWORD 或 PASSWORD 环境变量修改）
 
 **Gemini 原生客户端：**
-   - **端点地址**：`http://127.0.0.1:7861`
+   - **端点地址**：`http://127.0.0.1:7861/antigravity`
    - **认证方式**：
      - `Authorization: Bearer your_api_password`
      - `x-goog-api-key: your_api_password`
      - URL 参数：`?key=your_api_password`
 
-### 🌟 双认证模式支持
+### Antigravity 认证
 
-**GCLI 认证模式**
-- 标准的 Google Cloud Gemini API 认证
-- 支持 OAuth2.0 认证流程
-- 自动启用必需的 Google Cloud API
-
-**Antigravity 认证模式**
-- Google Antigravity API 专用认证
-- 独立的凭证管理系统
-- 支持批量上传和管理
-- 与 GCLI 凭证完全隔离
-
-**统一管理界面**
-- 在"批量上传"标签页中可一次性管理两种凭证
-- 上半部分：GCLI 凭证批量上传（蓝色主题）
-- 下半部分：Antigravity 凭证批量上传（绿色主题）
-- 各自独立的凭证管理标签页
+支持 OAuth 登录、批量导入 JSON/ZIP 凭证、账号管理及额度查询。
 
 ## 💾 数据存储模式
 
@@ -516,111 +500,6 @@ docker run -d --name gcli2api \
 
 本服务支持三套完整的 API 端点：
 
-#### 1. OpenAI 兼容端点（GCLI）
-
-**端点：** `/v1/chat/completions`
-**认证：** `Authorization: Bearer your_api_password`
-
-支持两种请求格式，会自动检测并处理：
-
-**OpenAI 格式：**
-```json
-{
-  "model": "gemini-2.5-pro",
-  "messages": [
-    {"role": "system", "content": "You are a helpful assistant"},
-    {"role": "user", "content": "Hello"}
-  ],
-  "temperature": 0.7,
-  "stream": true
-}
-```
-
-**Gemini 原生格式：**
-```json
-{
-  "model": "gemini-2.5-pro",
-  "contents": [
-    {"role": "user", "parts": [{"text": "Hello"}]}
-  ],
-  "systemInstruction": {"parts": [{"text": "You are a helpful assistant"}]},
-  "generationConfig": {
-    "temperature": 0.7
-  }
-}
-```
-
-#### 2. Gemini 原生端点（GCLI）
-
-**非流式端点：** `/v1/models/{model}:generateContent`
-**流式端点：** `/v1/models/{model}:streamGenerateContent`
-**模型列表：** `/v1/models`
-
-**认证方式（任选一种）：**
-- `Authorization: Bearer your_api_password`
-- `x-goog-api-key: your_api_password`
-- URL 参数：`?key=your_api_password`
-
-**请求示例：**
-```bash
-# 使用 x-goog-api-key 头部
-curl -X POST "http://127.0.0.1:7861/v1/models/gemini-2.5-pro:generateContent" \
-  -H "x-goog-api-key: your_api_password" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contents": [
-      {"role": "user", "parts": [{"text": "Hello"}]}
-    ]
-  }'
-
-# 使用 URL 参数
-curl -X POST "http://127.0.0.1:7861/v1/models/gemini-2.5-pro:streamGenerateContent?key=your_api_password" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contents": [
-      {"role": "user", "parts": [{"text": "Hello"}]}
-    ]
-  }'
-```
-
-#### 3. Claude API 格式端点
-
-**端点：** `/v1/messages`
-**认证：** `x-api-key: your_api_password` 或 `Authorization: Bearer your_api_password`
-
-**请求示例：**
-```bash
-curl -X POST "http://127.0.0.1:7861/v1/messages" \
-  -H "x-api-key: your_api_password" \
-  -H "anthropic-version: 2023-06-01" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gemini-2.5-pro",
-    "max_tokens": 1024,
-    "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
-    ]
-  }'
-```
-
-**支持 system 参数：**
-```json
-{
-  "model": "gemini-2.5-pro",
-  "max_tokens": 1024,
-  "system": "You are a helpful assistant",
-  "messages": [
-    {"role": "user", "content": "Hello"}
-  ]
-}
-```
-
-**说明：**
-- 完全兼容 Claude API 格式规范
-- 自动转换为 Gemini 格式调用后端
-- 支持 Claude 的所有标准参数
-- 响应格式符合 Claude API 规范
-
 #### 4. Antigravity API 端点
 
 **支持三种格式：OpenAI、Gemini 和 Claude**
@@ -753,12 +632,12 @@ for part in response.candidates[0].content.parts:
 
 **认证端点**
 - `POST /auth/login` - 用户登录
-- `POST /auth/start` - 开始 OAuth 认证（支持 GCLI 和 Antigravity 模式）
+- `POST /auth/start` - 开始 OAuth 认证（支持 Antigravity 模式）
 - `POST /auth/callback` - 处理 OAuth 回调
 - `POST /auth/callback-url` - 从回调 URL 直接完成认证
 - `GET /auth/status/{project_id}` - 检查认证状态
 
-**凭证管理端点**（支持 `mode=geminicli` 或 `mode=antigravity` 参数）
+**凭证管理端点**（支持 `mode=antigravity` 参数）
 - `POST /creds/upload` - 批量上传凭证文件（支持 JSON 和 ZIP）
 - `GET /creds/status` - 获取凭证状态列表（支持分页和筛选）
 - `GET /creds/detail/{filename}` - 获取单个凭证详情

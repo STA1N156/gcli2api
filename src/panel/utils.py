@@ -133,12 +133,12 @@ def is_mobile_user_agent(user_agent: str) -> bool:
     return any(keyword in user_agent_lower for keyword in mobile_keywords)
 
 
-def validate_mode(mode: str = "geminicli") -> str:
+def validate_mode(mode: str = "antigravity") -> str:
     """
     验证 mode 参数
 
     Args:
-        mode: 模式字符串 ("geminicli" 或 "antigravity")
+        mode: 模式字符串 ("antigravity")
 
     Returns:
         str: 验证后的 mode 字符串
@@ -146,10 +146,10 @@ def validate_mode(mode: str = "geminicli") -> str:
     Raises:
         HTTPException: 如果 mode 参数无效
     """
-    if mode not in ["geminicli", "antigravity"]:
+    if mode != "antigravity":
         raise HTTPException(
             status_code=400,
-            detail=f"无效的 mode 参数: {mode}，只支持 'geminicli' 或 'antigravity'"
+            detail=f"无效的 mode 参数: {mode}，只支持 'antigravity'"
         )
     return mode
 

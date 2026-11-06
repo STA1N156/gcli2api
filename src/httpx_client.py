@@ -85,7 +85,7 @@ class HttpxClientManager:
 
     @asynccontextmanager
     async def get_streaming_client(
-        self, timeout: float = 1200.0, **kwargs
+        self, timeout: float = 900.0, **kwargs
     ) -> AsyncGenerator[httpx.AsyncClient, None]:
         yield await self._get_or_create_client(timeout=timeout, **kwargs)
 
@@ -127,15 +127,12 @@ async def post_async(
     data: Any = None,
     json: Any = None,
     headers: Optional[Dict[str, str]] = None,
-    timeout: float = 1200.0,
+    timeout: float = 900.0,
     **kwargs,
 ) -> httpx.Response:
     client_kwargs, request_kwargs = _split_httpx_kwargs(kwargs)
     async with http_client.get_client(timeout=timeout, **client_kwargs) as client:
         return await client.post(url, data=data, json=json, headers=headers, **request_kwargs)
-
-
-_MOCK_STREAM_429 = False
 
 
 async def stream_post_async(
@@ -145,17 +142,6 @@ async def stream_post_async(
     headers: Optional[Dict[str, str]] = None,
     **kwargs,
 ):
-    if _MOCK_STREAM_429:
-        from fastapi import Response
-        import json
-
-        log.warning("[MOCK] stream_post_async: returning mock 429")
-        yield Response(
-            content=json.dumps({"error": {"code": 429, "message": "mock rate limit", "status": "RESOURCE_EXHAUSTED"}}),
-            status_code=429,
-        )
-        return
-
     client_kwargs, request_kwargs = _split_httpx_kwargs(kwargs)
     client_kwargs.setdefault(
         "http2",

@@ -26,6 +26,9 @@ from .utils import get_env_locked_keys
 router = APIRouter(prefix="/config", tags=["config"])
 
 _REMOVED_CREDENTIAL_POLICY_KEYS = {
+    "code_assist_endpoint",
+    "resource_manager_api_url",
+    "service_usage_api_url",
     "auto_ban_enabled",
     "auto_ban_error_codes",
     "calls_per_rotation",
@@ -54,15 +57,12 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config = {}
 
         # 基础配置
-        current_config["code_assist_endpoint"] = await config.get_code_assist_endpoint()
         current_config["credentials_dir"] = await config.get_credentials_dir()
         current_config["proxy"] = await config.get_proxy_config() or ""
 
         # 代理端点配置
         current_config["oauth_proxy_url"] = await config.get_oauth_proxy_url()
         current_config["googleapis_proxy_url"] = await config.get_googleapis_proxy_url()
-        current_config["resource_manager_api_url"] = await config.get_resource_manager_api_url()
-        current_config["service_usage_api_url"] = await config.get_service_usage_api_url()
         current_config["antigravity_api_url"] = await config.get_antigravity_api_url()
 
         # 凭证重试与粘性配置
