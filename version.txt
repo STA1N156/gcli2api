@@ -1,4 +1,4 @@
-full_hash=337ecbff4144c8a33105e1e48208e44e17fecd03
-short_hash=337ecbf
-message=feat: refresh AN panel and import credentials by email
-date=2026-11-07 02:15:58 +0800
+full_hash=c679727f6eeb3c7a06e9ce91ba8bf97b82575c88
+short_hash=c679727
+message=feat: add batch credential checks and normalize thinking levels
+date=2026-11-11 16:47:49 +0800
