@@ -1,4 +1,4 @@
-full_hash=5c35231130d07e1260fd0d46e46b716affade75a
-short_hash=5c35231
-message=fix: retry prompt transfer without cooling or rotating credentials
-date=2026-11-11 21:20:20 +0800
+full_hash=14b3e08e9894b97a7b3284c889856f96a4ce71fe
+short_hash=14b3e08
+message=perf: coalesce session renewal and reuse request credential candidates
+date=2026-11-11 21:44:44 +0800
