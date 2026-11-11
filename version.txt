@@ -1,4 +1,4 @@
-full_hash=3b88514e812db4a1e116d97c3a9d5d1f84d003d8
-short_hash=3b88514
-message=perf: reduce SQLite writes and retire marked prompt storage
-date=2026-11-11 21:11:07 +0800
+full_hash=5c35231130d07e1260fd0d46e46b716affade75a
+short_hash=5c35231
+message=fix: retry prompt transfer without cooling or rotating credentials
+date=2026-11-11 21:20:20 +0800
