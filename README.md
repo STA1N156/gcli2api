@@ -28,8 +28,13 @@ npm run demo -- --port 5173
 连接本地 Python 服务时使用 `npm run dev`；直接运行 Python 服务前先执行
 `npm run build`。Docker 镜像会自动构建前端。
 
-控制台基于上游 AGY2API React 界面，保留本分支的额度汇总、标记提示词和运行日志。
+控制台基于上游 AGY2API React 界面，保留本分支的额度汇总和运行日志。
 Ultra Lite 单独识别、显示和筛选；凭证测试使用 `gemini-3.5-flash-lite`。
+
+符合原有规则的 429 会在当前请求中转移系统提示词并重试；提示词不再记录或查询。
+使用 `python web.py` 启动 SQLite 服务时，主进程会先备份并核验账号、状态、配置和会话，
+清除旧 `marked_prompts` 及其历史备份表，压缩数据库，再启动工作进程。
+非提示词数据的恢复备份保存在凭证目录下的 `backups/`。
 
 ### 版本与账号导入
 

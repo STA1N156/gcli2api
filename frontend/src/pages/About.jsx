@@ -96,7 +96,7 @@ export default function About({ version, onCheckUpdate, checkingUpdate }) {
         <h2 className="section-title">关于</h2>
         <p className="text-xs text-gray-400 leading-7 mt-3">
           控制面板基于上游 AGY2API React
-          界面改进，保留本分支的凭证管理、额度汇总、标记提示词及运行日志功能。遵循项目
+          界面改进，保留本分支的凭证管理、额度汇总及运行日志功能。遵循项目
           CNC-1.0 许可证，仅供学习研究使用。
         </p>
         <a

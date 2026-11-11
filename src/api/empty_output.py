@@ -130,6 +130,26 @@ def stream_chunk_has_visible_output(chunk: Any) -> bool:
     return False
 
 
+def stream_chunk_finishes_response(chunk: Any, state: dict, expected_candidates: int = 1) -> bool:
+    text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else str(chunk)
+    if text.strip() in ("[DONE]", "data: [DONE]"):
+        return True
+    for raw in _iter_stream_payloads(text):
+        try:
+            response = _get_response_data(json.loads(raw))
+        except (TypeError, ValueError):
+            continue
+        if response is None:
+            continue
+        for index, candidate in enumerate(response.get("candidates") or []):
+            if isinstance(candidate, dict) and candidate.get("finishReason"):
+                state["finished"].add(candidate.get("index", index))
+        # Ignore interim usage: final usage must accompany or follow completion.
+        if len(state["finished"]) >= expected_candidates and response.get("usageMetadata"):
+            return True
+    return False
+
+
 def _get_response_data(payload: Any) -> Mapping[str, Any] | None:
     if not isinstance(payload, Mapping):
         return None

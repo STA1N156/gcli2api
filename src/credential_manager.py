@@ -592,18 +592,13 @@ class CredentialManager:
                     "error_messages": error_messages,
                 }
 
-                await self.update_credential_state(credential_name, state_updates, mode=mode)
-
-                # 设置模型级冷却
                 if cooldown_until is not None and model_name:
-                    if hasattr(self._storage_adapter._backend, 'set_model_cooldown'):
-                        await self._storage_adapter._backend.set_model_cooldown(
-                            credential_name, model_name, cooldown_until, mode=mode
-                        )
-                        log.info(
-                            f"设置模型级冷却: {credential_name}, model_name={model_name}, "
-                            f"冷却至: {datetime.fromtimestamp(cooldown_until, timezone.utc).isoformat()}"
-                        )
+                    await self._storage_adapter._backend.set_model_cooldown(
+                        credential_name, model_name, cooldown_until, mode=mode,
+                        error_code=error_code, error_message=error_message,
+                    )
+                else:
+                    await self.update_credential_state(credential_name, state_updates, mode=mode)
 
         except Exception as e:
             log.error(f"Error recording API call result for {credential_name}: {e}")

@@ -188,21 +188,6 @@ export async function respond(config) {
     });
   if (path === "/creds/upload")
     return fail("本地预览不导入真实凭据，请勿上传账号文件。");
-  if (path === "/marked-prompts")
-    return result({
-      total: 3,
-      items: Array.from({ length: 3 }, (_, index) => ({
-        id: String(index + 1).repeat(64),
-        model: "gemini-3.8-flash",
-        created_at: now - index * 900,
-        chars: 1680 + index * 320,
-        preview: [
-          "你是一位专业的编程助手，请清晰地解释解决方案…",
-          "请按照指定格式整理文档，并保留重要信息…",
-          "阅读下面的代码，找出可读性与性能方面的改进…",
-        ][index],
-      })),
-    });
   if (config.responseType === "blob")
     return fail("此处仅预览界面，没有真实文件可下载。");
   return fail("该操作未在本地预览中启用。");

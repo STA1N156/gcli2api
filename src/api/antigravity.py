@@ -23,6 +23,7 @@ from src.api.empty_output import (
     EMPTY_MODEL_OUTPUT_STATUS_CODE,
     build_empty_model_output_response,
     is_empty_model_output,
+    stream_chunk_finishes_response,
     stream_chunk_has_visible_output,
 )
 from src.api.utils import (
@@ -40,7 +41,6 @@ from src.converter.anti_truncation import move_system_to_first_user
 from src.converter.antigravity_fix import ensure_user_ending
 from src.httpx_client import post_async, stream_post_async
 from src.models import Model, model_to_dict
-from src.marked_prompts import relocate_known_prompt, remember_marked_prompt
 from src.session_affinity import extract_cache_session_key
 from src.utils import ANTIGRAVITY_USER_AGENT
 
@@ -225,14 +225,14 @@ async def _record_response_error(
     )
 
 
-def _move_flagged_system_prompt(body: Dict[str, Any], final_payload: Dict[str, Any]) -> bool:
+def _move_system_prompt_for_retry(body: Dict[str, Any], final_payload: Dict[str, Any]) -> bool:
     moved_request = move_system_to_first_user(final_payload["request"])
     if moved_request is final_payload["request"]:
         return False
     final_payload["request"] = moved_request
     # Persist the move if the outer loop subsequently retries an empty body.
     body["request"] = move_system_to_first_user(body["request"])
-    log.info("[ANTIGRAVITY] 被标记重试：已将系统提示词移至首条用户消息")
+    log.info("[ANTIGRAVITY] 429重试：已将系统提示词移至首条用户消息")
     return True
 
 
@@ -245,7 +245,6 @@ async def stream_request(
     """流式请求；失败时只选择本次尚未尝试的可用凭证。"""
     model_name = body.get("model", "")
     session_key = extract_cache_session_key(body, headers)
-    await relocate_known_prompt(body)
     attempted: Set[str] = set()
     selected = await _get_valid_request_credential(
         model_name, session_key, attempted
@@ -277,20 +276,20 @@ async def stream_request(
 
     while True:
         success_recorded = False
-        success_task = None
         retry_current = False
         retry_same = False
         buffered_chunks = []
+        completion = {"finished": set()}
+        expected_candidates = final_payload["request"].get("generationConfig", {}).get("candidateCount", 1)
+        upstream = stream_post_async(
+            url=target_url,
+            body=final_payload,
+            native=native,
+            headers=auth_headers,
+        )
         try:
-            async for chunk in stream_post_async(
-                url=target_url,
-                body=final_payload,
-                native=native,
-                headers=auth_headers,
-            ):
+            async for chunk in upstream:
                 if isinstance(chunk, Response):
-                    if success_task is not None:
-                        await asyncio.shield(success_task)
                     error_text = (
                         chunk.body.decode("utf-8", errors="replace")
                         if isinstance(chunk.body, bytes)
@@ -332,13 +331,11 @@ async def stream_request(
                     client_chunk = rewrite_input_token_limit_response(
                         _rewrite_resource_exhausted_response(chunk)
                     )
-                    if chunk.status_code == 429 and client_chunk is not chunk:
-                        await remember_marked_prompt(body["request"], model_name)
                     if success_recorded or not is_retryable_status(chunk.status_code):
                         yield client_chunk
                         return
                     if client_chunk is not chunk:
-                        if not _move_flagged_system_prompt(body, final_payload):
+                        if not _move_system_prompt_for_retry(body, final_payload):
                             # This prompt adjustment gets one extra attempt, not another rotation loop.
                             yield client_chunk
                             return
@@ -346,12 +343,17 @@ async def stream_request(
                     retry_current = True
                     break
 
+                response_complete = not native and stream_chunk_finishes_response(
+                    chunk, completion, expected_candidates
+                )
                 if not success_recorded:
                     if empty_output_error_enabled:
                         buffered_chunks.append(chunk)
                         if not stream_chunk_has_visible_output(chunk):
+                            if response_complete:
+                                break
                             continue
-                    success_task = record_api_call_success_later(
+                    record_api_call_success_later(
                         credential_manager,
                         current_file,
                         mode="antigravity",
@@ -366,6 +368,15 @@ async def stream_request(
                         yield chunk
                 else:
                     yield chunk
+                if response_complete:
+                    # Reuse healthy connections; bound peers that never close their stream.
+                    try:
+                        async with asyncio.timeout(0.1):
+                            async for _ in upstream:
+                                pass
+                    except TimeoutError:
+                        pass
+                    break
 
             if success_recorded:
                 return
@@ -388,8 +399,7 @@ async def stream_request(
                 f"[ANTIGRAVITY STREAM] 请求异常，切换凭证: {current_file}: {exc}"
             )
         finally:
-            if success_task is not None:
-                await asyncio.shield(success_task)
+            await upstream.aclose()
 
         if retry_limit_reached(retry_config, len(attempted)):
             yield last_error or Response(
@@ -428,7 +438,6 @@ async def non_stream_request(
 
     model_name = body.get("model", "")
     session_key = extract_cache_session_key(body, headers)
-    await relocate_known_prompt(body)
     attempted: Set[str] = set()
     selected = await _get_valid_request_credential(
         model_name, session_key, attempted
@@ -509,8 +518,6 @@ async def non_stream_request(
             last_error = rewrite_input_token_limit_response(
                 _rewrite_resource_exhausted_response(original_error)
             )
-            if response.status_code == 429 and last_error is not original_error:
-                await remember_marked_prompt(body["request"], model_name)
             log.warning(
                 f"[ANTIGRAVITY] 上游返回 {response.status_code}: "
                 f"credential={current_file}, model={model_name}, "
@@ -522,7 +529,7 @@ async def non_stream_request(
             if not is_retryable_status(response.status_code):
                 return last_error
             if last_error is not original_error:
-                if not _move_flagged_system_prompt(body, final_payload):
+                if not _move_system_prompt_for_retry(body, final_payload):
                     return last_error
         except Exception as exc:
             log.warning(

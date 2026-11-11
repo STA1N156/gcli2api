@@ -35,10 +35,6 @@ export default defineConfig({
         target: "http://localhost:7861",
         changeOrigin: true,
       },
-      "/marked-prompts": {
-        target: "http://localhost:7861",
-        changeOrigin: true,
-      },
     },
   },
   build: {

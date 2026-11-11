@@ -270,6 +270,12 @@ def _apply_hypercorn_config(config) -> None:
 
 def main():
     """主启动函数"""
+    from src.storage.legacy_prompt_cleanup import clear_legacy_prompt_tables
+
+    cleanup = clear_legacy_prompt_tables()
+    if cleanup:
+        log.info(f"Legacy prompt cleanup completed: {cleanup}")
+
     from hypercorn.asyncio import serve
     from hypercorn.config import Config
     from hypercorn.run import run

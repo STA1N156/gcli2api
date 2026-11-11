@@ -4,7 +4,6 @@ import {
   ArrowUpRight,
   ChevronsUpDown,
   HelpCircle,
-  FileText,
   KeyRound,
   Loader2,
   LogOut,
@@ -24,7 +23,6 @@ const OAuth = lazy(() => import("./pages/OAuth"));
 const UploadPage = lazy(() => import("./pages/Upload"));
 const Config = lazy(() => import("./pages/Config"));
 const About = lazy(() => import("./pages/About"));
-const MarkedPrompts = lazy(() => import("./pages/MarkedPrompts"));
 const RuntimeLogs = lazy(() => import("./pages/RuntimeLogs"));
 const preview = import.meta.env.VITE_PANEL_PREVIEW === "1";
 const tabs = [
@@ -36,12 +34,6 @@ const tabs = [
   },
   { id: "oauth", label: "OAuth 认证", icon: Sparkles, component: OAuth },
   { id: "upload", label: "批量导入", icon: Upload, component: UploadPage },
-  {
-    id: "prompts",
-    label: "标记提示词",
-    icon: FileText,
-    component: MarkedPrompts,
-  },
   { id: "logs", label: "运行日志", icon: Terminal, component: RuntimeLogs },
   { id: "config", label: "配置管理", icon: Settings2, component: Config },
   { id: "about", label: "项目信息", icon: HelpCircle, component: About },

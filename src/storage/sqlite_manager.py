@@ -281,49 +281,7 @@ class SQLiteManager:
             ON session_bindings(expires_at)
         """)
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS marked_prompts (
-                id TEXT PRIMARY KEY, text TEXT NOT NULL, model TEXT NOT NULL,
-                created_at REAL NOT NULL, chars INTEGER NOT NULL, preview TEXT NOT NULL
-            )
-        """)
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_marked_prompts_created ON marked_prompts(created_at)")
         log.debug("SQLite tables and indexes created")
-
-    async def save_marked_prompt(self, record: Dict[str, Any]) -> None:
-        async with self._connection(write=True) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO marked_prompts (id,text,model,created_at,chars,preview) VALUES (?,?,?,?,?,?)",
-                tuple(record[key] for key in ("id", "text", "model", "created_at", "chars", "preview")),
-            )
-            await db.commit()
-
-    async def has_marked_prompt(self, prompt_id: str) -> bool:
-        async with self._connection() as db:
-            async with db.execute("SELECT 1 FROM marked_prompts WHERE id=?", (prompt_id,)) as cursor:
-                return await cursor.fetchone() is not None
-
-    async def list_marked_prompts(self, offset: int, limit: int) -> Dict[str, Any]:
-        async with self._connection() as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT COUNT(*) FROM marked_prompts") as cursor:
-                total = (await cursor.fetchone())[0]
-            async with db.execute(
-                "SELECT id,model,created_at,chars,preview FROM marked_prompts ORDER BY created_at DESC,id LIMIT ? OFFSET ?",
-                (limit, offset),
-            ) as cursor:
-                return {"items": [dict(row) for row in await cursor.fetchall()], "total": total}
-
-    async def get_marked_prompts(self, prompt_ids: List[str]) -> List[Dict[str, Any]]:
-        if not prompt_ids:
-            return []
-        async with self._connection() as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                f"SELECT * FROM marked_prompts WHERE id IN ({','.join('?' for _ in prompt_ids)})",
-                prompt_ids,
-            ) as cursor:
-                return [dict(row) for row in await cursor.fetchall()]
 
     async def _repair_credential_filenames(self, db: aiosqlite.Connection):
         """
@@ -1311,7 +1269,9 @@ class SQLiteManager:
         filename: str,
         model_name: str,
         cooldown_until: Optional[float],
-        mode: str = "antigravity"
+        mode: str = "antigravity",
+        error_code: Optional[int] = None,
+        error_message: Optional[str] = None,
     ) -> bool:
         """
         设置特定模型的冷却时间
@@ -1332,36 +1292,22 @@ class SQLiteManager:
 
         try:
             table_name = self._get_table_name(mode)
+            model_path = '$.' + json.dumps(model_name, ensure_ascii=False)
+            expression = "json_remove(COALESCE(model_cooldowns, '{}'), ?)" if cooldown_until is None else "json_set(COALESCE(model_cooldowns, '{}'), ?, ?)"
+            values = [model_path] if cooldown_until is None else [model_path, cooldown_until]
+            fields = [f"model_cooldowns = {expression}", "updated_at = ?"]
+            values.append(time.time())
+            if error_code is not None:
+                fields.extend(["error_codes = ?", "error_messages = ?"])
+                values.extend([json.dumps([error_code]), json.dumps({str(error_code): error_message} if error_message else {})])
+            values.append(filename)
             async with self._connection(write=True) as db:
-                # 获取当前的 model_cooldowns
-                async with db.execute(f"""
-                    SELECT model_cooldowns FROM {table_name} WHERE filename = ?
-                """, (filename,)) as cursor:
-                    row = await cursor.fetchone()
+                result = await db.execute(
+                    f"UPDATE {table_name} SET {', '.join(fields)} WHERE filename = ?", values
+                )
+                await db.commit()
 
-                    if not row:
-                        log.warning(f"Credential {filename} not found")
-                        return False
-
-                    model_cooldowns = json.loads(row[0] or '{}')
-
-                    # 更新或删除指定模型的冷却时间
-                    if cooldown_until is None:
-                        model_cooldowns.pop(model_name, None)
-                    else:
-                        model_cooldowns[model_name] = cooldown_until
-
-                    # 写回数据库
-                    await db.execute(f"""
-                        UPDATE {table_name}
-                        SET model_cooldowns = ?,
-                            updated_at = ?
-                        WHERE filename = ?
-                    """, (json.dumps(model_cooldowns), time.time(), filename))
-                    await db.commit()
-
-                    log.debug(f"Set model cooldown: {filename}, model_name={model_name}, cooldown_until={cooldown_until}")
-                    return True
+            return result.rowcount > 0
 
         except Exception as e:
             log.error(f"Error setting model cooldown for {filename}: {e}")
@@ -1419,7 +1365,7 @@ class SQLiteManager:
 
         try:
             table_name = self._get_table_name(mode)
-            async with self._connection(write=True) as db:
+            async with self._connection() as db:
                 async with db.execute(f"""
                     SELECT error_codes, error_messages, model_cooldowns, updated_at
                     FROM {table_name}
@@ -1427,22 +1373,23 @@ class SQLiteManager:
                 """, (filename,)) as cursor:
                     row = await cursor.fetchone()
 
-                if not row:
-                    return
+            if not row:
+                return
 
-                error_codes, error_messages, cooldowns_json, updated_at = row
-                if updated_at is not None and updated_at > observed_at:
-                    return
-                has_errors = error_codes not in (None, "", "[]")
-                cooldowns = json.loads(cooldowns_json or "{}")
-                has_model_cooldown = bool(model_name and model_name in cooldowns)
+            error_codes, error_messages, cooldowns_json, updated_at = row
+            if updated_at is not None and updated_at > observed_at:
+                return
+            has_errors = error_codes not in (None, "", "[]")
+            cooldowns = json.loads(cooldowns_json or "{}")
+            has_model_cooldown = bool(model_name and model_name in cooldowns)
 
-                # 大多数成功请求的状态本来就是干净的，不要为它们抢 SQLite 写锁。
-                if not has_errors and not has_model_cooldown:
-                    return
+            # Clean successes use only the read pool; changed states retain the CAS guard.
+            if not has_errors and not has_model_cooldown:
+                return
 
-                if has_model_cooldown:
-                    cooldowns.pop(model_name)
+            if has_model_cooldown:
+                cooldowns.pop(model_name)
+            async with self._connection(write=True) as db:
                 await db.execute(f"""
                     UPDATE {table_name}
                     SET last_success = ?, error_codes = '[]', error_messages = '{{}}',

@@ -152,31 +152,11 @@ class MongoDBManager:
             await session_bindings_collection.create_index(
                 [("expires_at", ASCENDING)], name="idx_session_bindings_expires_at"
             )
-            await self._db["marked_prompts"].create_index([("created_at", -1)])
             log.debug("MongoDB indexes created successfully")
         except Exception as e:
             # 如果索引已存在，忽略错误
             if "already exists" not in str(e).lower():
                 log.warning(f"Index creation warning: {e}")
-
-    async def save_marked_prompt(self, record: Dict[str, Any]) -> None:
-        await self._db["marked_prompts"].update_one(
-            {"_id": record["id"]}, {"$setOnInsert": record}, upsert=True,
-        )
-
-    async def has_marked_prompt(self, prompt_id: str) -> bool:
-        return await self._db["marked_prompts"].find_one({"_id": prompt_id}, {"_id": 1}) is not None
-
-    async def list_marked_prompts(self, offset: int, limit: int) -> Dict[str, Any]:
-        collection = self._db["marked_prompts"]
-        cursor = collection.find({}, {"_id": 0, "text": 0}).sort([("created_at", -1), ("id", 1)])
-        items = await cursor.skip(offset).limit(limit).to_list(length=limit)
-        return {"items": items, "total": await collection.count_documents({})}
-
-    async def get_marked_prompts(self, prompt_ids: List[str]) -> List[Dict[str, Any]]:
-        return await self._db["marked_prompts"].find(
-            {"_id": {"$in": prompt_ids}}, {"_id": 0},
-        ).to_list(length=len(prompt_ids)) if prompt_ids else []
 
     async def _load_config_cache(self):
         """加载配置到内存缓存（仅在初始化时调用一次）"""
@@ -1281,7 +1261,9 @@ class MongoDBManager:
         filename: str,
         model_name: str,
         cooldown_until: Optional[float],
-        mode: str = "antigravity"
+        mode: str = "antigravity",
+        error_code: Optional[int] = None,
+        error_message: Optional[str] = None,
     ) -> bool:
         """
         设置特定模型的冷却时间
@@ -1306,6 +1288,9 @@ class MongoDBManager:
 
             # 转义模型名中的点号
             escaped_model_name = self._escape_model_name(model_name)
+            state_updates = {"updated_at": time.time()}
+            if error_code is not None:
+                state_updates.update(error_codes=[error_code], error_messages={str(error_code): error_message} if error_message else {})
 
             # 使用原子操作直接更新，避免竞态条件
             if cooldown_until is None:
@@ -1314,7 +1299,7 @@ class MongoDBManager:
                     {"filename": filename},
                     {
                         "$unset": {f"model_cooldowns.{escaped_model_name}": ""},
-                        "$set": {"updated_at": time.time()}
+                        "$set": state_updates
                     }
                 )
             else:
@@ -1324,7 +1309,7 @@ class MongoDBManager:
                     {
                         "$set": {
                             f"model_cooldowns.{escaped_model_name}": cooldown_until,
-                            "updated_at": time.time()
+                            **state_updates
                         }
                     }
                 )

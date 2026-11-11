@@ -4,7 +4,7 @@ Based on [su-kaka/agy2api](https://github.com/su-kaka/agy2api), revision
 `f725755` (2026-11-06). Licensed under the repository's CNC-1.0 license.
 
 The React/Vite panel uses this fork's existing filename-based API. It retains
-quota summaries, marked prompts, runtime logs, and the current retry/session
+quota summaries, runtime logs, and the current retry/session
 settings without importing upstream backend changes.
 
 ```sh
