@@ -611,8 +611,10 @@ def _normalize_antigravity_request(
     """antigravity 模式专属处理，返回处理后的模型名"""
     # 客户端参数优先，模型后缀只提供默认思考等级。
     thinking = is_thinking_model(model)
-    # 这两个 high 型号保留上游默认等级；max/xhigh 则明确使用 HIGH。
-    default_thinking = model.lower() in {"gemini-3.8-flash-high", "gemini-4-argon-high"}
+    # Gemini 3.8 Flash 和所有 Gemini 4 的 high 保留上游默认等级；max/xhigh 明确使用 HIGH。
+    default_thinking = model.lower() == "gemini-3.8-flash-high" or (
+        model.lower().startswith("gemini-4") and model.lower().endswith("-high")
+    )
     supports_thinking_level = (
         model.lower().startswith(("gemini-3", "gemini-4")) or "claude" in model.lower()
     )
@@ -631,7 +633,10 @@ def _normalize_antigravity_request(
         thinking_config.pop("thinkingLevel", None)
         if thinking_config.get("thinkingBudget") is None:
             thinking_config["thinkingBudget"] = 8192
-    if str(thinking_config.get("thinkingLevel", "")).lower() in {"max", "xhigh"}:
+    thinking_level = str(thinking_config.get("thinkingLevel") or "").lower()
+    if thinking_level in {"none", "minimal"}:
+        thinking_config["thinkingLevel"] = "LOW"
+    elif thinking_level in {"max", "xhigh"}:
         thinking_config["thinkingLevel"] = "HIGH"
     client_thinking = bool(thinking_config.get("thinkingLevel")) or thinking_config.get("thinkingBudget") is not None
     if (

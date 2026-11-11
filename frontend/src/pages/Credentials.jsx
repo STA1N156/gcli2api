@@ -163,6 +163,56 @@ export default function Credentials() {
       setBusy(false);
     }
   };
+  const batchTest = async () => {
+    const filenames = [...selected];
+    const queue = filenames.values();
+    const results = [];
+    setBusy(true);
+    setMenu(null);
+    const progress = () =>
+      setDialog({
+        title: "批量校验",
+        text: `正在校验 ${results.length} / ${filenames.length} 个凭证…`,
+      });
+    progress();
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(4, filenames.length) }, async () => {
+          for (const filename of queue) {
+            let outcome;
+            try {
+              const { data: result, status } = await api.post(
+                `/creds/test/${encodeURIComponent(filename)}`,
+                null,
+                // 上游的 401、429 也是校验结果，交给本批次汇总。
+                { validateStatus: () => true },
+              );
+              outcome = {
+                filename,
+                status: result.success && status === 429
+                  ? "限流"
+                  : result.success && status >= 200 && status < 300
+                    ? "通过"
+                    : "失败",
+                message: result.detail || result.message || `HTTP ${status}`,
+              };
+            } catch (err) {
+              outcome = { filename, status: "失败", message: errorText(err) };
+            }
+            results.push(outcome);
+            progress();
+          }
+        }),
+      );
+      const count = (status) => results.filter((item) => item.status === status).length;
+      const text = `通过 ${count("通过")} 个，限流 ${count("限流")} 个，失败 ${count("失败")} 个。`;
+      setNotice({ error: count("失败") > 0, text: `批量校验完成：${text}` });
+      setDialog({ title: "批量校验结果", text, testResults: results });
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
   const download = async (item) => {
     setBusy(true);
     setMenu(null);
@@ -370,6 +420,15 @@ export default function Credentials() {
       {selected.size > 0 && (
         <div className="toolbar batch-toolbar text-xs text-purple-300 bg-purple-500/5 rounded-lg px-4 py-3 border border-purple-500/20">
           <span className="mr-auto">已选择 {selected.size} 个凭证</span>
+          <button
+            className="btn btn-secondary !text-xs !py-1.5"
+            title="使用 Gemini 3.5 Flash Lite 测试选中的凭证"
+            disabled={busy || loading}
+            onClick={batchTest}
+          >
+            <Play size={14} />
+            批量校验
+          </button>
           {["enable", "disable", "delete"].map((action) => (
             <button
               className={`btn !text-xs !py-1.5 ${action === "delete" ? "btn-danger" : "btn-secondary"}`}
@@ -678,7 +737,19 @@ export default function Credentials() {
             ) : undefined
           }
         >
-          {dialog.text ||
+          {dialog.testResults ? (
+            <div className="space-y-3">
+              <p>{dialog.text}</p>
+              <div className="space-y-2 text-xs break-all">
+                {dialog.testResults.map((item) => (
+                  <div key={item.filename}>
+                    {item.filename} · {item.status}
+                    {item.status === "失败" && `：${item.message}`}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : dialog.text ||
             (dialog.quota ? (
               <QuotaWindows windows={dialog.result.windows} />
             ) : (

@@ -138,8 +138,8 @@ async def record_api_call_error(
             if cooldown_until is None:
                 cooldown_seconds = {
                     401: 24 * 60 * 60,
-                    402: 30 * 60,
-                    403: 30 * 60,
+                    402: 12 * 60 * 60,
+                    403: 12 * 60 * 60,
                     404: 12 * 60 * 60,
                     408: 60,
                     429: 5,

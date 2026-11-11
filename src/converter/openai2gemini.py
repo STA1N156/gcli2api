@@ -1391,10 +1391,10 @@ async def convert_openai_to_gemini_request(openai_request: Dict[str, Any]) -> Di
     model = openai_request.get("model", "")
 
     effort = openai_request.get("reasoning_effort")
-    if isinstance(effort, str) and effort.lower() in {"max", "xhigh"}:
-        effort = "high"
+    if isinstance(effort, str):
+        effort = {"none": "low", "minimal": "low", "max": "high", "xhigh": "high"}.get(effort.lower(), effort)
     if (
-        isinstance(effort, str) and effort.lower() in {"minimal", "low", "medium", "high"}
+        isinstance(effort, str) and effort.lower() in {"low", "medium", "high"}
         and (model.lower().startswith(("gemini-3", "gemini-4")) or "claude" in model.lower())
     ):
         generation_config["thinkingConfig"] = {"thinkingLevel": effort.upper()}
