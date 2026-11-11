@@ -130,6 +130,7 @@ async def _get_valid_request_credential(
     model_name: str,
     session_key: Optional[str],
     attempted: Set[str],
+    selection_state: Optional[Dict[str, Any]] = None,
 ) -> Optional[Tuple[str, str, str]]:
     """选择未尝试且可用于当前模型的凭证。"""
     excluded = set(attempted)
@@ -139,6 +140,7 @@ async def _get_valid_request_credential(
             model_name=model_name,
             session_key=session_key,
             exclude_credentials=set(excluded),
+            selection_state=selection_state,
         )
         if not result:
             return None
@@ -246,8 +248,9 @@ async def stream_request(
     model_name = body.get("model", "")
     session_key = extract_cache_session_key(body, headers)
     attempted: Set[str] = set()
+    selection_state = {}
     selected = await _get_valid_request_credential(
-        model_name, session_key, attempted
+        model_name, session_key, attempted, selection_state
     )
     if not selected:
         yield Response(
@@ -413,7 +416,7 @@ async def stream_request(
         if retry_config["retry_interval"] > 0:
             await asyncio.sleep(retry_config["retry_interval"])
         selected = await _get_valid_request_credential(
-            model_name, session_key, attempted
+            model_name, session_key, attempted, selection_state
         )
         if not selected:
             yield last_error or Response(
@@ -441,8 +444,9 @@ async def non_stream_request(
     model_name = body.get("model", "")
     session_key = extract_cache_session_key(body, headers)
     attempted: Set[str] = set()
+    selection_state = {}
     selected = await _get_valid_request_credential(
-        model_name, session_key, attempted
+        model_name, session_key, attempted, selection_state
     )
     if not selected:
         return Response(
@@ -549,7 +553,7 @@ async def non_stream_request(
         if retry_config["retry_interval"] > 0:
             await asyncio.sleep(retry_config["retry_interval"])
         selected = await _get_valid_request_credential(
-            model_name, session_key, attempted
+            model_name, session_key, attempted, selection_state
         )
         if not selected:
             return last_error or Response(

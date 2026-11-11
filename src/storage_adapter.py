@@ -8,7 +8,7 @@
 import asyncio
 import json
 import os
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from log import log
 from src.credential_identity import normalize_email
@@ -60,7 +60,10 @@ class StorageBackend(Protocol):
         ...
 
     # 粘性会话绑定
-    async def get_session_binding(self, binding_key: str, now: float) -> Optional[str]:
+    async def get_session_binding(self, binding_key: str, now: float) -> Optional[Tuple[str, float, float]]:
+        ...
+
+    async def renew_session_binding(self, binding_key: str, filename: str, expires_at: float, renew_before: float) -> bool:
         ...
 
     async def set_session_binding(
@@ -233,10 +236,14 @@ class StorageAdapter:
         self._ensure_initialized()
         return await self._backend.get_all_credential_states(mode)
 
-    async def get_session_binding(self, binding_key: str, now: float) -> Optional[str]:
+    async def get_session_binding(self, binding_key: str, now: float) -> Optional[Tuple[str, float, float]]:
         """读取所有 Worker 共用的粘性会话绑定。"""
         self._ensure_initialized()
         return await self._backend.get_session_binding(binding_key, now)
+
+    async def renew_session_binding(self, binding_key: str, filename: str, expires_at: float, renew_before: float) -> bool:
+        self._ensure_initialized()
+        return await self._backend.renew_session_binding(binding_key, filename, expires_at, renew_before)
 
     async def set_session_binding(
         self, binding_key: str, filename: str, expires_at: float

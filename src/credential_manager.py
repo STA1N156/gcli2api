@@ -20,6 +20,7 @@ from src.credential_identity import normalize_email
 from src.model_cooldown import has_active_model_cooldown
 from src.storage_adapter import get_storage_adapter
 from src.subscription import normalize_subscription_tier
+from src.task_manager import create_managed_task
 
 SESSION_BINDING_MAX_ENTRIES = int(os.getenv("SESSION_BINDING_MAX_ENTRIES", "50000"))
 SESSION_BINDING_PRUNE_INTERVAL_SECONDS = 60
@@ -39,6 +40,7 @@ class CredentialManager:
         self._initialized = False
         self._storage_adapter = None
         self._session_bindings: Dict[str, Tuple[str, float, float]] = {}
+        self._session_renewals: Dict[str, asyncio.Task] = {}
         self._round_robin_cursors: Dict[str, int] = {}
         self._session_lock = asyncio.Lock()
         self._last_session_prune = 0.0
@@ -63,6 +65,8 @@ class CredentialManager:
     async def close(self):
         """清理资源"""
         log.debug("Closing credential manager...")
+        if self._session_renewals:
+            await asyncio.gather(*list(self._session_renewals.values()), return_exceptions=True)
         self._initialized = False
         log.debug("Credential manager closed")
 
@@ -96,72 +100,77 @@ class CredentialManager:
             for key in list(self._session_bindings)[:overflow]:
                 self._session_bindings.pop(key, None)
 
-    async def _get_session_binding(self, binding_key: str) -> Optional[str]:
+    async def _get_session_binding(self, binding_key: str, ttl_seconds: int) -> Optional[str]:
         now = time.time()
         async with self._session_lock:
             binding = self._session_bindings.get(binding_key)
             if binding and binding[1] > now:
                 return binding[0]
-        shared_get = getattr(self._storage_adapter, "get_session_binding", None)
-        if callable(shared_get):
-            filename = await shared_get(
-                self._shared_session_binding_key(binding_key), now
+        binding = await self._storage_adapter.get_session_binding(
+            self._shared_session_binding_key(binding_key), now
+        )
+        async with self._session_lock:
+            self._prune_session_bindings_locked(now)
+            if binding:
+                filename, expires_at, updated_at = binding
+                self._session_bindings[binding_key] = (
+                    filename, min(expires_at, now + SESSION_BINDING_CACHE_SECONDS),
+                    updated_at + min(SESSION_BINDING_RENEW_SECONDS, ttl_seconds / 2),
+                )
+            else:
+                self._session_bindings.pop(binding_key, None)
+        return binding[0] if binding else None
+
+    async def _renew_session_binding(self, binding_key, filename, expires_at, renew_before, entry):
+        saved = False
+        try:
+            saved = await self._storage_adapter.renew_session_binding(
+                self._shared_session_binding_key(binding_key), filename, expires_at, renew_before
             )
-            async with self._session_lock:
-                self._prune_session_bindings_locked(now)
-                if filename:
-                    previous = self._session_bindings.get(binding_key)
-                    renew_at = previous[2] if previous and previous[0] == filename else 0
-                    self._session_bindings[binding_key] = (
-                        filename, now + SESSION_BINDING_CACHE_SECONDS, renew_at
-                    )
-                else:
-                    self._session_bindings.pop(binding_key, None)
-            return filename
-        return None
+        except Exception as exc:
+            log.warning(f"Session renewal deferred: {type(exc).__name__}")
+        finally:
+            self._session_renewals.pop(binding_key, None)
+            if not saved:
+                async with self._session_lock:
+                    if self._session_bindings.get(binding_key) == entry:
+                        self._session_bindings.pop(binding_key, None)
 
     async def _remember_session_binding(
-        self,
-        binding_key: Optional[str],
-        filename: str,
-        ttl_seconds: int,
+        self, binding_key: Optional[str], filename: str, ttl_seconds: int,
     ) -> None:
-        if not binding_key or not filename:
-            return
-        if SESSION_BINDING_MAX_ENTRIES <= 0:
+        if not binding_key or not filename or SESSION_BINDING_MAX_ENTRIES <= 0:
             return
         now = time.time()
         filename = os.path.basename(filename)
+        interval = min(SESSION_BINDING_RENEW_SECONDS, ttl_seconds / 2)
         expires_at = now + ttl_seconds
-        cache_until = min(expires_at, now + SESSION_BINDING_CACHE_SECONDS)
-        if not callable(getattr(self._storage_adapter, "get_session_binding", None)):
-            cache_until = expires_at
         async with self._session_lock:
             previous = self._session_bindings.get(binding_key)
-            renew_at = previous[2] if previous and previous[0] == filename else 0
-            should_write = renew_at <= now
-            # Hits must not postpone the next shared read of another worker's binding.
-            entry = (
-                filename,
-                cache_until if should_write else previous[1],
-                now + min(SESSION_BINDING_RENEW_SECONDS, ttl_seconds / 2) if should_write else renew_at,
-            )
+            same_account = previous is not None and previous[0] == filename
+            if same_account and (previous[2] > now or binding_key in self._session_renewals):
+                return
+            entry = (filename, previous[1] if same_account else min(expires_at, now + SESSION_BINDING_CACHE_SECONDS),
+                     now + interval)
             self._prune_session_bindings_locked(now)
             self._session_bindings[binding_key] = entry
-        if not should_write:
-            return
-        shared_set = getattr(self._storage_adapter, "set_session_binding", None)
-        if callable(shared_set):
-            saved = False
-            try:
-                saved = await shared_set(
-                    self._shared_session_binding_key(binding_key), filename, expires_at
+            if same_account:
+                self._session_renewals[binding_key] = create_managed_task(
+                    self._renew_session_binding(binding_key, filename, expires_at, now - interval, entry),
+                    name="renew-session-binding",
                 )
-            finally:
-                if not saved:
-                    async with self._session_lock:
-                        if self._session_bindings.get(binding_key) == entry:
-                            self._session_bindings[binding_key] = (filename, entry[1], 0)
+                return
+
+        saved = False
+        try:
+            saved = await self._storage_adapter.set_session_binding(
+                self._shared_session_binding_key(binding_key), filename, expires_at
+            )
+        finally:
+            if not saved:
+                async with self._session_lock:
+                    if self._session_bindings.get(binding_key) == entry:
+                        self._session_bindings.pop(binding_key, None)
 
     async def _forget_session_binding(
         self,
@@ -224,67 +233,43 @@ class CredentialManager:
         return True
 
     async def _get_available_credential(
-        self,
-        *,
-        mode: str,
-        model_name: Optional[str],
-        exclude_credentials: Set[str],
+        self, *, mode: str, model_name: Optional[str], exclude_credentials: Set[str],
         session_fallback_key: Optional[str] = None,
+        selection_state: Optional[Dict[str, Any]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
-        states = await self._storage_adapter.get_all_credential_states(mode=mode)
-        if not states:
-            return None
+        selection_state = {} if selection_state is None else selection_state
+        if "candidates" not in selection_state:
+            states = await self._storage_adapter.get_all_credential_states(mode=mode)
+            candidates = [
+                os.path.basename(filename) for filename, state in states.items()
+                if os.path.basename(filename) not in exclude_credentials
+                and self._credential_state_allows_model(state, mode=mode, model_name=model_name)
+            ]
+            if session_fallback_key:
+                candidates.sort(key=lambda filename: (
+                    hashlib.sha256(f"{session_fallback_key}\0{filename}".encode("utf-8")).digest(), filename
+                ), reverse=True)
+            else:
+                candidates.sort()
+                if candidates:
+                    cursor_key = f"{mode}:{(model_name or '').strip().lower()}"
+                    async with self._session_lock:
+                        if cursor_key not in self._round_robin_cursors and len(self._round_robin_cursors) >= ROUND_ROBIN_MAX_KEYS:
+                            self._round_robin_cursors.clear()
+                        start = self._round_robin_cursors.get(cursor_key, 0) % len(candidates)
+                        self._round_robin_cursors[cursor_key] = start + 1
+                    candidates = candidates[start:] + candidates[:start]
+            selection_state.update(candidates=candidates, position=0)
 
-        candidates: List[Tuple[str, Dict[str, Any]]] = []
-
-        for raw_filename, state in states.items():
-            filename = os.path.basename(raw_filename)
-            if filename in exclude_credentials:
-                continue
-            if not self._credential_state_allows_model(
-                state,
-                mode=mode,
-                model_name=model_name,
-            ):
-                continue
-            candidates.append((filename, state))
-
-        if not candidates:
-            return None
-
-        candidates.sort(key=lambda item: item[0])
-        if session_fallback_key:
-            # A worker that has not seen this session yet must choose the same
-            # initial credential as other workers. Once chosen, the normal
-            # session binding below remains authoritative and can migrate.
-            ordered_candidates = sorted(
-                candidates,
-                key=lambda item: hashlib.sha256(
-                    f"{session_fallback_key}\0{item[0]}".encode("utf-8")
-                ).digest(),
-                reverse=True,
+        candidates = selection_state["candidates"]
+        while selection_state["position"] < len(candidates):
+            filename = candidates[selection_state["position"]]
+            selection_state["position"] += 1
+            result = await self._get_bound_credential_if_available(
+                filename, mode=mode, model_name=model_name, exclude_credentials=exclude_credentials,
             )
-        else:
-            cursor_key = f"{mode}:{(model_name or '').strip().lower()}"
-            async with self._session_lock:
-                if (
-                    cursor_key not in self._round_robin_cursors
-                    and len(self._round_robin_cursors) >= ROUND_ROBIN_MAX_KEYS
-                ):
-                    self._round_robin_cursors.clear()
-                start = self._round_robin_cursors.get(cursor_key, 0) % len(candidates)
-                self._round_robin_cursors[cursor_key] = start + 1
-
-            ordered_candidates = candidates[start:] + candidates[:start]
-
-        for filename, state in ordered_candidates:
-            credential_data = await self._storage_adapter.get_credential(filename, mode=mode)
-            if not credential_data:
-                continue
-
-            credential_data["enable_credit"] = bool(state.get("enable_credit", False))
-            return filename, credential_data
-
+            if result is not None:
+                return result
         return None
 
     async def get_valid_credential(
@@ -294,6 +279,7 @@ class CredentialManager:
         session_key: Optional[str] = None,
         exclude_credential: Optional[str] = None,
         exclude_credentials: Optional[Set[str]] = None,
+        selection_state: Optional[Dict[str, Any]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         按 CLIProxy 的方式获取凭证：
@@ -306,6 +292,7 @@ class CredentialManager:
                        - antigravity: 按完整模型名过滤冷却
         """
         await self._ensure_initialized()
+        selection_state = {} if selection_state is None else selection_state
         excluded_credentials = {
             os.path.basename(filename)
             for filename in (exclude_credentials or set())
@@ -327,7 +314,7 @@ class CredentialManager:
         )
 
         if binding_key:
-            bound_filename = await self._get_session_binding(binding_key)
+            bound_filename = await self._get_session_binding(binding_key, affinity_ttl)
             if bound_filename:
                 bound_result = await self._get_bound_credential_if_available(
                     bound_filename,
@@ -372,6 +359,7 @@ class CredentialManager:
                 model_name=model_name,
                 exclude_credentials=excluded_credentials,
                 session_fallback_key=binding_key,
+                selection_state=selection_state,
             )
             if not result:
                 log.warning(f"没有可用凭证 (mode={mode}, model_name={model_name})")

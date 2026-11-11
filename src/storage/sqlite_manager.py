@@ -7,7 +7,7 @@ import json
 import os
 import time
 from contextlib import asynccontextmanager, suppress
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiosqlite
 
@@ -1103,16 +1103,33 @@ class SQLiteManager:
 
     # ============ 粘性会话绑定 ============
 
-    async def get_session_binding(self, binding_key: str, now: float) -> Optional[str]:
+    async def get_session_binding(self, binding_key: str, now: float) -> Optional[Tuple[str, float, float]]:
         self._ensure_initialized()
         async with self._connection() as db:
             async with db.execute(
-                "SELECT filename FROM session_bindings "
+                "SELECT filename, expires_at, updated_at FROM session_bindings "
                 "WHERE binding_key = ? AND expires_at > ?",
                 (binding_key, now),
             ) as cursor:
                 row = await cursor.fetchone()
-        return row[0] if row else None
+        return row
+
+    async def renew_session_binding(self, binding_key: str, filename: str, expires_at: float, renew_before: float) -> bool:
+        binding = await self.get_session_binding(binding_key, time.time())
+        if not binding or binding[0] != filename or binding[2] > renew_before or binding[1] >= expires_at:
+            return False
+        async with self._connection(write=True) as db:
+            now = time.time()
+            result = await db.execute(
+                "UPDATE session_bindings SET expires_at = ?, updated_at = ? "
+                "WHERE binding_key = ? AND filename = ? AND updated_at <= ? "
+                "AND expires_at > ? AND expires_at < ?",
+                (expires_at, now, binding_key, filename, renew_before, now, expires_at),
+            )
+            if result.rowcount:
+                await db.commit()
+                return True
+        return False
 
     async def set_session_binding(
         self, binding_key: str, filename: str, expires_at: float

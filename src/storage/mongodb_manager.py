@@ -5,7 +5,7 @@ MongoDB 存储管理器
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -1045,13 +1045,23 @@ class MongoDBManager:
 
     # ============ 粘性会话绑定 ============
 
-    async def get_session_binding(self, binding_key: str, now: float) -> Optional[str]:
+    async def get_session_binding(self, binding_key: str, now: float) -> Optional[Tuple[str, float, float]]:
         self._ensure_initialized()
         doc = await self._db["session_bindings"].find_one(
             {"_id": binding_key, "expires_at": {"$gt": now}},
-            {"filename": 1},
+            {"filename": 1, "expires_at": 1, "updated_at": 1},
         )
-        return doc.get("filename") if doc else None
+        return (doc["filename"], doc["expires_at"], doc["updated_at"]) if doc else None
+
+    async def renew_session_binding(self, binding_key: str, filename: str, expires_at: float, renew_before: float) -> bool:
+        self._ensure_initialized()
+        now = time.time()
+        result = await self._db["session_bindings"].update_one(
+            {"_id": binding_key, "filename": filename, "updated_at": {"$lte": renew_before},
+             "expires_at": {"$gt": now, "$lt": expires_at}},
+            {"$set": {"expires_at": expires_at, "updated_at": now}},
+        )
+        return result.modified_count > 0
 
     async def set_session_binding(
         self, binding_key: str, filename: str, expires_at: float

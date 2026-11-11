@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
@@ -767,16 +767,27 @@ class PSQLManager:
 
     # ============ 粘性会话绑定 ============
 
-    async def get_session_binding(self, binding_key: str, now: float) -> Optional[str]:
+    async def get_session_binding(self, binding_key: str, now: float) -> Optional[Tuple[str, float, float]]:
         self._ensure_initialized()
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT filename FROM session_bindings "
+                "SELECT filename, expires_at, updated_at FROM session_bindings "
                 "WHERE binding_key = $1 AND expires_at > $2",
                 binding_key,
                 now,
             )
-        return row["filename"] if row else None
+        return tuple(row) if row else None
+
+    async def renew_session_binding(self, binding_key: str, filename: str, expires_at: float, renew_before: float) -> bool:
+        self._ensure_initialized()
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE session_bindings SET expires_at = $1, updated_at = EXTRACT(EPOCH FROM clock_timestamp()) "
+                "WHERE binding_key = $2 AND filename = $3 AND updated_at <= $4 "
+                "AND expires_at > EXTRACT(EPOCH FROM clock_timestamp()) AND expires_at < $1",
+                expires_at, binding_key, filename, renew_before,
+            )
+        return result == "UPDATE 1"
 
     async def set_session_binding(
         self, binding_key: str, filename: str, expires_at: float
