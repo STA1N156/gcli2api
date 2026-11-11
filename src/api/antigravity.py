@@ -325,20 +325,22 @@ async def stream_request(
                                 )
                                 retry_same = True
                                 break
-                    await _record_response_error(
-                        current_file, model_name, chunk.status_code, error_text
-                    )
                     client_chunk = rewrite_input_token_limit_response(
                         _rewrite_resource_exhausted_response(chunk)
+                    )
+                    if chunk.status_code == 429 and client_chunk is not chunk:
+                        if success_recorded or not _move_system_prompt_for_retry(body, final_payload):
+                            yield client_chunk
+                            return
+                        final_payload["requestId"] = _generate_request_id(model_name)
+                        retry_same = True
+                        break
+                    await _record_response_error(
+                        current_file, model_name, chunk.status_code, error_text
                     )
                     if success_recorded or not is_retryable_status(chunk.status_code):
                         yield client_chunk
                         return
-                    if client_chunk is not chunk:
-                        if not _move_system_prompt_for_retry(body, final_payload):
-                            # This prompt adjustment gets one extra attempt, not another rotation loop.
-                            yield client_chunk
-                            return
                     last_error = client_chunk
                     retry_current = True
                     break
@@ -523,14 +525,16 @@ async def non_stream_request(
                 f"credential={current_file}, model={model_name}, "
                 f"request_id={final_payload.get('requestId', '')}"
             )
+            if response.status_code == 429 and last_error is not original_error:
+                if not _move_system_prompt_for_retry(body, final_payload):
+                    return last_error
+                final_payload["requestId"] = _generate_request_id(model_name)
+                continue
             await _record_response_error(
                 current_file, model_name, response.status_code, error_text
             )
             if not is_retryable_status(response.status_code):
                 return last_error
-            if last_error is not original_error:
-                if not _move_system_prompt_for_retry(body, final_payload):
-                    return last_error
         except Exception as exc:
             log.warning(
                 f"[ANTIGRAVITY] 请求异常，切换凭证: {current_file}: {exc}"
