@@ -718,14 +718,9 @@ def _clean_schema_for_parameters_json_schema(
         if key in unsupported_keys or key.startswith("x-"):
             del result[key]
 
-    nullable_props = set()
     if "properties" in result and isinstance(result["properties"], dict):
         cleaned_props = {}
         for prop_name, prop_schema in result["properties"].items():
-            if isinstance(prop_schema, dict):
-                prop_type = prop_schema.get("type")
-                if isinstance(prop_type, list) and any(str(t).lower() == "null" for t in prop_type):
-                    nullable_props.add(prop_name)
             cleaned_props[prop_name] = _clean_schema_for_parameters_json_schema(prop_schema, root_schema, visited)
         result["properties"] = cleaned_props
 
@@ -739,8 +734,6 @@ def _clean_schema_for_parameters_json_schema(
             if not isinstance(item, str):
                 continue
             if prop_names is not None and item not in prop_names:
-                continue
-            if item in nullable_props:
                 continue
             if item not in required:
                 required.append(item)
@@ -1074,6 +1067,13 @@ def extract_tool_calls_from_parts(
             original_id = function_call.get("id") or f"call_{uuid.uuid4().hex[:24]}"
             # 获取参数并转换类型
             args = function_call.get("args", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    args = {}
+            if not isinstance(args, dict):
+                args = {}
             # 将字符串类型的值转回原始类型
             args = _reverse_transform_args(args)
 

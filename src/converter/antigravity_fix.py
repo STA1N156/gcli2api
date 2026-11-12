@@ -207,20 +207,9 @@ def _clean_parameters_json_schema(
         if key in unsupported_keys or key.startswith("x-"):
             del result[key]
 
-    nullable_props = set()
     if isinstance(result.get("properties"), dict):
         cleaned_props = {}
         for prop_name, prop_schema in result["properties"].items():
-            if isinstance(prop_schema, dict):
-                prop_type = prop_schema.get("type")
-                if (
-                    prop_schema.get("nullable") is True
-                    or (
-                        isinstance(prop_type, list)
-                        and any(str(t).lower() == "null" for t in prop_type)
-                    )
-                ):
-                    nullable_props.add(prop_name)
             cleaned_props[prop_name] = _clean_parameters_json_schema(prop_schema, root_schema, visited)
         result["properties"] = cleaned_props
 
@@ -234,8 +223,6 @@ def _clean_parameters_json_schema(
             if not isinstance(item, str):
                 continue
             if prop_names is not None and item not in prop_names:
-                continue
-            if item in nullable_props:
                 continue
             if item not in required:
                 required.append(item)

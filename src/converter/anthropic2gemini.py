@@ -335,20 +335,16 @@ def clean_json_schema(schema: Any) -> Any:
         isinstance(schema.get("properties"), dict)
         and isinstance(cleaned.get("required"), list)
     ):
-        nullable_fields = {
-            name
-            for name, prop in schema["properties"].items()
-            if isinstance(prop, dict)
-            and isinstance(prop.get("type"), list)
-            and any(str(t).lower() == "null" for t in prop["type"])
-        }
-        if nullable_fields:
-            cleaned["required"] = [
-                item for item in cleaned["required"]
-                if item not in nullable_fields
-            ]
-            if not cleaned["required"]:
-                cleaned.pop("required", None)
+        # Nullable fields can still be required to appear in tool arguments.
+        prop_names = set(cleaned.get("properties", {}))
+        required = []
+        for item in cleaned["required"]:
+            if isinstance(item, str) and item in prop_names and item not in required:
+                required.append(item)
+        if required:
+            cleaned["required"] = required
+        else:
+            cleaned.pop("required", None)
 
     return cleaned
 
