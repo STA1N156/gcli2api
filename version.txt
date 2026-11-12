@@ -1,4 +1,4 @@
-full_hash=14b3e08e9894b97a7b3284c889856f96a4ce71fe
-short_hash=14b3e08
-message=perf: coalesce session renewal and reuse request credential candidates
-date=2026-11-11 21:44:44 +0800
+full_hash=fd8f66f68e4428bd772921dbb9dd587e01ce1dca
+short_hash=fd8f66f
+message=fix: preserve required tool arguments and update CLI version
+date=2026-11-12 14:18:24 +0800
