@@ -1,4 +1,4 @@
-full_hash=4a808e1279b0b7727f4575d5aca8dc0cf1fef5a2
-short_hash=4a808e1
-message=Revert "fix: use working Antigravity macOS user agent"
-date=2026-11-14 00:37:46 +0800
+full_hash=92e5f9a2144b2bd6afb679e949bd2baa2190015b
+short_hash=92e5f9a
+message=fix: trim first system sentence before prompt retry
+date=2026-11-14 00:49:33 +0800
