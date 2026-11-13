@@ -1,4 +1,4 @@
-full_hash=92e5f9a2144b2bd6afb679e949bd2baa2190015b
-short_hash=92e5f9a
-message=fix: trim first system sentence before prompt retry
-date=2026-11-14 00:49:33 +0800
+full_hash=25e6969ba55b203e9dc4e0800936ac2ab60901f7
+short_hash=25e6969
+message=fix: omit agent request type and preserve system prompt
+date=2026-11-14 00:56:46 +0800
