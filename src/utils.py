@@ -13,7 +13,7 @@ security = HTTPBearer()
 # ====================== OAuth Configuration ======================
 
 # Antigravity CLI 客户端仿真常量
-_DEFAULT_ANTIGRAVITY_CLI_VERSION = "1.5.8"
+_DEFAULT_ANTIGRAVITY_CLI_VERSION = "1.5.3"
 
 
 def _get_latest_antigravity_cli_version() -> str:
@@ -35,8 +35,8 @@ def _get_latest_antigravity_cli_version() -> str:
 
 
 ANTIGRAVITY_CLI_VERSION = _get_latest_antigravity_cli_version()
-ANTIGRAVITY_CLI_PLATFORM = "darwin/arm64"
-ANTIGRAVITY_USER_AGENT = f"antigravity/{ANTIGRAVITY_CLI_VERSION} {ANTIGRAVITY_CLI_PLATFORM}"
+ANTIGRAVITY_CLI_PLATFORM = "windows/amd64"
+ANTIGRAVITY_USER_AGENT = f"antigravity/cli/{ANTIGRAVITY_CLI_VERSION} {ANTIGRAVITY_CLI_PLATFORM}"
 log.info(f"当前 Antigravity CLI 版本: {ANTIGRAVITY_CLI_VERSION}")
 
 # Antigravity OAuth Configuration
