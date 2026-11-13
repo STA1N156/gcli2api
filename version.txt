@@ -1,4 +1,4 @@
-full_hash=8a7bb5e8e8d1fb6d8d9788a308ee3534c0f2654d
-short_hash=8a7bb5e
-message=fix: use working Antigravity macOS user agent
-date=2026-11-14 00:32:10 +0800
+full_hash=4a808e1279b0b7727f4575d5aca8dc0cf1fef5a2
+short_hash=4a808e1
+message=Revert "fix: use working Antigravity macOS user agent"
+date=2026-11-14 00:37:46 +0800
