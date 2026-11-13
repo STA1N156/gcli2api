@@ -1,4 +1,4 @@
-full_hash=03ff5926b2c63ea1263ad6c812eded81d649707b
-short_hash=03ff592
-message=fix: align empty output guidance with ASP
-date=2026-11-13 16:03:56 +0800
+full_hash=8a7bb5e8e8d1fb6d8d9788a308ee3534c0f2654d
+short_hash=8a7bb5e
+message=fix: use working Antigravity macOS user agent
+date=2026-11-14 00:32:10 +0800
