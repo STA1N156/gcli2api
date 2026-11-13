@@ -1,5 +1,6 @@
 """RP-Hub-style anti-truncation: carry the reply in a function argument."""
 
+import re
 from typing import Any, Dict
 
 
@@ -79,11 +80,64 @@ def apply_anti_truncation(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def move_system_to_first_user(request: Dict[str, Any]) -> Dict[str, Any]:
+def _drop_first_system_sentence(parts: list) -> list:
+    spans = []
+    separators = set()
+    text = ""
+    for index, part in enumerate(parts):
+        value = part.get("text")
+        if isinstance(value, str):
+            if spans:
+                separators.add(len(text))
+                text += "\n"
+            spans.append((index, len(text), len(text) + len(value)))
+            text += value
+    # Preserve leading labels/headings, including the user's standalone #1222.
+    start = 0
+    for line in text.splitlines(keepends=True):
+        if not line.strip() or line.lstrip().startswith("#"):
+            start += len(line)
+        else:
+            break
+    if start >= len(text):
+        return parts
+    limit = text.find("\n", start)
+    while limit in separators:
+        limit = text.find("\n", limit + 1)
+    if limit < 0:
+        limit = len(text)
+    end = None
+    abbreviations = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "vs", "etc", "e.g", "i.e"}
+    for match in re.finditer(r"[.!?。！？]+[\"'”’）)\]]*", text[start:limit]):
+        left, right = start + match.start(), start + match.end()
+        marks = match.group()
+        if marks[0] in ".!?" and right < len(text) and not text[right].isspace():
+            continue
+        token = text[start:left].split()[-1] if text[start:left].split() else ""
+        if marks == "." and (token.lower().strip("(") in abbreviations or
+                             (len(token) == 1 and token.isupper())):
+            continue
+        if "://" in token or "@" in token:
+            continue
+        end = right
+        break
+    if end is None:
+        end = limit
+    result = list(parts)
+    for index, left, right in spans:
+        if left < end and right > start:
+            value = parts[index]["text"]
+            result[index] = {**parts[index], "text": value[:max(0, start-left)] + value[max(0, end-left):]}
+    return [part for part in result if part.get("text") != ""]
+
+
+def move_system_to_first_user(request: Dict[str, Any], *, drop_first_sentence: bool = False) -> Dict[str, Any]:
     """Move system parts for this retry only, without changing caller-owned messages."""
     system_parts = (request.get("systemInstruction") or {}).get("parts") or []
     if not system_parts:
         return request
+    if drop_first_sentence:
+        system_parts = _drop_first_system_sentence(system_parts)
     contents = list(request.get("contents") or [])
     for index, content in enumerate(contents):
         if content.get("role") == "user":

@@ -228,13 +228,13 @@ async def _record_response_error(
 
 
 def _move_system_prompt_for_retry(body: Dict[str, Any], final_payload: Dict[str, Any]) -> bool:
-    moved_request = move_system_to_first_user(final_payload["request"])
+    moved_request = move_system_to_first_user(final_payload["request"], drop_first_sentence=True)
     if moved_request is final_payload["request"]:
         return False
     final_payload["request"] = moved_request
     # Persist the move if the outer loop subsequently retries an empty body.
-    body["request"] = move_system_to_first_user(body["request"])
-    log.info("[ANTIGRAVITY] 429重试：已将系统提示词移至首条用户消息")
+    body["request"] = move_system_to_first_user(body["request"], drop_first_sentence=True)
+    log.info("[ANTIGRAVITY] 429重试：已删除系统提示词首句并将剩余内容移至首条用户消息")
     return True
 
 

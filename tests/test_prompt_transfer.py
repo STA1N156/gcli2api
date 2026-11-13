@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import AsyncMock
 
 from fastapi import Response
-from src.converter.anti_truncation import move_system_to_first_user
+from src.converter.anti_truncation import move_system_to_first_user, _drop_first_system_sentence
 
 
 class PromptTransferTests(unittest.TestCase):
@@ -35,19 +35,40 @@ class PromptTransferTests(unittest.TestCase):
         original = self.response()
         rewritten = self.scope["_rewrite_resource_exhausted_response"](original)
         self.assertIsNot(rewritten, original)
-        request = {"systemInstruction": {"parts": [{"text": "system"}]},
+        request = {"systemInstruction": {"parts": [{"text": "Remove me. Keep me."}]},
                    "contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
         untouched = copy.deepcopy(request)
         body, payload = {"request": request}, {"request": request}
         self.assertTrue(self.scope["_move_system_prompt_for_retry"](body, payload))
         self.assertNotIn("systemInstruction", body["request"])
-        self.assertEqual(payload["request"]["contents"][0]["parts"][0], {"text": "system"})
+        self.assertEqual(payload["request"]["contents"][0]["parts"][0], {"text": " Keep me."})
         self.assertEqual(request, untouched)
         self.assertFalse(self.scope["_move_system_prompt_for_retry"](body, payload))
 
     def test_quota_reset_429_keeps_normal_quota_handling(self):
         original = self.response(reset=True)
         self.assertIs(self.scope["_rewrite_resource_exhausted_response"](original), original)
+
+    def test_first_sentence_boundaries(self):
+        cases = [
+            ("#1222\nYou are carrying out an ongoing fictional writing task. Act as a storyteller.", "#1222\n Act as a storyteller."),
+            ("\n# Rules\n第一句话。第二句话！", "\n# Rules\n第二句话！"),
+            ("Dr. Smith uses v2.31.2 today. Keep this.", " Keep this."),
+            ("Read https://example.com/a.b and continue. Keep this.", " Keep this."),
+            ("No punctuation\nKeep the second line", "\nKeep the second line"),
+            ("No punctuation\nKeep the second sentence.", "\nKeep the second sentence."),
+            ("Only one sentence.", ""),
+        ]
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(''.join(p['text'] for p in _drop_first_system_sentence([{'text':value}])), expected)
+
+    def test_split_parts_and_other_fields_preserved(self):
+        parts = [{'text':'#1222\nFirst sentence'}, {'text':' ends here. Second sentence.', 'metadata':1}, {'inlineData':{'data':'test'}}]
+        original = copy.deepcopy(parts)
+        result = _drop_first_system_sentence(parts)
+        self.assertEqual(result, [{'text':'#1222\n'}, {'text':' Second sentence.', 'metadata':1}, parts[2]])
+        self.assertEqual(parts, original)
 
 
 class PromptRetryTests(unittest.IsolatedAsyncioTestCase):
