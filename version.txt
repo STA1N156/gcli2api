@@ -1,4 +1,4 @@
-full_hash=fd8f66f68e4428bd772921dbb9dd587e01ce1dca
-short_hash=fd8f66f
-message=fix: preserve required tool arguments and update CLI version
-date=2026-11-12 14:18:24 +0800
+full_hash=03ff5926b2c63ea1263ad6c812eded81d649707b
+short_hash=03ff592
+message=fix: align empty output guidance with ASP
+date=2026-11-13 16:03:56 +0800
