@@ -57,6 +57,7 @@ export default function Credentials() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(null);
   const [dialog, setDialog] = useState(null);
+  const [proxyValue, setProxyValue] = useState("");
   const [menu, setMenu] = useState(null);
   const [menuAbove, setMenuAbove] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -157,6 +158,31 @@ export default function Credentials() {
         quota: type === "quota",
       });
       if (method === "post") refresh();
+    } catch (err) {
+      setNotice({ error: true, text: errorText(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const editProxy = async (item) => {
+    setBusy(true);
+    setMenu(null);
+    try {
+      const { data: result } = await api.get(`/creds/proxy/${encodeURIComponent(item.filename)}`);
+      setProxyValue(result.proxy_url || "");
+      setDialog({ title: `账号代理 · ${item.user_email || item.filename}`, proxy: item.filename });
+    } catch (err) {
+      setNotice({ error: true, text: errorText(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveProxy = async () => {
+    setBusy(true);
+    try {
+      await api.put(`/creds/proxy/${encodeURIComponent(dialog.proxy)}`, { proxy_url: proxyValue });
+      setDialog(null);
+      setNotice({ text: "账号代理已保存" });
     } catch (err) {
       setNotice({ error: true, text: errorText(err) });
     } finally {
@@ -617,6 +643,7 @@ export default function Credentials() {
                             <button onClick={() => download(item)}>
                               导出凭证
                             </button>
+                            <button onClick={() => editProxy(item)}>账号代理</button>
                             <button
                               onClick={() =>
                                 askAction(
@@ -716,7 +743,11 @@ export default function Credentials() {
           type={dialog.danger ? "error" : "info"}
           onClose={() => !busy && setDialog(null)}
           footer={
-            dialog.action ? (
+            dialog.proxy ? (
+              <button className="btn btn-primary" disabled={busy} onClick={saveProxy}>
+                {busy && <Loader2 size={14} className="animate-spin" />}保存
+              </button>
+            ) : dialog.action ? (
               <>
                 <button
                   className="btn btn-secondary"
@@ -737,7 +768,17 @@ export default function Credentials() {
             ) : undefined
           }
         >
-          {dialog.testResults ? (
+          {dialog.proxy ? (
+            <div className="space-y-3">
+              <label className="block">
+                <span className="block mb-2">代理地址</span>
+                <input className="input w-full" value={proxyValue} autoComplete="off"
+                  aria-label="账号代理地址" onChange={(e) => setProxyValue(e.target.value)}
+                  placeholder="http://用户名:密码@主机:端口" disabled={busy} />
+              </label>
+              <p className="text-xs text-gray-400">支持 HTTP、HTTPS、SOCKS5。留空使用全局代理；填写 direct 直接连接。</p>
+            </div>
+          ) : dialog.testResults ? (
             <div className="space-y-3">
               <p>{dialog.text}</p>
               <div className="space-y-2 text-xs break-all">

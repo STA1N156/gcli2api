@@ -11,7 +11,7 @@ import httpx
 from config import get_antigravity_api_url
 from src.google_oauth_api import Credentials
 from src.httpx_client import http_client
-from src.utils import ANTIGRAVITY_USER_AGENT
+from src.utils import get_antigravity_user_agent
 
 
 QUOTA_CONCURRENCY = max(1, min(128, int(os.getenv("ANTIGRAVITY_QUOTA_CONCURRENCY", "128"))))
@@ -70,10 +70,10 @@ def parse_quota_summary(data):
     return {"success": True, "windows": windows, "supported": bool(windows)}
 
 
-async def fetch_quota_info(access_token, project_id=""):
+async def fetch_quota_info(access_token, project_id="", **http_options):
     api_url = await get_antigravity_api_url()
-    headers = {"Authorization": f"Bearer {access_token}", "User-Agent": ANTIGRAVITY_USER_AGENT}
-    async with http_client.get_client(timeout=_timeout, limits=_limits) as client:
+    headers = {"Authorization": f"Bearer {access_token}", "User-Agent": get_antigravity_user_agent()}
+    async with http_client.get_client(timeout=_timeout, limits=_limits, **http_options) as client:
         for attempt in range(2):
             try:
                 response = await client.post(
@@ -106,11 +106,11 @@ async def _query_account(storage, filename):
     if not creds.access_token or (creds.expires_at and creds.is_expired()):
         await creds.refresh()
         refreshed = True
-    result = await fetch_quota_info(creds.access_token, creds.project_id)
+    result = await fetch_quota_info(creds.access_token, creds.project_id, **creds.http_options)
     if result.get("status_code") == 401 and not refreshed:
         await creds.refresh()
         refreshed = True
-        result = await fetch_quota_info(creds.access_token, creds.project_id)
+        result = await fetch_quota_info(creds.access_token, creds.project_id, **creds.http_options)
     if refreshed:
         updated = {**data, **creds.to_dict()}
         if "token" in updated:

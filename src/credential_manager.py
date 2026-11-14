@@ -384,7 +384,7 @@ class CredentialManager:
 
     async def add_antigravity_credential(self, credential_data: Dict[str, Any]):
         """按邮箱导入；同一邮箱更新原账号，不改变启停、冷却或会话绑定。"""
-        from src.utils import ANTIGRAVITY_CLIENT_ID, ANTIGRAVITY_CLIENT_SECRET, ANTIGRAVITY_USER_AGENT
+        from src.utils import ANTIGRAVITY_CLIENT_ID, ANTIGRAVITY_CLIENT_SECRET, get_antigravity_user_agent
 
         if (not isinstance(credential_data, dict)
                 or not isinstance(credential_data.get("refresh_token"), str)
@@ -408,7 +408,8 @@ class CredentialManager:
                 raise ValueError("无法获取账号邮箱，未导入")
             if not data.get("project_id"):
                 project_id, fetched_tier = await fetch_project_id_and_tier(
-                    credentials.access_token, ANTIGRAVITY_USER_AGENT, await get_antigravity_api_url(),
+                    credentials.access_token, get_antigravity_user_agent(), await get_antigravity_api_url(),
+                    http_options=credentials.http_options,
                 )
                 if not project_id:
                     raise ValueError("无法获取账号项目，未导入")

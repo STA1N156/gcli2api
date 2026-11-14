@@ -16,6 +16,7 @@ from config import (
 from log import log
 
 from src.httpx_client import get_async, post_async
+from src.agy_transport import credential_http_options, normalize_proxy_url
 from src.subscription import normalize_subscription_tier
 
 
@@ -36,6 +37,7 @@ class Credentials:
         client_secret: str = None,
         expires_at: datetime = None,
         project_id: str = None,
+        proxy_url: str = None,
     ):
         self.access_token = access_token
         self.refresh_token = refresh_token
@@ -43,10 +45,15 @@ class Credentials:
         self.client_secret = client_secret
         self.expires_at = expires_at
         self.project_id = project_id
+        self.proxy_url = normalize_proxy_url(proxy_url) if proxy_url is not None else None
 
         # 反代配置将在使用时异步获取
         self.oauth_base_url = None
         self.token_endpoint = None
+
+    @property
+    def http_options(self):
+        return credential_http_options(self.to_dict())
 
     def is_expired(self) -> bool:
         """检查token是否过期"""
@@ -87,6 +94,7 @@ class Credentials:
                 token_url,
                 data=data,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
+                **self.http_options,
             )
             response.raise_for_status()
 
@@ -147,6 +155,7 @@ class Credentials:
             client_secret=data.get("client_secret"),
             expires_at=expires_at,
             project_id=data.get("project_id"),
+            proxy_url=data.get("proxy_url", data.get("proxy-url")),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -161,6 +170,8 @@ class Credentials:
 
         if self.expires_at:
             result["expiry"] = self.expires_at.isoformat()
+        if self.proxy_url is not None:
+            result["proxy_url"] = self.proxy_url
 
         return result
 
@@ -179,7 +190,7 @@ class Flow:
         # 反代配置将在使用时异步获取
         self.oauth_base_url = None
         self.token_endpoint = None
-        self.auth_endpoint = "https://accounts.google.com/o/oauth2/auth"
+        self.auth_endpoint = "https://accounts.google.com/o/oauth2/v2/auth"
 
         self.credentials: Optional[Credentials] = None
 
@@ -255,7 +266,8 @@ async def get_user_info(credentials: Credentials) -> Optional[Dict[str, Any]]:
         googleapis_base_url = await get_googleapis_proxy_url()
         userinfo_url = f"{googleapis_base_url.rstrip('/')}/oauth2/v2/userinfo"
         response = await get_async(
-            userinfo_url, headers={"Authorization": f"Bearer {credentials.access_token}"}
+            userinfo_url, headers={"Authorization": f"Bearer {credentials.access_token}"},
+            **credentials.http_options,
         )
         response.raise_for_status()
         return response.json()
@@ -331,6 +343,7 @@ async def fetch_project_id_and_tier(
     user_agent: str,
     api_base_url: str,
     include_credits: bool = False,
+    http_options: Optional[dict] = None,
 ) -> Tuple[Optional[str], Optional[str]] | Tuple[Optional[str], Optional[str], Optional[int]]:
     """
     从 API 获取 project_id 和订阅等级
@@ -358,7 +371,7 @@ async def fetch_project_id_and_tier(
 
     # 步骤 1: 尝试 loadCodeAssist
     try:
-        project_id, raw_tier, raw_credit_amount = await _try_load_code_assist(api_base_url, headers)
+        project_id, raw_tier, raw_credit_amount = await _try_load_code_assist(api_base_url, headers, **(http_options or {}))
         subscription_tier = normalize_subscription_tier(raw_tier)
 
         if raw_credit_amount is not None:
@@ -390,7 +403,7 @@ async def fetch_project_id_and_tier(
 
     # 步骤 2: 回退到 onboardUser
     try:
-        project_id = await _try_onboard_user(api_base_url, headers)
+        project_id = await _try_onboard_user(api_base_url, headers, **(http_options or {}))
         if project_id:
             if include_credits:
                 return project_id, subscription_tier, credit_amount
@@ -414,6 +427,7 @@ async def fetch_credit_amount(
     access_token: str,
     user_agent: str,
     api_base_url: str,
+    http_options: Optional[dict] = None,
 ) -> Optional[int]:
     """
     Fetch remaining credits with loadCodeAssist only.
@@ -431,7 +445,7 @@ async def fetch_credit_amount(
     raw_credit_amount = None
 
     try:
-        _, _, raw_credit_amount = await _try_load_code_assist(api_base_url, headers)
+        _, _, raw_credit_amount = await _try_load_code_assist(api_base_url, headers, **(http_options or {}))
         if raw_credit_amount is None:
             return None
 
@@ -446,7 +460,8 @@ async def fetch_credit_amount(
 
 async def _try_load_code_assist(
     api_base_url: str,
-    headers: dict
+    headers: dict,
+    **http_options,
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     尝试通过 loadCodeAssist 获取 project_id 和订阅等级
@@ -471,6 +486,7 @@ async def _try_load_code_assist(
         json=request_body,
         headers=headers,
         timeout=30.0,
+        **http_options,
     )
 
     log.debug(f"[loadCodeAssist] Response status: {response.status_code}")
@@ -528,7 +544,8 @@ async def _try_load_code_assist(
 
 async def _try_onboard_user(
     api_base_url: str,
-    headers: dict
+    headers: dict,
+    **http_options,
 ) -> Optional[str]:
     """
     尝试通过 onboardUser 获取 project_id（长时间运行操作，需要轮询）
@@ -539,7 +556,7 @@ async def _try_onboard_user(
     request_url = f"{api_base_url.rstrip('/')}/v1internal:onboardUser"
 
     # 首先需要获取用户的 tier 信息
-    tier_id = await _get_onboard_tier(api_base_url, headers)
+    tier_id = await _get_onboard_tier(api_base_url, headers, **http_options)
     if not tier_id:
         log.error("[onboardUser] Failed to determine user tier")
         return None
@@ -549,11 +566,11 @@ async def _try_onboard_user(
     # 构造 onboardUser 请求
     # 注意：FREE tier 不应该包含 cloudaicompanionProject
     request_body = {
-        "tierId": tier_id,
+        "tier_id": tier_id,
         "metadata": {
-            "ideType": "ANTIGRAVITY",
-            "platform": "PLATFORM_UNSPECIFIED",
-            "pluginType": "GEMINI"
+            "ide_type": "ANTIGRAVITY",
+            "ide_version": headers.get("User-Agent", "").split("/cli/")[-1].split(" ")[0],
+            "ide_name": "antigravity",
         }
     }
 
@@ -574,6 +591,7 @@ async def _try_onboard_user(
             json=request_body,
             headers=headers,
             timeout=30.0,
+            **http_options,
         )
 
         log.debug(f"[onboardUser] Response status: {response.status_code}")
@@ -617,7 +635,8 @@ async def _try_onboard_user(
 
 async def _get_onboard_tier(
     api_base_url: str,
-    headers: dict
+    headers: dict,
+    **http_options,
 ) -> Optional[str]:
     """
     从 loadCodeAssist 响应中获取用户应该注册的 tier
@@ -629,8 +648,6 @@ async def _get_onboard_tier(
     request_body = {
         "metadata": {
             "ideType": "ANTIGRAVITY",
-            "platform": "PLATFORM_UNSPECIFIED",
-            "pluginType": "GEMINI"
         }
     }
 
@@ -641,6 +658,7 @@ async def _get_onboard_tier(
         json=request_body,
         headers=headers,
         timeout=30.0,
+        **http_options,
     )
 
     if response.status_code == 200:
@@ -655,9 +673,7 @@ async def _get_onboard_tier(
                 log.info(f"[_get_onboard_tier] Found default tier: {tier_id}")
                 return tier_id
 
-        # 如果没有默认 tier，使用 LEGACY 作为回退
-        log.warning("[_get_onboard_tier] No default tier found, using LEGACY")
-        return "LEGACY"
+        return (data.get("currentTier") or {}).get("id") or "free-tier"
     else:
         log.error(f"[_get_onboard_tier] Failed to fetch tier info: HTTP {response.status_code}")
         return None

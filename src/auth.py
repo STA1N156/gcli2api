@@ -24,7 +24,7 @@ from .utils import (
     ANTIGRAVITY_CLIENT_ID,
     ANTIGRAVITY_CLIENT_SECRET,
     ANTIGRAVITY_SCOPES,
-    ANTIGRAVITY_USER_AGENT,
+    get_antigravity_user_agent,
     CALLBACK_HOST,
     TOKEN_URL,
 )
@@ -493,8 +493,9 @@ async def asyncio_complete_auth_flow(
                 antigravity_url = await get_antigravity_api_url()
                 project_id, subscription_tier = await fetch_project_id_and_tier(
                     credentials.access_token,
-                    ANTIGRAVITY_USER_AGENT,
-                    antigravity_url
+                    get_antigravity_user_agent(),
+                    antigravity_url,
+                    http_options=credentials.http_options,
                 )
                 if project_id:
                     log.info(f"成功从API获取project_id: {project_id}, tier: {subscription_tier}")
@@ -576,8 +577,9 @@ async def complete_auth_flow_from_callback_url(
             antigravity_url = await get_antigravity_api_url()
             project_id, subscription_tier = await fetch_project_id_and_tier(
                 credentials.access_token,
-                ANTIGRAVITY_USER_AGENT,
-                antigravity_url
+                get_antigravity_user_agent(),
+                antigravity_url,
+                http_options=credentials.http_options,
             )
             if project_id:
                 log.info(f"成功从API获取project_id: {project_id}, tier: {subscription_tier}")

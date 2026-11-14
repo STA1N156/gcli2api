@@ -9,3 +9,4 @@ creds
 **/.env*
 *.log
 dist
+native/bin

@@ -243,13 +243,10 @@ async def image_url_to_inline_data(image_url: str) -> Dict[str, str]:
 
 
 async def download_image_url_to_inline_data(image_url: str) -> Dict[str, str]:
-    try:
-        import httpx
-    except ImportError as exc:
-        raise ImageInputError("httpx is required to fetch remote image URLs") from exc
+    from src.httpx_client import get_async
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
-        response = await client.get(image_url, headers={"Accept": "image/*"})
+    response = await get_async(image_url, headers={"Accept": "image/*"},
+                               follow_redirects=True, timeout=20.0)
 
     if response.status_code >= 400:
         raise ImageInputError(f"Failed to fetch image URL: HTTP {response.status_code}")

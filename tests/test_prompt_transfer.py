@@ -83,7 +83,7 @@ class PromptRetryTests(unittest.IsolatedAsyncioTestCase):
                     error = Response(json.dumps({"error": {"status": "RESOURCE_EXHAUSTED", "message": PromptTransferTests.scope["_RESOURCE_EXHAUSTED_MESSAGE"]}}), 429)
                     request = {"systemInstruction": {"parts": [{"text": "system"}]}, "contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
                     payload = {"request": request}
-                    select = AsyncMock(return_value=("account.json", "token", "project"))
+                    select = AsyncMock(return_value=("account.json", "token", "project", {}))
                     save = AsyncMock()
                     sent = []
 

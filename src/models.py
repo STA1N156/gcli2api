@@ -379,5 +379,9 @@ class CredFileBatchActionRequest(BaseModel):
     filenames: List[str]  # 批量操作的文件名列表
 
 
+class CredProxyRequest(BaseModel):
+    proxy_url: str = ""
+
+
 class ConfigSaveRequest(BaseModel):
     config: dict

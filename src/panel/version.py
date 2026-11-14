@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from log import log
-from src.utils import ANTIGRAVITY_CLI_VERSION
+from src import utils as agy_runtime
 
 
 # 创建路由器
@@ -50,7 +50,7 @@ async def get_version_info(check_update: bool = False):
 
         response_data = {
             "success": True,
-            "antigravity_cli_version": ANTIGRAVITY_CLI_VERSION,
+            "antigravity_cli_version": agy_runtime.ANTIGRAVITY_CLI_VERSION,
             "version": version_data.get('short_hash', 'unknown'),
             "full_hash": version_data.get('full_hash', ''),
             "message": version_data.get('message', ''),

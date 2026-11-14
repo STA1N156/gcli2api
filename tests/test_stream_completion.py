@@ -55,7 +55,7 @@ class StreamCompletionTests(unittest.IsolatedAsyncioTestCase):
             "asyncio": asyncio, "json": json, "Response": Response,
             "log": SimpleNamespace(warning=lambda *args: None),
             "extract_cache_session_key": lambda *args: None,
-            "_get_valid_request_credential": AsyncMock(return_value=("test.json", "token", "project")),
+            "_get_valid_request_credential": AsyncMock(return_value=("test.json", "token", "project", {})),
             "get_antigravity_api_url": AsyncMock(return_value="https://example.invalid"),
             "build_antigravity_headers": lambda token: {},
             "wrap_cli_request": AsyncMock(return_value=(payload, "test-request")),

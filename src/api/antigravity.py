@@ -40,9 +40,10 @@ from src.credential_manager import credential_manager
 from src.converter.anti_truncation import move_system_to_first_user
 from src.converter.antigravity_fix import ensure_user_ending
 from src.httpx_client import post_async, stream_post_async
+from src.agy_transport import credential_http_options
 from src.models import Model, model_to_dict
 from src.session_affinity import extract_cache_session_key
-from src.utils import ANTIGRAVITY_USER_AGENT
+from src.utils import get_antigravity_user_agent
 
 
 _RESOURCE_EXHAUSTED_MESSAGE = "Resource has been exhausted (e.g. check quota)."
@@ -73,7 +74,7 @@ def _generate_stable_session_id(request_payload: Dict[str, Any]) -> str:
 def _generate_request_id(model: str = "") -> str:
     if "image" in model.lower():
         return f"image_gen/{int(time.time() * 1000)}/{uuid.uuid4()}/12"
-    return f"agent-{uuid.uuid4()}"
+    return f"agent/{uuid.uuid4()}/{int(time.time() * 1000)}/{uuid.uuid4()}/1"
 
 
 async def wrap_cli_request(
@@ -88,11 +89,6 @@ async def wrap_cli_request(
     generation_config = dict(inner.get("generationConfig") or {})
     if "image" in model.lower():
         generation_config.pop("maxOutputTokens", None)
-    else:
-        generation_config["maxOutputTokens"] = (
-            128000 if "claude" in model.lower()
-            else 1_000_000 if model.lower().startswith("gemini-4") else 64000
-        )
     inner["generationConfig"] = generation_config
 
     if "claude" in model.lower():
@@ -118,7 +114,7 @@ async def wrap_cli_request(
 
 def build_antigravity_headers(access_token: str) -> Dict[str, str]:
     return {
-        "User-Agent": ANTIGRAVITY_USER_AGENT,
+        "User-Agent": get_antigravity_user_agent(),
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
         "Accept-Encoding": "gzip",
@@ -130,7 +126,7 @@ async def _get_valid_request_credential(
     session_key: Optional[str],
     attempted: Set[str],
     selection_state: Optional[Dict[str, Any]] = None,
-) -> Optional[Tuple[str, str, str]]:
+) -> Optional[Tuple[str, str, str, dict]]:
     """选择未尝试且可用于当前模型的凭证。"""
     excluded = set(attempted)
     while True:
@@ -150,7 +146,7 @@ async def _get_valid_request_credential(
         project_id = credential_data.get("project_id")
         if token and project_id:
             attempted.add(filename)
-            return filename, token, project_id
+            return filename, token, project_id, credential_http_options(credential_data)
         log.warning(f"[ANTIGRAVITY] 禁用缺少令牌或项目 ID 的凭证: {filename}")
         await credential_manager.set_cred_disabled(
             filename, True, mode="antigravity"
@@ -259,7 +255,7 @@ async def stream_request(
         )
         return
 
-    current_file, token, project_id = selected
+    current_file, token, project_id, http_options = selected
     api_url = await get_antigravity_api_url()
     target_url = f"{api_url}/v1internal:streamGenerateContent?alt=sse"
     auth_headers = build_antigravity_headers(token)
@@ -288,6 +284,7 @@ async def stream_request(
             body=final_payload,
             native=native,
             headers=auth_headers,
+            **http_options,
         )
         try:
             async for chunk in upstream:
@@ -318,6 +315,7 @@ async def stream_request(
                             )
                             refreshed_project = refreshed.get("project_id")
                             if refreshed_token and refreshed_project:
+                                http_options = credential_http_options(refreshed)
                                 auth_headers["Authorization"] = (
                                     f"Bearer {refreshed_token}"
                                 )
@@ -424,7 +422,7 @@ async def stream_request(
                 media_type="application/json",
             )
             return
-        current_file, token, project_id = selected
+        current_file, token, project_id, http_options = selected
         auth_headers["Authorization"] = f"Bearer {token}"
         final_payload["project"] = project_id
         final_payload["requestId"] = _generate_request_id(model_name)
@@ -454,7 +452,7 @@ async def non_stream_request(
             media_type="application/json",
         )
 
-    current_file, token, project_id = selected
+    current_file, token, project_id, http_options = selected
     api_url = await get_antigravity_api_url()
     target_url = f"{api_url}/v1internal:generateContent"
     auth_headers = build_antigravity_headers(token)
@@ -477,6 +475,7 @@ async def non_stream_request(
                 url=target_url,
                 json=final_payload,
                 headers=auth_headers,
+                **http_options,
             )
             if response.status_code == 200:
                 if empty_output_error_enabled and is_empty_model_output(
@@ -513,6 +512,7 @@ async def non_stream_request(
                     )
                     refreshed_project = refreshed.get("project_id")
                     if refreshed_token and refreshed_project:
+                        http_options = credential_http_options(refreshed)
                         auth_headers["Authorization"] = f"Bearer {refreshed_token}"
                         final_payload["project"] = refreshed_project
                         final_payload["requestId"] = _generate_request_id(model_name)
@@ -560,7 +560,7 @@ async def non_stream_request(
                 status_code=500,
                 media_type="application/json",
             )
-        current_file, token, project_id = selected
+        current_file, token, project_id, http_options = selected
         auth_headers["Authorization"] = f"Bearer {token}"
         final_payload["project"] = project_id
         final_payload["requestId"] = _generate_request_id(model_name)
@@ -582,6 +582,7 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
             url=f"{api_url}/v1internal:fetchAvailableModels",
             json={},
             headers=build_antigravity_headers(token),
+            **credential_http_options(credential_data),
         )
         if response.status_code != 200:
             log.error(

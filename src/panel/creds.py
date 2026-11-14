@@ -17,13 +17,15 @@ from fastapi.responses import JSONResponse
 from log import log
 from src.credential_manager import credential_manager
 from src.credential_identity import normalize_email
+from src.agy_transport import normalize_proxy_url
 from src.models import (
     CredFileActionRequest,
+    CredProxyRequest,
     CredFileBatchActionRequest
 )
 from src.storage_adapter import get_storage_adapter
 from src.subscription import SUBSCRIPTION_TIERS
-from src.utils import verify_panel_token, ANTIGRAVITY_USER_AGENT
+from src.utils import verify_panel_token, get_antigravity_user_agent
 from src.antigravity_quota import (
     get_account_quota,
     summarize_accounts,
@@ -722,17 +724,18 @@ async def verify_credential_project_common(filename: str, mode: str = "antigravi
     # 如果token被刷新了，更新存储
     if token_refreshed:
         log.info(f"Token已自动刷新: {filename} (mode={mode})")
-        credential_data = credentials.to_dict()
+        credential_data = {**credential_data, **credentials.to_dict()}
         await storage_adapter.store_credential(filename, credential_data, mode=mode)
 
     # 重新获取project id（仅 antigravity 模式请求积分）
     api_base_url = await get_antigravity_api_url()
-    user_agent = ANTIGRAVITY_USER_AGENT
+    user_agent = get_antigravity_user_agent()
     project_id, subscription_tier, credit_amount = await fetch_project_id_and_tier(
         access_token=credentials.access_token,
         user_agent=user_agent,
         api_base_url=api_base_url,
         include_credits=True,
+        http_options=credentials.http_options,
     )
 
     if project_id:
@@ -908,6 +911,33 @@ async def get_cred_detail(
     except Exception as e:
         log.error(f"获取凭证详情失败 {filename}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/proxy/{filename}")
+async def get_credential_proxy(filename: str, token: str = Depends(verify_panel_token)):
+    storage = await get_storage_adapter()
+    data = await storage.get_credential(filename, mode="antigravity")
+    if not data:
+        raise HTTPException(status_code=404, detail="凭证不存在")
+    return {"proxy_url": data.get("proxy_url", data.get("proxy-url", "")) or ""}
+
+
+@router.put("/proxy/{filename}")
+async def set_credential_proxy(filename: str, request: CredProxyRequest,
+                               token: str = Depends(verify_panel_token)):
+    try:
+        proxy_url = normalize_proxy_url(request.proxy_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    storage = await get_storage_adapter()
+    data = await storage.get_credential(filename, mode="antigravity")
+    if not data:
+        raise HTTPException(status_code=404, detail="凭证不存在")
+    data.pop("proxy-url", None)
+    data["proxy_url"] = proxy_url
+    if not await storage.store_credential(filename, data, mode="antigravity"):
+        raise HTTPException(status_code=500, detail="代理保存失败")
+    return {"message": "账号代理已保存"}
 
 
 @router.post("/action")
@@ -1439,22 +1469,21 @@ async def test_credential(
         test_model = "gemini-3.5-flash-lite"
 
         api_base_url = await get_antigravity_api_url()
-        from src.api.antigravity import build_antigravity_headers
+        from src.api.antigravity import build_antigravity_headers, wrap_cli_request
         headers = build_antigravity_headers(access_token)
+        payload, _ = await wrap_cli_request(
+            {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+            test_model, project_id,
+        )
+        payload["request"]["generationConfig"]["maxOutputTokens"] = 1
 
         # 单次最小请求，不额外触发大模型推理。
         response = await post_async(
             url=f"{api_base_url}/v1internal:generateContent",
-            json={
-                "model": test_model,
-                "project": project_id,
-                "request": {
-                    "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-                    "generationConfig": {"maxOutputTokens": 1}
-                }
-            },
+            json=payload,
             headers=headers,
-            timeout=30.0
+            timeout=30.0,
+            **credentials.http_options,
         )
 
         # 返回实际的状态码和详细信息
