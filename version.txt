@@ -1,4 +1,4 @@
-full_hash=25e6969ba55b203e9dc4e0800936ac2ab60901f7
-short_hash=25e6969
-message=fix: omit agent request type and preserve system prompt
-date=2026-11-14 00:56:46 +0800
+full_hash=262c879359388e4a3d8cfb479c26b2301d750873
+short_hash=262c879
+message=feat: align Antigravity CLI transport and support account proxies
+date=2026-11-15 00:41:33 +0800
