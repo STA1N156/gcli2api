@@ -41,6 +41,8 @@ from src.converter.anti_truncation import move_system_to_first_user
 from src.converter.antigravity_fix import ensure_user_ending
 from src.httpx_client import post_async, stream_post_async
 from src.agy_transport import credential_http_options
+from src.antigravity_identity import bind_request_identity, cache_model_enums, model_output_limit
+from src.antigravity_identity import complete_execution, ExecutionStream, order_request
 from src.models import Model, model_to_dict
 from src.session_affinity import extract_cache_session_key
 from src.utils import get_antigravity_user_agent
@@ -63,32 +65,37 @@ def _extract_first_user_text(request_payload: Dict[str, Any]) -> str:
     return ""
 
 
-def _generate_stable_session_id(request_payload: Dict[str, Any]) -> str:
-    first_user_text = _extract_first_user_text(request_payload)
+def _generate_stable_session_id(request_payload: Dict[str, Any], session_key=None) -> str:
+    first_user_text = session_key or _extract_first_user_text(request_payload)
     if first_user_text:
         digest = hashlib.sha256(first_user_text.encode("utf-8")).digest()
         return f"-{int.from_bytes(digest[:8], 'big') & 0x7FFFFFFFFFFFFFFF}"
     return f"-{uuid.uuid4().int % 9_000_000_000_000_000_000}"
 
 
-def _generate_request_id(model: str = "") -> str:
+def _generate_request_id(model: str, request: Dict[str, Any], account_id=None) -> str:
+    limit = model_output_limit(model, account_id)
+    if limit is not None:
+        request.setdefault("generationConfig", {})["maxOutputTokens"] = limit
     if "image" in model.lower():
         return f"image_gen/{int(time.time() * 1000)}/{uuid.uuid4()}/12"
-    return f"agent/{uuid.uuid4()}/{int(time.time() * 1000)}/{uuid.uuid4()}/1"
+    cascade, trajectory, step = bind_request_identity(request, model, account_id)
+    return f"agent/{cascade}/{int(time.time() * 1000)}/{trajectory}/{step}"
 
 
 async def wrap_cli_request(
     gemini_request: Dict[str, Any],
     model: str,
     project_id: str,
+    session_key: Optional[str] = None,
+    account_id: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], str]:
     inner = ensure_user_ending(dict(gemini_request), model)
     inner.pop("safetySettings", None)
-    inner.setdefault("sessionId", _generate_stable_session_id(inner))
+    if not inner.get("sessionId"):
+        inner["sessionId"] = _generate_stable_session_id(inner, session_key)
 
     generation_config = dict(inner.get("generationConfig") or {})
-    if "image" in model.lower():
-        generation_config.pop("maxOutputTokens", None)
     inner["generationConfig"] = generation_config
 
     if "claude" in model.lower():
@@ -98,7 +105,7 @@ async def wrap_cli_request(
         tool_config["functionCallingConfig"] = function_config
         inner["toolConfig"] = tool_config
 
-    request_id = _generate_request_id(model)
+    request_id = _generate_request_id(model, inner, account_id)
     return (
         {
             "project": project_id,
@@ -165,7 +172,7 @@ def _response_from_httpx(response) -> Response:
 
 
 def _rewrite_resource_exhausted_response(response: Response) -> Response:
-    """对客户端将匹配的无恢复时间 429 转为 400；内部仍按 429 冷却和重试。"""
+    """Rewrite the exact rejection for clients; prompt relocation handles its retry."""
     if response.status_code != 429:
         return response
 
@@ -212,6 +219,12 @@ async def _record_response_error(
     status_code: int,
     error_text: str,
 ) -> None:
+    if status_code == 429:
+        try:
+            if json.loads(error_text).get("error", {}).get("message") == _RESOURCE_EXHAUSTED_MESSAGE:
+                return
+        except (ValueError, AttributeError):
+            pass
     await record_api_call_error(
         credential_manager,
         filename,
@@ -264,7 +277,8 @@ async def stream_request(
     auth_headers["Authorization"] = f"Bearer {token}"
     inner_request = body.get("request", body)
     final_payload, _ = await wrap_cli_request(
-        inner_request, model_name, project_id
+        inner_request, model_name, project_id, session_key=session_key,
+        account_id=http_options.get("account_id"),
     )
 
     retry_config = await get_retry_config()
@@ -278,10 +292,11 @@ async def stream_request(
         retry_same = False
         buffered_chunks = []
         completion = {"finished": set()}
+        execution = ExecutionStream(final_payload["request"])
         expected_candidates = final_payload["request"].get("generationConfig", {}).get("candidateCount", 1)
         upstream = stream_post_async(
             url=target_url,
-            body=final_payload,
+            body=order_request(final_payload),
             native=native,
             headers=auth_headers,
             **http_options,
@@ -321,7 +336,7 @@ async def stream_request(
                                 )
                                 final_payload["project"] = refreshed_project
                                 final_payload["requestId"] = _generate_request_id(
-                                    model_name
+                                    model_name, final_payload["request"], http_options.get("account_id")
                                 )
                                 retry_same = True
                                 break
@@ -332,7 +347,7 @@ async def stream_request(
                         if success_recorded or not _move_system_prompt_for_retry(body, final_payload):
                             yield client_chunk
                             return
-                        final_payload["requestId"] = _generate_request_id(model_name)
+                        final_payload["requestId"] = _generate_request_id(model_name, final_payload["request"], http_options.get("account_id"))
                         retry_same = True
                         break
                     await _record_response_error(
@@ -345,6 +360,7 @@ async def stream_request(
                     retry_current = True
                     break
 
+                execution.observe(chunk)
                 response_complete = not native and stream_chunk_finishes_response(
                     chunk, completion, expected_candidates
                 )
@@ -425,7 +441,7 @@ async def stream_request(
         current_file, token, project_id, http_options = selected
         auth_headers["Authorization"] = f"Bearer {token}"
         final_payload["project"] = project_id
-        final_payload["requestId"] = _generate_request_id(model_name)
+        final_payload["requestId"] = _generate_request_id(model_name, final_payload["request"], http_options.get("account_id"))
 
 
 @retry_empty_response
@@ -461,7 +477,8 @@ async def non_stream_request(
     auth_headers["Authorization"] = f"Bearer {token}"
     inner_request = body.get("request", body)
     final_payload, _ = await wrap_cli_request(
-        inner_request, model_name, project_id
+        inner_request, model_name, project_id, session_key=session_key,
+        account_id=http_options.get("account_id"),
     )
 
     retry_config = await get_retry_config()
@@ -473,11 +490,15 @@ async def non_stream_request(
         try:
             response = await post_async(
                 url=target_url,
-                json=final_payload,
+                json=order_request(final_payload),
                 headers=auth_headers,
                 **http_options,
             )
             if response.status_code == 200:
+                try:
+                    complete_execution(final_payload["request"], response.json())
+                except (ValueError, AttributeError, TypeError):
+                    pass
                 if empty_output_error_enabled and is_empty_model_output(
                     response.content
                 ):
@@ -515,7 +536,7 @@ async def non_stream_request(
                         http_options = credential_http_options(refreshed)
                         auth_headers["Authorization"] = f"Bearer {refreshed_token}"
                         final_payload["project"] = refreshed_project
-                        final_payload["requestId"] = _generate_request_id(model_name)
+                        final_payload["requestId"] = _generate_request_id(model_name, final_payload["request"], http_options.get("account_id"))
                         continue
 
             error_text = getattr(response, "text", "") or ""
@@ -531,7 +552,7 @@ async def non_stream_request(
             if response.status_code == 429 and last_error is not original_error:
                 if not _move_system_prompt_for_retry(body, final_payload):
                     return last_error
-                final_payload["requestId"] = _generate_request_id(model_name)
+                final_payload["requestId"] = _generate_request_id(model_name, final_payload["request"], http_options.get("account_id"))
                 continue
             await _record_response_error(
                 current_file, model_name, response.status_code, error_text
@@ -563,7 +584,7 @@ async def non_stream_request(
         current_file, token, project_id, http_options = selected
         auth_headers["Authorization"] = f"Bearer {token}"
         final_payload["project"] = project_id
-        final_payload["requestId"] = _generate_request_id(model_name)
+        final_payload["requestId"] = _generate_request_id(model_name, final_payload["request"], http_options.get("account_id"))
 
 
 async def fetch_available_models() -> List[Dict[str, Any]]:
@@ -580,7 +601,7 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
         api_url = await get_antigravity_api_url()
         response = await post_async(
             url=f"{api_url}/v1internal:fetchAvailableModels",
-            json={},
+            json={"project": credential_data.get("project_id") or ""},
             headers=build_antigravity_headers(token),
             **credential_http_options(credential_data),
         )
@@ -592,6 +613,7 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
 
         data = response.json()
         models = data.get("models", {})
+        cache_model_enums(credential_http_options(credential_data)["account_id"], models)
         timestamp = int(datetime.now(timezone.utc).timestamp())
         result_models = [
             model_to_dict(

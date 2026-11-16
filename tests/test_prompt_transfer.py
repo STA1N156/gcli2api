@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 from fastapi import Response
 from src.converter.anti_truncation import move_system_to_first_user
+from src.antigravity_identity import complete_execution, ExecutionStream, order_request
 
 
 class PromptTransferTests(unittest.TestCase):
@@ -56,8 +57,8 @@ class PromptRetryTests(unittest.IsolatedAsyncioTestCase):
         node = next(n for n in ast.parse(path.read_text(encoding="utf-8")).body
                     if isinstance(n, ast.AsyncFunctionDef) and n.name == "wrap_cli_request")
         scope = {"ensure_user_ending": lambda request, model: request,
-                 "_generate_stable_session_id": lambda request: "session",
-                 "_generate_request_id": lambda model: "request"}
+                 "_generate_stable_session_id": lambda request, *args: "session",
+                 "_generate_request_id": lambda model, *args: "request"}
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec",
                      flags=__future__.annotations.compiler_flag), scope)
         request = {"systemInstruction": {"parts": [{"text": "First sentence. Keep everything."}]},
@@ -99,6 +100,7 @@ class PromptRetryTests(unittest.IsolatedAsyncioTestCase):
 
                     scope = dict(PromptTransferTests.scope)
                     scope.update(asyncio=asyncio, log=SimpleNamespace(info=lambda *a: None, warning=lambda *a: None),
+                                 complete_execution=complete_execution, ExecutionStream=ExecutionStream, order_request=order_request,
                                  extract_cache_session_key=lambda *a: "session", _get_valid_request_credential=select,
                                  get_antigravity_api_url=AsyncMock(return_value="https://example.invalid"),
                                  build_antigravity_headers=lambda *a: {}, wrap_cli_request=AsyncMock(return_value=(payload, "id")),

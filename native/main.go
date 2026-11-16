@@ -135,6 +135,10 @@ func (b *bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	req.Header = r.Header.Clone()
 	cleanHeaders(req.Header)
 	req.Header.Del("Content-Length")
+	// Let Go append its default gzip header after the explicit headers, as the CLI does.
+	if req.Header.Get("Accept-Encoding") == "gzip" {
+		req.Header.Del("Accept-Encoding")
+	}
 	req.ContentLength = r.ContentLength
 	if strings.Contains(target.Path, ":streamGenerateContent") {
 		req.ContentLength = -1

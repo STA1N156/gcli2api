@@ -788,10 +788,6 @@ async def normalize_antigravity_request(
 
     # 2. 参数范围限制
     _clamp_temperature(generation_config)
-    generation_config["maxOutputTokens"] = (
-        128000 if "claude" in model.lower()
-        else 1_000_000 if model.lower().startswith("gemini-4") else 64000
-    )
 
     if "contents" in result:
         result["contents"] = _ensure_tool_call_ids(result["contents"], model)
