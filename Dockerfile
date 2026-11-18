@@ -1,7 +1,7 @@
 FROM golang:1.27.4-bookworm AS native
 WORKDIR /build
 COPY native/ ./
-RUN TLS_OVERLAY="$(go run ./overlay)" && CGO_ENABLED=0 go build -overlay="$TLS_OVERLAY" -o /agy-http .
+RUN CGO_ENABLED=0 go build -o /agy-http .
 
 FROM node:22-alpine AS frontend
 WORKDIR /build

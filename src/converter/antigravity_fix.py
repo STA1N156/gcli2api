@@ -4,8 +4,8 @@ Antigravity Format Utilities - 独立的 Antigravity 请求处理和转换工具
 ────────────────────────────────────────────────────────────────
 """
 import json
-import uuid
-from typing import Any, Dict, Optional
+import hashlib
+from typing import Any, Dict, List, Optional
 
 from log import log
 from src.converter.chatbox_fix import strip_chatbox_runtime_description
@@ -16,25 +16,21 @@ from src.converter.utils import normalize_schema_enum
 # ==================== Gemini API 配置 ====================
 
 DEFAULT_SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_IMAGE_HATE", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_IMAGE_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_JAILBREAK", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_IMAGE_HATE", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_IMAGE_HARASSMENT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_JAILBREAK", "threshold": "OFF"},
 ]
 
-LITE_SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
-]
+CLAUDE_MAX_OUTPUT_TOKENS = 64000
+GEMINI_MAX_OUTPUT_TOKENS = 65536
+CLAUDE_MIN_THINKING_BUDGET = 1024
 
 
 def _append_schema_hint(schema: Dict[str, Any], hint: str) -> None:
@@ -414,15 +410,36 @@ def _normalize_part_thought_signature(part: Dict[str, Any], model_name: str) -> 
     return normalized
 
 
+def _stable_json(value: Any) -> Optional[str]:
+    """稳定序列化（排序键），失败返回 None"""
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
+
+def _deterministic_tool_id(material: str) -> str:
+    """基于稳定材料确定性派生 toolu_ 前缀 ID（截断 32 hex）。
+
+    同一段历史在多轮往返中补全出的 ID 恒定不变，保证 Claude 路径下
+    KV 缓存依赖的前缀 token 序列字节级一致（随机 ID 会使前缀哈希
+    从缺失处开始全部改变，导致上游缓存彻底失效）。
+    """
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    return f"toolu_{digest[:32]}"
+
 def _ensure_tool_call_ids(contents: Any, model_name: str) -> Any:
     """
-    确保 functionCall/functionResponse 携带 id 字段。
+    确保 functionCall/functionResponse 携带 id 字段 (仅 Claude)。
 
     Antigravity 后端在目标模型为 Claude 时，会将 Gemini 的
     functionCall/functionResponse 内部转换为 Anthropic 的
     tool_use/tool_result，而后者的 id 是必填字段。原生 Gemini 请求
-    可能不带 id（Gemini API 本身不要求），因此这里按 name 补全缺失的 id，
-    保证同一次调用的 functionCall 与 functionResponse 使用相同 id。
+    可能不带 id，因此这里按 name 补全缺失的 id，保证同一次调用的
+    functionCall 与 functionResponse 使用相同 id。不修改入参。
+
+    缺失的 id 按「消息序号 + part 序号 + 函数名 + 载荷 JSON」确定性
+    派生：历史前缀索引跨轮次稳定（append-only），因此同一历史补全出的
+    ID 恒定，不会破坏多轮历史的字节级前缀一致性。
     """
     if "claude" not in (model_name or "").lower():
         return contents
@@ -430,37 +447,43 @@ def _ensure_tool_call_ids(contents: Any, model_name: str) -> Any:
         return contents
 
     pending_ids_by_name: Dict[str, list] = {}
+    result = []
 
-    for content in contents:
-        if not isinstance(content, dict):
+    for content_index, content in enumerate(contents):
+        if not isinstance(content, dict) or not isinstance(content.get("parts"), list):
+            result.append(content)
             continue
-        for part in content.get("parts", []) or []:
-            if not isinstance(part, dict):
-                continue
 
-            fc = part.get("functionCall")
-            if isinstance(fc, dict) and not fc.get("id"):
-                new_id = f"toolu_{uuid.uuid4().hex}"
-                fc["id"] = new_id
-                pending_ids_by_name.setdefault(fc.get("name"), []).append(new_id)
-                continue
+        new_parts = []
+        for part_index, part in enumerate(content["parts"]):
+            if isinstance(part, dict):
+                fc = part.get("functionCall")
+                fr = part.get("functionResponse")
+                if isinstance(fc, dict):
+                    if not fc.get("id"):
+                        args_json = _stable_json(fc.get("args"))
+                        material = f"{content_index}:{part_index}:{fc.get('name')}:{args_json}"
+                        fc = {**fc, "id": _deterministic_tool_id(material)}
+                        part = {**part, "functionCall": fc}
+                    pending_ids_by_name.setdefault(fc.get("name"), []).append(fc["id"])
+                elif isinstance(fr, dict):
+                    queue = pending_ids_by_name.get(fr.get("name")) or []
+                    if fr.get("id"):
+                        if fr["id"] in queue:
+                            queue.remove(fr["id"])
+                    else:
+                        if queue:
+                            new_id = queue.pop(0)
+                        else:
+                            response_json = _stable_json(fr.get("response"))
+                            material = f"{content_index}:{part_index}:{fr.get('name')}:{response_json}"
+                            new_id = _deterministic_tool_id(material)
+                        part = {**part, "functionResponse": {**fr, "id": new_id}}
+            new_parts.append(part)
 
-            fr = part.get("functionResponse")
-            if isinstance(fr, dict) and not fr.get("id"):
-                name = fr.get("name")
-                queue = pending_ids_by_name.get(name)
-                if queue:
-                    fr["id"] = queue.pop(0)
-                else:
-                    fr["id"] = f"toolu_{uuid.uuid4().hex}"
+        result.append({**content, "parts": new_parts})
 
-    return contents
-
-
-SUPPORTED_ASPECT_RATIOS = [
-    (1, 1), (2, 3), (3, 2), (3, 4), (4, 3),
-    (4, 5), (5, 4), (9, 16), (16, 9), (21, 9),
-]
+    return result
 
 
 def _parse_size_to_image_config(size_str: str) -> Dict[str, str]:
@@ -614,10 +637,9 @@ def _normalize_antigravity_request(
     if "claude" in model.lower() and suffix == "thinking":
         suffix = "high"
     thinking_config = generation_config.get("thinkingConfig", {})
-    if legacy_claude_thinking:
+    if legacy_claude_thinking and not thinking_config.get("thinkingLevel"):
         # 4.6 的旧 thinking 通道靠预算开启思考，不能只发送等级。
         thinking_config = generation_config.setdefault("thinkingConfig", {})
-        thinking_config.pop("thinkingLevel", None)
         if thinking_config.get("thinkingBudget") is None:
             thinking_config["thinkingBudget"] = 8192
     thinking_level = str(thinking_config.get("thinkingLevel") or "").lower()
@@ -764,6 +786,16 @@ async def normalize_antigravity_request(
     # 获取配置值
     return_thoughts = await get_return_thoughts_to_frontend()
 
+    root_tc = result.pop("thinkingConfig", None)
+    if root_tc is None:
+        root_tc = result.pop("thinking_config", None)
+    if root_tc is not None and "thinkingConfig" not in generation_config:
+        if isinstance(root_tc, dict):
+            # thinking_budget snake_case 归一为 thinkingBudget
+            if "thinkingBudget" not in root_tc and "thinking_budget" in root_tc:
+                root_tc["thinkingBudget"] = root_tc.pop("thinking_budget")
+        generation_config["thinkingConfig"] = root_tc
+
     model = _normalize_antigravity_request(result, model, generation_config, return_thoughts)
     result["model"] = model
 
@@ -779,12 +811,10 @@ async def normalize_antigravity_request(
         result["tools"] = _normalize_tools_for_internal_api(result.get("tools"))
         # 对于 Claude 模型：Antigravity 通道需要标准 functionDeclarations/parametersJsonSchema 格式
         # 对于 Gemini 模型：统一转换为 functionDeclarations 并确保只使用 parameters 字段（移除 parametersJsonSchema 以防报错）
-        result["tools"] = _ensure_empty_tool_schema_for_claude(result.get("tools"), model, "antigravity")
+        result["tools"] = _ensure_empty_tool_schema_for_claude(_split_tools_single_function(result.get("tools")), model, "antigravity")
+        result["tools"] = _split_tools_single_function(result["tools"])
 
-    if "gemini-2.5-flash-lite" in model.lower():
-        result["safetySettings"] = LITE_SAFETY_SETTINGS
-    else:
-        result["safetySettings"] = DEFAULT_SAFETY_SETTINGS
+    result["safetySettings"] = DEFAULT_SAFETY_SETTINGS
 
     # 2. 参数范围限制
     _clamp_temperature(generation_config)
@@ -851,7 +881,12 @@ async def normalize_antigravity_request(
 
         result["contents"] = cleaned_contents
 
-    result["generationConfig"] = generation_config
+    if not isinstance(result.get("systemInstruction"), dict) and isinstance(result.get("system_instruction"), dict):
+        result["systemInstruction"] = result["system_instruction"]
+    result.pop("system_instruction", None)
+    if isinstance(result.get("systemInstruction"), dict):
+        result["systemInstruction"] = _canonicalize_system_instruction(result["systemInstruction"])
+    result["generationConfig"] = _normalize_generation_config(result, generation_config, model)
 
     # 图片请求也先清理消息，再保留图片专用参数。
     if "image" in model.lower():
@@ -859,3 +894,148 @@ async def normalize_antigravity_request(
 
     # 清理空消息后再补续写指令，避免末尾空 user 被删除后重新露出 model。
     return ensure_user_ending(result)
+
+
+def _split_tools_single_function(tools: Any) -> Any:
+    """将 tools 拆解为官方单函数独立切片形态，保持客户端声明顺序。
+
+    官方 HAR 抓包铁律：原生 329 次带工具报文中，独立切片占比 100%：
+        "tools": [
+            { "functionDeclarations": [ { "name": "tool1", ... } ] },
+            { "functionDeclarations": [ { "name": "tool2", ... } ] }
+        ]
+    - 每个对象仅包含一个 functionDeclarations，且其中只有一个声明；
+    - 参数 schema 的 type 字段统一转大写（官方全工具采用 OBJECT/STRING/INTEGER/BOOLEAN/ARRAY）；
+    - 非 functionDeclarations 工具（googleSearch / codeExecution 等）严格保持就地位置。
+    """
+    if not isinstance(tools, list):
+        return tools
+
+    expanded_tools: List[Any] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            expanded_tools.append(tool)
+            continue
+
+        declarations = tool.get("functionDeclarations") or tool.get("function_declarations")
+        if isinstance(declarations, list):
+            for declaration in declarations:
+                if isinstance(declaration, dict):
+                    decl_copy = dict(declaration)
+                    parameters = decl_copy.get("parameters")
+                    if isinstance(parameters, (dict, list)):
+                        _enforce_uppercase_schema_types(parameters)
+                    expanded_tools.append({"functionDeclarations": [decl_copy]})
+                else:
+                    expanded_tools.append({"functionDeclarations": [declaration]})
+            continue
+
+        # 非 functionDeclarations 工具（googleSearch / codeExecution）严格保持就地位置
+        expanded_tools.append(tool)
+
+    return expanded_tools
+
+def _canonicalize_system_instruction(system_instruction: Dict[str, Any]) -> Dict[str, Any]:
+    """规范化 systemInstruction 为官方形态 {role: "user", parts: [...]}，统一键序 role -> parts -> 其余。
+
+    官方报文 systemInstruction 恒为:
+        { "role": "user", "parts": [ { "text": ... }, ... ] }
+    """
+    if not isinstance(system_instruction, dict):
+        return system_instruction
+
+    canonical: Dict[str, Any] = {}
+    role = system_instruction.get("role")
+    if not isinstance(role, str) or not role:
+        role = "user"
+    canonical["role"] = role
+    if "parts" in system_instruction:
+        canonical["parts"] = system_instruction["parts"]
+    for key, value in system_instruction.items():
+        if key not in ("role", "parts"):
+            canonical[key] = value
+    return canonical
+
+def _enforce_uppercase_schema_types(schema: Any) -> None:
+    """递归将 schema 的 type 字段值转为大写（官方 HAR 全工具采用大写类型标记 OBJECT/STRING/...）。
+
+    注意：仅转换 type 键的值，其他字段（如 enum 值、format）保持原样。
+    """
+    if isinstance(schema, dict):
+        type_value = schema.get("type")
+        if isinstance(type_value, str):
+            schema["type"] = type_value.upper()
+        for key in ("properties",):
+            if isinstance(schema.get(key), dict):
+                for prop_schema in schema[key].values():
+                    _enforce_uppercase_schema_types(prop_schema)
+        if isinstance(schema.get("items"), (dict, list)):
+            _enforce_uppercase_schema_types(schema["items"])
+    elif isinstance(schema, list):
+        for item in schema:
+            _enforce_uppercase_schema_types(item)
+
+def _normalize_generation_config(
+    result: Dict[str, Any],
+    generation_config: Dict[str, Any],
+    upstream: str,
+) -> Dict[str, Any]:
+    """thinkingConfig / generationConfig 归一（对齐官方拓扑）。
+
+    - Claude + 强制工具调用（toolConfig mode=ANY）时剔除 thinkingConfig，
+      杜绝 Anthropic "Thinking may not be enabled when tool_choice forces tool use" 400；
+    - Claude thinkingBudget 下限保护（Anthropic 规范 >= 1024）；
+    - 不伪造 topK / topP（官方报文不携带，保留客户端显式值）。
+    """
+    is_claude = "claude" in (upstream or "").lower()
+
+    if is_claude:
+        tool_config = result.get("toolConfig")
+        forced_tool_choice = (
+            isinstance(tool_config, dict)
+            and str(
+                (tool_config.get("functionCallingConfig") or {}).get("mode", "")
+            ).upper() == "ANY"
+        )
+        if forced_tool_choice:
+            if generation_config.pop("thinkingConfig", None) is not None:
+                print(
+                    "[ANTIGRAVITY] Claude 目标带强制工具调用 (mode=ANY)，剔除 thinkingConfig "
+                    "防止上游 400 (thinking 与 tool_choice 冲突)",
+                    flush=True,
+                )
+
+        thinking_config = generation_config.get("thinkingConfig")
+        if isinstance(thinking_config, dict):
+            budget = thinking_config.get("thinkingBudget")
+            if isinstance(budget, int) and not isinstance(budget, bool) and 0 < budget < CLAUDE_MIN_THINKING_BUDGET:
+                print(
+                    f"[ANTIGRAVITY] Claude thinkingBudget {budget} 低于 Anthropic 规范下限，"
+                    f"钳制为 {CLAUDE_MIN_THINKING_BUDGET}",
+                    flush=True,
+                )
+                thinking_config["thinkingBudget"] = CLAUDE_MIN_THINKING_BUDGET
+
+    # 官方标配 maxOutputTokens（在 thinkingConfig 剔除/钳制之后补齐）：
+    # Claude 64000（严禁超 64k），Gemini 家族 65536
+    default_max_output = CLAUDE_MAX_OUTPUT_TOKENS if is_claude else GEMINI_MAX_OUTPUT_TOKENS
+    if generation_config.get("maxOutputTokens") in (None, 65536, 64000):
+        generation_config["maxOutputTokens"] = default_max_output
+
+    # generationConfig 内部键序: candidateCount -> maxOutputTokens -> thinkingConfig -> temperature -> topP -> topK -> 其余
+    ordered_keys = [
+        "candidateCount",
+        "maxOutputTokens",
+        "thinkingConfig",
+        "temperature",
+        "topP",
+        "topK",
+    ]
+    reordered: Dict[str, Any] = {}
+    for key in ordered_keys:
+        if key in generation_config:
+            reordered[key] = generation_config.pop(key)
+    for key, value in generation_config.items():
+        if key not in reordered:
+            reordered[key] = value
+    return reordered

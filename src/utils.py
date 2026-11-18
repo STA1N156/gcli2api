@@ -1,5 +1,4 @@
 from typing import List, Optional
-import asyncio
 
 from config import get_api_password, get_panel_password
 from fastapi import Depends, HTTPException, Header, Query, Request, status
@@ -11,43 +10,14 @@ security = HTTPBearer()
 
 # ====================== OAuth Configuration ======================
 
-# Antigravity CLI 客户端仿真常量
-_DEFAULT_ANTIGRAVITY_CLI_VERSION = "1.5.9"
-
-
-async def _get_latest_antigravity_cli_version() -> str:
-    from src.httpx_client import get_async
-    try:
-        response = await get_async(
-            "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/windows_amd64.json",
-            timeout=10.0,
-            follow_redirects=True,
-        )
-        response.raise_for_status()
-        release = response.json()
-        tag = release.get("version") if isinstance(release, dict) else None
-        if isinstance(tag, str) and tag.strip().lstrip("vV"):
-            return tag.strip().lstrip("vV")
-    except Exception as error:
-        log.warning(f"获取 Antigravity CLI 版本失败，保留当前版本: {type(error).__name__}")
-    return ANTIGRAVITY_CLI_VERSION
-
-
-ANTIGRAVITY_CLI_VERSION = _DEFAULT_ANTIGRAVITY_CLI_VERSION
+ANTIGRAVITY_CLI_VERSION = "2.28.0"
 ANTIGRAVITY_CLI_PLATFORM = "os_type=windows; arch=amd64"
+ANTIGRAVITY_USER_AGENT = "antigravity/hub/2.28.0 (aidev_client; os_type=windows; arch=amd64; cl=1008300195)"
 
 
 def get_antigravity_user_agent():
-    build = "; cl=1021519450" if ANTIGRAVITY_CLI_VERSION == "1.5.9" else ""
-    return (f"antigravity/cli/{ANTIGRAVITY_CLI_VERSION} (aidev_client; {ANTIGRAVITY_CLI_PLATFORM}"
-            f"{build}; auth_method=consumer; datacollection_opt_in=false; host_path=unknown/unknown)")
+    return ANTIGRAVITY_USER_AGENT
 
-
-async def antigravity_version_updater():
-    global ANTIGRAVITY_CLI_VERSION
-    while True:
-        ANTIGRAVITY_CLI_VERSION = await _get_latest_antigravity_cli_version()
-        await asyncio.sleep(3 * 60 * 60)
 
 # Antigravity OAuth Configuration
 ANTIGRAVITY_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"

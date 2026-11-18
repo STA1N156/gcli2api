@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 from fastapi import Response
 from src.converter.anti_truncation import move_system_to_first_user
-from src.antigravity_identity import complete_execution, ExecutionStream, order_request
+from src.antigravity_identity import order_request
 
 
 class PromptTransferTests(unittest.TestCase):
@@ -52,7 +52,7 @@ class PromptTransferTests(unittest.TestCase):
 
 
 class PromptRetryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_text_request_omits_agent_type_and_preserves_prompt(self):
+    async def test_text_request_uses_chat_and_preserves_prompt(self):
         path = Path(__file__).resolve().parents[1] / "src/api/antigravity.py"
         node = next(n for n in ast.parse(path.read_text(encoding="utf-8")).body
                     if isinstance(n, ast.AsyncFunctionDef) and n.name == "wrap_cli_request")
@@ -69,8 +69,8 @@ class PromptRetryTests(unittest.IsolatedAsyncioTestCase):
             if "image" in model:
                 self.assertEqual(body["requestType"], "image_gen")
             else:
-                self.assertNotIn("requestType", body)
-            self.assertEqual(body["request"]["systemInstruction"], original["systemInstruction"])
+                self.assertEqual(body["requestType"], "chat")
+            self.assertEqual(body["request"]["systemInstruction"]["parts"], original["systemInstruction"]["parts"])
             self.assertEqual(body["request"]["contents"], original["contents"])
         self.assertEqual(request, original)
 
@@ -100,7 +100,7 @@ class PromptRetryTests(unittest.IsolatedAsyncioTestCase):
 
                     scope = dict(PromptTransferTests.scope)
                     scope.update(asyncio=asyncio, log=SimpleNamespace(info=lambda *a: None, warning=lambda *a: None),
-                                 complete_execution=complete_execution, ExecutionStream=ExecutionStream, order_request=order_request,
+                                 order_request=order_request,
                                  extract_cache_session_key=lambda *a: "session", _get_valid_request_credential=select,
                                  get_antigravity_api_url=AsyncMock(return_value="https://example.invalid"),
                                  build_antigravity_headers=lambda *a: {}, wrap_cli_request=AsyncMock(return_value=(payload, "id")),

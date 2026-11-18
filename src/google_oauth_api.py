@@ -569,7 +569,7 @@ async def _try_onboard_user(
         "tier_id": tier_id,
         "metadata": {
             "ide_type": "ANTIGRAVITY",
-            "ide_version": headers.get("User-Agent", "").split("/cli/")[-1].split(" ")[0],
+            "ide_version": headers.get("User-Agent", "").split(" ")[0].rsplit("/", 1)[-1],
             "ide_name": "antigravity",
         }
     }

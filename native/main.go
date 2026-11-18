@@ -81,6 +81,7 @@ func (b *bridge) transport(account, proxyURL string) (*http.Transport, error) {
 			return nil, os.ErrInvalid
 		}
 	}
+	tr = CloneAntigravityTransport(tr)
 	if old, ok := b.pools[account]; ok {
 		old.transport.CloseIdleConnections()
 	}
@@ -139,10 +140,14 @@ func (b *bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if req.Header.Get("Accept-Encoding") == "gzip" {
 		req.Header.Del("Accept-Encoding")
 	}
-	req.ContentLength = r.ContentLength
-	if strings.Contains(target.Path, ":streamGenerateContent") {
-		req.ContentLength = -1
+	for _, key := range []string{"X-Client-Name", "X-Client-Version", "X-Machine-Id", "X-Vscode-Sessionid", "X-Session-Id", "Accept-Language", "X-Goog-Api-Client", "RequestId", "RequestType"} {
+		req.Header.Del(key)
 	}
+	req.Header.Set("Connection", "keep-alive")
+	if req.Header.Get("Accept") == "" {
+		req.Header.Set("Accept", "*/*")
+	}
+	req.ContentLength = r.ContentLength
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
 		http.Error(w, "Account upstream connection failed", 502)

@@ -26,7 +26,6 @@ from src.router.antigravity.gemini import router as antigravity_gemini_router
 from src.router.antigravity.anthropic import router as antigravity_anthropic_router
 from src.router.antigravity.model_list import router as antigravity_model_list_router
 from src.task_manager import shutdown_all_tasks, create_managed_task
-from src.utils import antigravity_version_updater
 from src.httpx_client import close_http_clients
 from src.panel import router as panel_router
 from src.panel.root import FRONTEND_DIST
@@ -103,7 +102,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error(f"凭证管理器初始化失败: {e}")
 
-    create_managed_task(antigravity_version_updater(), name="antigravity-version")
 
     # OAuth回调服务器将在需要时按需启动
 

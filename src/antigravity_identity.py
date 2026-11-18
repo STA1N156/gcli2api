@@ -1,76 +1,135 @@
-"""Keep request IDs and trace labels tied to the existing conversation identity."""
-
+"""agy2api-compatible request IDs, labels and field ordering."""
 import hashlib
 import json
 import uuid
-from collections import OrderedDict
-from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+def _stable_json(value: Any) -> Optional[str]:
+    """稳定序列化（排序键），失败返回 None"""
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
 
-_model_catalogs = OrderedDict()
-_session_usage = OrderedDict()
-_executions = OrderedDict()
-_default_model_limits = json.loads(Path(__file__).with_name("antigravity_model_limits.json").read_text())
+def _anchor_part_feature(part: Any) -> Optional[str]:
+    """提取单个 part 的稳定特征（文本或首个 functionCall 的名称+参数）。"""
+    if not isinstance(part, dict):
+        return None
+    if isinstance(part.get("text"), str) and part["text"]:
+        return f"text:{part['text']}"
+    fc = part.get("functionCall") or part.get("function_call")
+    if isinstance(fc, dict):
+        name = fc.get("name") or ""
+        args_json = _stable_json(fc.get("args"))
+        if args_json is not None:
+            return f"fc:{name}:{args_json}"
+        return f"fc:{name}"
+    return None
 
+def _anchor_message_features(content: Any) -> Optional[str]:
+    """提取一条消息的稳定特征（按 part 顺序拼接，最多取前 4 个 part）。"""
+    if not isinstance(content, dict):
+        return None
+    parts = content.get("parts")
+    if not isinstance(parts, list):
+        return None
+    features = []
+    for part in parts[:4]:
+        feature = _anchor_part_feature(part)
+        if feature is not None:
+            features.append(feature)
+    return "|".join(features) if features else None
 
-def _put_bounded(cache, key, value, limit):
-    cache[key] = value
-    cache.move_to_end(key)
-    if len(cache) > limit:
-        cache.popitem(last=False)
+def derive_conversation_anchor(
+    model_name: str, gemini_request: Dict[str, Any]
+) -> Optional[bytes]:
+    """
+    派生会话联合锚点摘要: SHA256(model + systemInstruction 文本 + 前两条消息特征)。
 
+    联合摘要同时供两处使用，保证锚点口径一致:
+    - derive_session_key: 凭证亲和会话 key
+    - wrap_cli_request: 上游 sessionId / trajectory_id 派生
 
-def cache_model_enums(account_id, models):
-    if account_id:
-        _put_bounded(_model_catalogs, account_id, {
-            name: {key: entry[key] for key in ("model", "maxOutputTokens") if key in entry}
-            for name, entry in models.items() if isinstance(entry, dict)
-        }, 8192)
+    锚点必须包含前两条消息特征，避免共用相同 systemInstruction 的
+    不同会话（多 Agent / 主子会话场景）派生出相同的 key 发生撞车。
 
+    必须在格式转换完成后调用（openai2gemini / anthropic2gemini / 原生 gemini 都已
+    转成 Gemini 格式），保证不同 API 格式的相同内容派生相同的锚点。
 
-def model_output_limit(model, account_id=None):
-    catalog = _model_catalogs.get(account_id, {})
-    value = catalog.get(model, {}).get("maxOutputTokens", _default_model_limits.get(model))
-    return value if type(value) is int and value > 0 else None
+    Returns:
+        32 字节 SHA256 摘要；无法派生锚点时返回 None
+    """
+    if not isinstance(gemini_request, dict):
+        return None
 
+    model_part = model_name if isinstance(model_name, str) else ""
 
-def _trace_uuid(kind, identity):
-    digest = hashlib.sha256(f"antigravity:{kind}:{identity}".encode()).digest()
-    return str(uuid.UUID(bytes=digest[:16], version=4))
+    # systemInstruction 文本（对话稳定的锚点之一）
+    system_text = ""
+    system_instruction = gemini_request.get("systemInstruction")
+    if isinstance(system_instruction, dict):
+        parts = system_instruction.get("parts")
+        if isinstance(parts, list):
+            texts = [
+                str(part.get("text"))
+                for part in parts
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            ]
+            system_text = "\n".join(texts)
 
+    # 前两条消息特征（区分同 systemInstruction 下的不同会话）
+    message_features: List[str] = []
+    contents = gemini_request.get("contents")
+    if isinstance(contents, list):
+        for content in contents[:2]:
+            feature = _anchor_message_features(content)
+            if feature is not None:
+                message_features.append(feature)
+    messages_part = "\x1f".join(message_features)
 
-def complete_execution(request, response):
-    response = response.get("response", response)
-    candidates = response.get("candidates") or []
-    key = (request.get("labels") or {}).get("request_id")
-    if key and not response.get("error") and candidates and candidates[0].get("finishReason"):
-        if key not in _executions:
-            _put_bounded(_executions, key, str(uuid.uuid4()), 32768)
+    if not system_text and not messages_part:
+        return None
 
+    anchor_material = f"{model_part}\x1e{system_text}\x1e{messages_part}"
+    return hashlib.sha256(anchor_material.encode("utf-8")).digest()
 
-class ExecutionStream:
-    def __init__(self, request):
-        self.request = request
-        self.pending = b""
+def _build_labels(model: str, trajectory_id: str, step: int) -> Dict[str, str]:
+    """构建官方上下文标签元数据（键序按官方字母序排布）。
 
-    def observe(self, chunk):
-        raw = chunk if isinstance(chunk, bytes) else (chunk + "\n").encode()
-        lines = (self.pending + raw).split(b"\n")
-        self.pending = lines.pop()
-        for line in lines:
-            if line.startswith(b"data:") and b'"finishReason"' in line:
-                try:
-                    complete_execution(self.request, json.loads(line[5:]))
-                except (ValueError, AttributeError, TypeError):
-                    pass
+    官方样本（HAR 抓包）：
+    {
+      "last_step_index": "2",
+      "model_enum": "MODEL_PLACEHOLDER_M320",
+      "request_id": "0917011e-4959-4da9-8554-20499ed72869-2",
+      "trajectory_id": "0917011e-4959-4da9-8554-20499ed72869",
+      "used_claude": "false",
+      "used_claude_conservative": "false",
+      "used_non_gemini_model": "false"
+    }
 
+    step 传入「当前步索引」（模型轮数 + 1），与顶层 requestId 末段同步，
+    request_id 同步使用该值。
+    """
+    model_lower = model.lower() if model else ""
+    used_claude = "claude" in model_lower
+    # used_non_gemini_model：Claude / gpt-oss 等非 Gemini 家族模型为 true
+    used_non_gemini = used_claude or "gpt-oss" in model_lower or "grok" in model_lower
+    return {
+        "last_step_index": str(step),
+        "model_enum": model,
+        "request_id": f"{trajectory_id}-{step}",
+        "trajectory_id": trajectory_id,
+        "used_claude": str(used_claude).lower(),
+        "used_claude_conservative": str(used_claude).lower(),
+        "used_non_gemini_model": str(used_non_gemini).lower(),
+    }
 
 _JSON_ORDER = {
     "": ("project", "requestId", "request", "model", "userAgent", "requestType"),
-    "request": ("contents", "systemInstruction", "tools", "labels", "generationConfig", "sessionId"),
+    "request": ("contents", "systemInstruction", "tools", "toolConfig", "labels", "generationConfig", "sessionId"),
     "request.contents[]": ("role", "parts"),
     "request.systemInstruction": ("role", "parts"),
-    "request.generationConfig": ("maxOutputTokens", "thinkingConfig"),
+    "request.generationConfig": ("candidateCount", "maxOutputTokens", "thinkingConfig", "temperature", "topP", "topK"),
     "request.generationConfig.thinkingConfig": ("includeThoughts", "thinkingLevel", "thinkingBudget"),
     "request.tools[]": ("functionDeclarations",),
     "request.tools[].functionDeclarations[]": ("name", "description", "parameters"),
@@ -88,44 +147,18 @@ def order_request(value, path=""):
             for key in keys if key in value}
 
 
-def bind_request_identity(request, model="", account_id=None):
-    labels = dict(request.get("labels") or {})
-    cascade = str(labels.get("cascade_id") or "").strip() or _trace_uuid("cascade", request["sessionId"])
-    trajectory = str(labels.get("trajectory_id") or "").strip() or _trace_uuid("trajectory", cascade)
 
-    # A planner reply is one model request; each tool result is a separate step.
-    steps = requests = 0
-    for content in request.get("contents") or []:
-        responses = sum("functionResponse" in part for part in content.get("parts") or [])
-        steps += max(1, responses)
-        if not responses and content.get("role") in ("model", "assistant"):
-            requests += 1
-    try:
-        step = int(labels["last_step_index"])
-    except (KeyError, TypeError, ValueError):
-        step = -1
-    if step < 0:
-        step = max(0, steps - 1)
-    labels.update(cascade_id=cascade, trajectory_id=trajectory,
-                  root_cascade_id=labels.get("root_cascade_id") or cascade,
-                  last_step_index=str(step))
-    if not str(labels.get("request_id") or "").strip():
-        labels["request_id"] = f"{trajectory}-{requests}"
-    previous = _executions.get(f"{trajectory}-{requests - 1}") if requests else None
-    if previous and not labels.get("last_execution_id"):
-        labels["last_execution_id"] = previous
-    used = _session_usage.get(cascade, 0)
-    if "claude" in model.lower() or labels.get("used_claude") == "true" or labels.get("used_claude_conservative") == "true":
-        used |= 1
-    if (model and not model.lower().startswith("gemini-")) or labels.get("used_non_gemini_model") == "true":
-        used |= 2
-    _put_bounded(_session_usage, cascade, used, 16384)
-    labels["used_claude"] = labels["used_claude_conservative"] = str(bool(used & 1)).lower()
-    labels["used_non_gemini_model"] = str(bool(used & 2)).lower()
-    catalog = _model_catalogs.get(account_id)
-    if catalog is not None:
-        _model_catalogs.move_to_end(account_id)
-        if catalog.get(model, {}).get("model"):
-            labels["model_enum"] = catalog[model]["model"]
-    request["labels"] = labels
-    return cascade, trajectory, step + 1
+def derive_session_ids(request, model):
+    digest = derive_conversation_anchor(model, request)
+    if digest is None:
+        return "", ""
+    return f"-{int.from_bytes(digest[:8], 'big') & 0x7FFFFFFFFFFFFFFF}", str(uuid.UUID(bytes=digest[8:24]))
+
+
+def bind_request_identity(request, model="", account_id=None):
+    _, trajectory = derive_session_ids(request, model)
+    trajectory = trajectory or str(uuid.uuid4())
+    step = 1 + sum(isinstance(content, dict) and content.get("role") == "model" for content in request.get("contents", []))
+    request["labels"] = _build_labels(model, trajectory, step)
+    conversation = hashlib.sha256(str(request["sessionId"]).encode()).hexdigest()[:16]
+    return conversation, trajectory, step

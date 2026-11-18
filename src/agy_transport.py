@@ -1,4 +1,4 @@
-"""Account-scoped HTTP transport backed by the CPA Go TLS profile."""
+"""Account-scoped HTTP transport using the HTTPX/OpenSSL wire profile."""
 
 import asyncio
 import hashlib

@@ -1,4 +1,4 @@
-"""Build the same Go TLS profile used by CPA."""
+"""Build the pooled HTTPX/OpenSSL transport."""
 
 import os
 import pathlib
@@ -15,14 +15,8 @@ def build():
     environment = dict(os.environ, GOTOOLCHAIN="local")
     output = ROOT / "bin" / ("agy-http.exe" if os.name == "nt" else "agy-http")
     output.parent.mkdir(exist_ok=True)
-    overlay = pathlib.Path(subprocess.check_output(
-        [go, "run", "./overlay"], cwd=ROOT, env=environment, text=True,
-    ).strip())
-    try:
-        subprocess.run([go, "build", f"-overlay={overlay}", "-o", str(output), "."],
-                       cwd=ROOT, env=environment, check=True)
-    finally:
-        shutil.rmtree(overlay.parent)
+    subprocess.run([go, "build", "-o", str(output), "."],
+                   cwd=ROOT, env=environment, check=True)
     return output
 
 

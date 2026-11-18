@@ -1,7 +1,6 @@
 """Google Antigravity API client."""
 
 import asyncio
-import hashlib
 import json
 import time
 import uuid
@@ -41,8 +40,7 @@ from src.converter.anti_truncation import move_system_to_first_user
 from src.converter.antigravity_fix import ensure_user_ending
 from src.httpx_client import post_async, stream_post_async
 from src.agy_transport import credential_http_options
-from src.antigravity_identity import bind_request_identity, cache_model_enums, model_output_limit
-from src.antigravity_identity import complete_execution, ExecutionStream, order_request
+from src.antigravity_identity import bind_request_identity, derive_session_ids, order_request
 from src.models import Model, model_to_dict
 from src.session_affinity import extract_cache_session_key
 from src.utils import get_antigravity_user_agent
@@ -52,35 +50,14 @@ _RESOURCE_EXHAUSTED_MESSAGE = "Resource has been exhausted (e.g. check quota)."
 _ANTIGRAVITY_CONTENT_POLICY_MESSAGE = "系统提示词中含有被标记内容，请清理后重试。"
 
 
-def _extract_first_user_text(request_payload: Dict[str, Any]) -> str:
-    contents = request_payload.get("contents", [])
-    if not isinstance(contents, list):
-        return ""
-    for content in contents:
-        if not isinstance(content, dict) or content.get("role") != "user":
-            continue
-        for part in content.get("parts", []):
-            if isinstance(part, dict) and part.get("text"):
-                return str(part["text"])
-    return ""
-
-
-def _generate_stable_session_id(request_payload: Dict[str, Any], session_key=None) -> str:
-    first_user_text = session_key or _extract_first_user_text(request_payload)
-    if first_user_text:
-        digest = hashlib.sha256(first_user_text.encode("utf-8")).digest()
-        return f"-{int.from_bytes(digest[:8], 'big') & 0x7FFFFFFFFFFFFFFF}"
-    return f"-{uuid.uuid4().int % 9_000_000_000_000_000_000}"
+def _generate_stable_session_id(request_payload, session_key=None, model=""):
+    session, _ = derive_session_ids(request_payload, model)
+    return session or f"-{uuid.uuid4().int % 9_000_000_000_000_000_000}"
 
 
 def _generate_request_id(model: str, request: Dict[str, Any], account_id=None) -> str:
-    limit = model_output_limit(model, account_id)
-    if limit is not None:
-        request.setdefault("generationConfig", {})["maxOutputTokens"] = limit
-    if "image" in model.lower():
-        return f"image_gen/{int(time.time() * 1000)}/{uuid.uuid4()}/12"
-    cascade, trajectory, step = bind_request_identity(request, model, account_id)
-    return f"agent/{cascade}/{int(time.time() * 1000)}/{trajectory}/{step}"
+    conversation, trajectory, step = bind_request_identity(request, model, account_id)
+    return f"agent/{conversation}/{int(time.time() * 1000)}/{trajectory}/{step}"
 
 
 async def wrap_cli_request(
@@ -91,19 +68,20 @@ async def wrap_cli_request(
     account_id: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], str]:
     inner = ensure_user_ending(dict(gemini_request), model)
-    inner.pop("safetySettings", None)
     if not inner.get("sessionId"):
-        inner["sessionId"] = _generate_stable_session_id(inner, session_key)
+        inner["sessionId"] = _generate_stable_session_id(inner, session_key, model)
 
     generation_config = dict(inner.get("generationConfig") or {})
     inner["generationConfig"] = generation_config
 
-    if "claude" in model.lower():
-        tool_config = inner.get("toolConfig") or {}
-        function_config = tool_config.get("functionCallingConfig") or {}
-        function_config["mode"] = "VALIDATED"
-        tool_config["functionCallingConfig"] = function_config
-        inner["toolConfig"] = tool_config
+    from src.converter.antigravity_fix import _split_tools_single_function, _canonicalize_system_instruction
+    if isinstance(inner.get("tools"), list):
+        inner["tools"] = _split_tools_single_function(inner["tools"])
+    if not inner.get("tools"):
+        inner.pop("tools", None)
+        inner.pop("toolConfig", None)
+    if isinstance(inner.get("systemInstruction"), dict):
+        inner["systemInstruction"] = _canonicalize_system_instruction(inner["systemInstruction"])
 
     request_id = _generate_request_id(model, inner, account_id)
     return (
@@ -113,10 +91,16 @@ async def wrap_cli_request(
             "request": inner,
             "model": model,
             "userAgent": "antigravity",
-            **({"requestType": "image_gen"} if "image" in model.lower() else {}),
+            "requestType": "image_gen" if "image" in model.lower() else "chat",
         },
         request_id,
     )
+
+
+def _sanitize_antigravity_headers(headers):
+    allowed = {"traceparent", "tracestate", "x-cloud-trace-context", "x-goog-request-params", "x-goog-user-project", "x-request-id"}
+    return {key: value for key, value in (headers or {}).items()
+            if key.lower().startswith("x-b3-") or key.lower() in allowed}
 
 
 def build_antigravity_headers(access_token: str) -> Dict[str, str]:
@@ -124,6 +108,7 @@ def build_antigravity_headers(access_token: str) -> Dict[str, str]:
         "User-Agent": get_antigravity_user_agent(),
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
+        "Accept": "*/*",
         "Accept-Encoding": "gzip",
     }
 
@@ -273,7 +258,7 @@ async def stream_request(
     target_url = f"{api_url}/v1internal:streamGenerateContent?alt=sse"
     auth_headers = build_antigravity_headers(token)
     if headers:
-        auth_headers.update(headers)
+        auth_headers.update(_sanitize_antigravity_headers(headers))
     auth_headers["Authorization"] = f"Bearer {token}"
     inner_request = body.get("request", body)
     final_payload, _ = await wrap_cli_request(
@@ -292,7 +277,6 @@ async def stream_request(
         retry_same = False
         buffered_chunks = []
         completion = {"finished": set()}
-        execution = ExecutionStream(final_payload["request"])
         expected_candidates = final_payload["request"].get("generationConfig", {}).get("candidateCount", 1)
         upstream = stream_post_async(
             url=target_url,
@@ -360,7 +344,6 @@ async def stream_request(
                     retry_current = True
                     break
 
-                execution.observe(chunk)
                 response_complete = not native and stream_chunk_finishes_response(
                     chunk, completion, expected_candidates
                 )
@@ -473,7 +456,7 @@ async def non_stream_request(
     target_url = f"{api_url}/v1internal:generateContent"
     auth_headers = build_antigravity_headers(token)
     if headers:
-        auth_headers.update(headers)
+        auth_headers.update(_sanitize_antigravity_headers(headers))
     auth_headers["Authorization"] = f"Bearer {token}"
     inner_request = body.get("request", body)
     final_payload, _ = await wrap_cli_request(
@@ -495,10 +478,6 @@ async def non_stream_request(
                 **http_options,
             )
             if response.status_code == 200:
-                try:
-                    complete_execution(final_payload["request"], response.json())
-                except (ValueError, AttributeError, TypeError):
-                    pass
                 if empty_output_error_enabled and is_empty_model_output(
                     response.content
                 ):
@@ -613,7 +592,6 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
 
         data = response.json()
         models = data.get("models", {})
-        cache_model_enums(credential_http_options(credential_data)["account_id"], models)
         timestamp = int(datetime.now(timezone.utc).timestamp())
         result_models = [
             model_to_dict(

@@ -79,7 +79,7 @@ class HttpxClientManager:
                 )
                 client_kwargs["trust_env"] = False
             client = httpx.AsyncClient(**client_kwargs)
-            client.headers["User-Agent"] = "Go-http-client/1.1"
+            client.headers["User-Agent"] = "python-httpx/0.28.1"
             client.headers["Accept-Encoding"] = "gzip"
             client.headers.pop("Accept", None)
             client.headers.pop("Connection", None)

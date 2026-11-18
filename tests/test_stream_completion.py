@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 from fastapi import Response
 from src.api.empty_output import stream_chunk_finishes_response, stream_chunk_has_visible_output
-from src.antigravity_identity import ExecutionStream, order_request
+from src.antigravity_identity import order_request
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,7 +53,7 @@ class StreamCompletionTests(unittest.IsolatedAsyncioTestCase):
 
         payload = {"request": {"generationConfig": {}}}
         namespace = {
-            "ExecutionStream": ExecutionStream, "order_request": order_request,
+            "order_request": order_request,
             "asyncio": asyncio, "json": json, "Response": Response,
             "log": SimpleNamespace(warning=lambda *args: None),
             "extract_cache_session_key": lambda *args: None,
