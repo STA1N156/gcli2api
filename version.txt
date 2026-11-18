@@ -1,4 +1,4 @@
-full_hash=af8ecd42ff59b53b725b2d862027aa56ee027859
-short_hash=af8ecd4
-message=feat: align Antigravity Hub requests while preserving thinking controls
-date=2026-11-18 13:52:52 +0800
+full_hash=1023ca4ae4f641ba50e86b619ad3432149ca3041
+short_hash=1023ca4
+message=fix: improve Antigravity routing and stream handling
+date=2026-11-18 20:11:55 +0800
