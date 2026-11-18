@@ -1,4 +1,4 @@
-full_hash=a6e70ae4deb2d129eecd419316f73b6295836d5e
-short_hash=a6e70ae
-message=feat: align Antigravity request metadata and official model limits
-date=2026-11-16 15:57:54 +0800
+full_hash=af8ecd42ff59b53b725b2d862027aa56ee027859
+short_hash=af8ecd4
+message=feat: align Antigravity Hub requests while preserving thinking controls
+date=2026-11-18 13:52:52 +0800
