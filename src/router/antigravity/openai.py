@@ -68,7 +68,6 @@ async def chat_completions(
     model_name = normalized_dict["model"]
 
     log.debug(f"[ANTIGRAVITY-OPENAI] Request for model: {model_name}")
-    cache_session_key = extract_cache_session_key(normalized_dict, request.headers)
 
     # 健康检查
     if is_health_check_request(normalized_dict, format="openai"):
@@ -107,6 +106,7 @@ async def chat_completions(
         raise HTTPException(status_code=400, detail=f"Invalid image input: {exc}") from exc
 
     # 准备API请求格式 - 提取model并将其他字段放入request中
+    cache_session_key = extract_cache_session_key(normalized_dict, request.headers, gemini_request=gemini_dict)
     api_request = {
         "model": gemini_dict.pop("model"),
         "request": gemini_dict,

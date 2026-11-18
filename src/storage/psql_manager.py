@@ -36,6 +36,7 @@ class PSQLManager:
         "preview",
         "tier",
         "enable_credit",
+        "supported_models",
     }
 
     def __init__(self):
@@ -193,6 +194,7 @@ class PSQLManager:
                 ("model_cooldowns", "TEXT DEFAULT '{}'"),
                 ("tier", "TEXT DEFAULT 'pro'"),
                 ("enable_credit", "INTEGER DEFAULT 0"),
+                ("supported_models", "TEXT"),
                 ("rotation_order", "INTEGER DEFAULT 0"),
                 ("call_count", "INTEGER DEFAULT 0"),
                 ("created_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
@@ -409,9 +411,9 @@ class PSQLManager:
 
             for key, value in state_updates.items():
                 if key in self.STATE_FIELDS:
-                    if key == "enable_credit" and mode != "antigravity":
+                    if key in ("enable_credit", "supported_models") and mode != "antigravity":
                         continue
-                    if key in ("error_codes", "error_messages", "model_cooldowns"):
+                    if key in ("error_codes", "error_messages", "model_cooldowns", "supported_models"):
                         set_clauses.append(f"{key} = ${idx}")
                         values.append(json.dumps(value))
                     else:
@@ -477,7 +479,7 @@ class PSQLManager:
                     }
                 else:
                     row = await conn.fetchrow(f"""
-                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns, tier, enable_credit
+                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns, tier, enable_credit, supported_models
                         FROM {table_name} WHERE filename = $1
                     """, filename)
 
@@ -490,6 +492,7 @@ class PSQLManager:
                             "model_cooldowns": json.loads(row["model_cooldowns"] or "{}"),
                             "tier": row["tier"] if row["tier"] is not None else "pro",
                             "enable_credit": bool(row["enable_credit"]) if row["enable_credit"] is not None else False,
+                            "supported_models": json.loads(row["supported_models"] or "[]"),
                         }
 
                     return {
@@ -541,7 +544,7 @@ class PSQLManager:
                 else:
                     rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, model_cooldowns, tier, enable_credit
+                               user_email, model_cooldowns, tier, enable_credit, supported_models
                         FROM {table_name}
                     """)
 
@@ -559,6 +562,7 @@ class PSQLManager:
                             "model_cooldowns": model_cooldowns,
                             "tier": row["tier"] if row["tier"] is not None else "pro",
                             "enable_credit": bool(row["enable_credit"]) if row["enable_credit"] is not None else False,
+                            "supported_models": json.loads(row["supported_models"] or "[]"),
                         }
                     return states
 

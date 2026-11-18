@@ -18,6 +18,7 @@ from log import log
 from src.google_oauth_api import Credentials, fetch_project_id_and_tier, get_user_email
 from src.credential_identity import normalize_email
 from src.model_cooldown import has_active_model_cooldown
+from src.model_support import supports_model
 from src.storage_adapter import get_storage_adapter
 from src.subscription import normalize_subscription_tier
 from src.task_manager import create_managed_task
@@ -230,7 +231,7 @@ class CredentialManager:
             return False
 
 
-        return True
+        return mode != "antigravity" or supports_model(state.get("supported_models"), model_name) is not False
 
     async def _get_available_credential(
         self, *, mode: str, model_name: Optional[str], exclude_credentials: Set[str],
@@ -240,11 +241,15 @@ class CredentialManager:
         selection_state = {} if selection_state is None else selection_state
         if "candidates" not in selection_state:
             states = await self._storage_adapter.get_all_credential_states(mode=mode)
-            candidates = [
-                os.path.basename(filename) for filename, state in states.items()
-                if os.path.basename(filename) not in exclude_credentials
-                and self._credential_state_allows_model(state, mode=mode, model_name=model_name)
-            ]
+            matched, unknown = [], []
+            for filename, state in states.items():
+                if os.path.basename(filename) in exclude_credentials or not self._credential_state_allows_model(
+                    state, mode=mode, model_name=model_name
+                ):
+                    continue
+                group = matched if mode != "antigravity" or not model_name or state.get("supported_models") else unknown
+                group.append(os.path.basename(filename))
+            candidates = matched or unknown
             if session_fallback_key:
                 candidates.sort(key=lambda filename: (
                     hashlib.sha256(f"{session_fallback_key}\0{filename}".encode("utf-8")).digest(), filename
@@ -259,7 +264,9 @@ class CredentialManager:
                         start = self._round_robin_cursors.get(cursor_key, 0) % len(candidates)
                         self._round_robin_cursors[cursor_key] = start + 1
                     candidates = candidates[start:] + candidates[:start]
-            selection_state.update(candidates=candidates, position=0)
+            # Try unprobed accounts only after all confirmed matches are exhausted.
+            fallback = sorted(unknown) if matched else []
+            selection_state.update(candidates=candidates + fallback, position=0)
 
         candidates = selection_state["candidates"]
         while selection_state["position"] < len(candidates):

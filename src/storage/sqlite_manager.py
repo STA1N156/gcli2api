@@ -37,6 +37,7 @@ class SQLiteManager:
         "preview",
         "tier",
         "enable_credit",
+        "supported_models",
     }
 
     # 所有必需的列定义（用于自动校验和修复）
@@ -64,6 +65,7 @@ class SQLiteManager:
             ("model_cooldowns", "TEXT DEFAULT '{}'"),
             ("tier", "TEXT DEFAULT 'pro'"),
             ("enable_credit", "INTEGER DEFAULT 0"),
+            ("supported_models", "TEXT"),
             ("rotation_order", "INTEGER DEFAULT 0"),
             ("call_count", "INTEGER DEFAULT 0"),
             ("created_at", "REAL DEFAULT (unixepoch())"),
@@ -558,7 +560,7 @@ class SQLiteManager:
         async with self._connection() as db:
             async with db.execute(
                 f"SELECT credential_data,disabled,error_codes,last_success,user_email,"
-                f"model_cooldowns,tier,{extra} FROM {table} WHERE filename=?",
+                f"model_cooldowns,tier,{extra},{'supported_models' if mode == 'antigravity' else 'NULL'} FROM {table} WHERE filename=?",
                 (os.path.basename(filename),),
             ) as cursor:
                 row = await cursor.fetchone()
@@ -570,6 +572,7 @@ class SQLiteManager:
             "model_cooldowns": json.loads(row[5] or "{}"),
             "tier": row[6] if row[6] is not None else "pro",
             extra: bool(row[7]) if row[7] is not None else mode == "geminicli",
+            "supported_models": json.loads(row[8] or "[]"),
         }
         return json.loads(row[0]), state
 
@@ -636,9 +639,9 @@ class SQLiteManager:
 
             for key, value in state_updates.items():
                 if key in self.STATE_FIELDS:
-                    if key == "enable_credit" and mode != "antigravity":
+                    if key in ("enable_credit", "supported_models") and mode != "antigravity":
                         continue
-                    if key in ("error_codes", "error_messages", "model_cooldowns"):
+                    if key in ("error_codes", "error_messages", "model_cooldowns", "supported_models"):
                         # JSON 字段需要序列化
                         set_clauses.append(f"{key} = ?")
                         values.append(json.dumps(value))
@@ -732,7 +735,7 @@ class SQLiteManager:
                 else:
                     # antigravity 模式
                     async with db.execute(f"""
-                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns, tier, enable_credit
+                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns, tier, enable_credit, supported_models
                         FROM {table_name} WHERE filename = ?
                     """, (filename,)) as cursor:
                         row = await cursor.fetchone()
@@ -748,6 +751,7 @@ class SQLiteManager:
                                 "model_cooldowns": json.loads(model_cooldowns_json),
                                 "tier": row[5] if row[5] is not None else "pro",
                                 "enable_credit": bool(row[6]) if row[6] is not None else False,
+                                "supported_models": json.loads(row[7] or "[]"),
                             }
 
                     # 返回默认状态
@@ -811,7 +815,7 @@ class SQLiteManager:
                     # antigravity 模式
                     async with db.execute(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, model_cooldowns, tier, enable_credit
+                               user_email, model_cooldowns, tier, enable_credit, supported_models
                         FROM {table_name}
                     """) as cursor:
                         rows = await cursor.fetchall()
@@ -840,6 +844,7 @@ class SQLiteManager:
                                 "model_cooldowns": model_cooldowns,
                                 "tier": row[6] if row[6] is not None else "pro",
                                 "enable_credit": bool(row[7]) if row[7] is not None else False,
+                                "supported_models": json.loads(row[8] or "[]"),
                             }
 
                         return states

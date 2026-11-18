@@ -1666,7 +1666,7 @@ def convert_gemini_to_openai_stream(
     model: str,
     response_id: str,
     status_code: int = 200,
-    model_state: Optional[Dict[str, str]] = None,
+    model_state: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """
     将 Gemini 格式流式响应块转换为 OpenAI SSE 格式流式响应
@@ -1678,7 +1678,7 @@ def convert_gemini_to_openai_stream(
         model: 模型名称
         response_id: 此流式响应的一致ID
         status_code: HTTP 状态码 (默认 200)
-        model_state: 当前流已收到的真实模型名，避免后续缺省片段退回请求名
+        model_state: 当前流的模型名和各候选回复的工具编号
 
     Returns:
         OpenAI SSE 格式的响应字符串 (如 "data: {json}\n\n"),
@@ -1725,8 +1725,10 @@ def convert_gemini_to_openai_stream(
 
     # 转换为 OpenAI 流式格式
     choices = []
+    tool_counts = model_state.setdefault("tool_call_counts", {}) if model_state is not None else {}
 
     for candidate in gemini_response.get("candidates", []):
+        candidate_index = candidate.get("index", 0)
         role = candidate.get("content", {}).get("role", "assistant")
 
         # 将Gemini角色映射回OpenAI角色
@@ -1738,6 +1740,10 @@ def convert_gemini_to_openai_stream(
 
         # 提取工具调用和文本内容 (流式需要 index)
         tool_calls, text_content = extract_tool_calls_from_parts(parts, is_streaming=True)
+        next_tool_index = tool_counts.get(candidate_index, 0)
+        for offset, tool_call in enumerate(tool_calls):
+            tool_call["index"] = next_tool_index + offset
+        tool_counts[candidate_index] = next_tool_index + len(tool_calls)
 
         # 提取多种类型的内容
         content_parts = []
@@ -1811,11 +1817,11 @@ def convert_gemini_to_openai_stream(
         
         # 只有在正常停止（STOP）且有工具调用时才设为 tool_calls
         # 避免在 SAFETY、MAX_TOKENS 等情况下仍然返回 tool_calls 导致循环
-        if tool_calls and gemini_finish_reason == "STOP":
+        if tool_counts[candidate_index] and gemini_finish_reason == "STOP":
             finish_reason = "tool_calls"
 
         choices.append({
-            "index": candidate.get("index", 0),
+            "index": candidate_index,
             "delta": delta,
             "finish_reason": finish_reason,
         })

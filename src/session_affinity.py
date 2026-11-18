@@ -10,12 +10,16 @@ import json
 import re
 from typing import Any, Mapping, Optional
 
+from src.antigravity_identity import derive_conversation_anchor
+
 _CLAUDE_SESSION_RE = re.compile(r"_session_([a-fA-F0-9-]+)$")
 
 
 def extract_cache_session_key(
     payload: Optional[Mapping[str, Any]],
     headers: Optional[Mapping[str, str]] = None,
+    *,
+    gemini_request: Optional[Mapping[str, Any]] = None,
 ) -> Optional[str]:
     if not isinstance(payload, Mapping):
         return None
@@ -36,7 +40,7 @@ def extract_cache_session_key(
     if isinstance(conversation_id, str) and conversation_id.strip():
         return f"conv:{conversation_id.strip()}"
 
-    request_payload = payload.get("request")
+    request_payload = gemini_request if gemini_request is not None else payload.get("request")
     if isinstance(request_payload, Mapping):
         request_key = _session_key_from_gemini_like_payload(request_payload)
         if request_key:
@@ -45,6 +49,13 @@ def extract_cache_session_key(
     gemini_key = _session_key_from_gemini_like_payload(payload)
     if gemini_key:
         return gemini_key
+
+    # Match the normalized anchor used by upstream session and trajectory IDs.
+    source = request_payload if isinstance(request_payload, Mapping) else payload
+    model = source.get("model") or payload.get("model", "")
+    anchor = derive_conversation_anchor(model, source)
+    if anchor is not None:
+        return f"auto:{anchor.hex()[:32]}"
 
     first_user_text = _first_user_text(payload)
     if first_user_text:

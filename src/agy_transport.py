@@ -46,6 +46,8 @@ class NativeBridge:
         self.lock = asyncio.Lock()
 
     async def start(self):
+        if self.process and self.process.returncode is None and self.address:
+            return self.address
         async with self.lock:
             if self.process and self.process.returncode is None:
                 return self.address

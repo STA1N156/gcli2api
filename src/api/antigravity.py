@@ -44,10 +44,14 @@ from src.antigravity_identity import bind_request_identity, derive_session_ids, 
 from src.models import Model, model_to_dict
 from src.session_affinity import extract_cache_session_key
 from src.utils import get_antigravity_user_agent
+from src.model_support import model_key
+from src.storage_adapter import get_storage_adapter
+from src.task_manager import create_managed_task
 
 
 _RESOURCE_EXHAUSTED_MESSAGE = "Resource has been exhausted (e.g. check quota)."
 _ANTIGRAVITY_CONTENT_POLICY_MESSAGE = "系统提示词中含有被标记内容，请清理后重试。"
+_model_refresh_tasks = {}
 
 
 def _generate_stable_session_id(request_payload, session_key=None, model=""):
@@ -204,6 +208,17 @@ async def _record_response_error(
     status_code: int,
     error_text: str,
 ) -> None:
+    if status_code == 404:
+        storage = await get_storage_adapter()
+        state = await storage.get_credential_state(filename, mode="antigravity")
+        models = state.get("supported_models") or []
+        if models:
+            await storage.update_credential_state(filename, {
+                "supported_models": [name for name in models if model_key(name) != model_key(model_name)]
+            }, mode="antigravity")
+        if filename not in _model_refresh_tasks:
+            create_managed_task(refresh_credential_models(filename), name="refresh-account-models")
+        return
     if status_code == 429:
         try:
             if json.loads(error_text).get("error", {}).get("message") == _RESOURCE_EXHAUSTED_MESSAGE:
@@ -337,7 +352,7 @@ async def stream_request(
                     await _record_response_error(
                         current_file, model_name, chunk.status_code, error_text
                     )
-                    if success_recorded or not is_retryable_status(chunk.status_code):
+                    if success_recorded or (chunk.status_code != 404 and not is_retryable_status(chunk.status_code)):
                         yield client_chunk
                         return
                     last_error = client_chunk
@@ -536,7 +551,7 @@ async def non_stream_request(
             await _record_response_error(
                 current_file, model_name, response.status_code, error_text
             )
-            if not is_retryable_status(response.status_code):
+            if response.status_code != 404 and not is_retryable_status(response.status_code):
                 return last_error
         except Exception as exc:
             log.warning(
@@ -564,6 +579,51 @@ async def non_stream_request(
         auth_headers["Authorization"] = f"Bearer {token}"
         final_payload["project"] = project_id
         final_payload["requestId"] = _generate_request_id(model_name, final_payload["request"], http_options.get("account_id"))
+
+
+async def _refresh_credential_models(filename):
+    storage = await get_storage_adapter()
+    credential_data = await storage.get_credential(filename, mode="antigravity")
+    if not credential_data:
+        return None
+    if await credential_manager._should_refresh_token(credential_data):
+        credential_data = await credential_manager.refresh_credential(filename, mode="antigravity")
+    if not credential_data:
+        return None
+    token = credential_data.get("access_token") or credential_data.get("token")
+    if not token:
+        return None
+    try:
+        api_url = await get_antigravity_api_url()
+        response = await post_async(
+            url=f"{api_url}/v1internal:fetchAvailableModels",
+            json={"project": credential_data.get("project_id") or ""},
+            headers=build_antigravity_headers(token),
+            **credential_http_options(credential_data),
+        )
+        if response.status_code != 200:
+            log.warning(f"[ANTIGRAVITY] Model refresh failed for {filename}: {response.status_code}")
+            return None
+        models = response.json().get("models")
+        if not isinstance(models, dict):
+            return None
+        names = sorted(models)
+        if not await storage.update_credential_state(filename, {"supported_models": names}, mode="antigravity"):
+            return None
+        return names
+    except Exception as exc:
+        log.warning(f"[ANTIGRAVITY] Model refresh failed for {filename}: {exc}")
+        return None
+
+
+async def refresh_credential_models(filename):
+    task = _model_refresh_tasks.get(filename)
+    if task is None:
+        task = create_managed_task(_refresh_credential_models(filename), name="fetch-account-models")
+        _model_refresh_tasks[filename] = task
+        task.add_done_callback(lambda done: _model_refresh_tasks.pop(filename, None)
+                               if _model_refresh_tasks.get(filename) is done else None)
+    return await asyncio.shield(task)
 
 
 async def fetch_available_models() -> List[Dict[str, Any]]:

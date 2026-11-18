@@ -1308,6 +1308,27 @@ async def verify_credential_project(
         raise HTTPException(status_code=500, detail=f"检验失败: {str(e)}")
 
 
+@router.get("/models/{filename}")
+async def get_credential_models(filename: str, token: str = Depends(verify_panel_token)):
+    storage = await get_storage_adapter()
+    if not await storage.get_credential(filename, mode="antigravity"):
+        raise HTTPException(status_code=404, detail="凭证不存在")
+    state = await storage.get_credential_state(filename, mode="antigravity")
+    return {"models": state.get("supported_models") or []}
+
+
+@router.post("/refresh-models/{filename}")
+async def refresh_account_models(filename: str, token: str = Depends(verify_panel_token)):
+    from src.api.antigravity import refresh_credential_models
+    storage = await get_storage_adapter()
+    if not await storage.get_credential(filename, mode="antigravity"):
+        raise HTTPException(status_code=404, detail="凭证不存在")
+    models = await refresh_credential_models(filename)
+    if models is None:
+        raise HTTPException(status_code=502, detail="模型列表刷新失败，已保留原记录")
+    return {"success": True, "models": models, "count": len(models)}
+
+
 @router.get("/errors/{filename}")
 async def get_credential_errors(
     filename: str,

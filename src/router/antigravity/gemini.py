@@ -77,7 +77,6 @@ async def generate_content(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
-    cache_session_key = extract_cache_session_key(normalized_dict, request.headers)
 
     # 健康检查
     if is_health_check_request(normalized_dict, format="gemini"):
@@ -103,6 +102,7 @@ async def generate_content(
         raise HTTPException(status_code=400, detail=f"Invalid image input: {exc}") from exc
 
     # 准备API请求格式 - 提取model并将其他字段放入request中
+    cache_session_key = extract_cache_session_key(normalized_dict, request.headers, gemini_request=normalized_dict)
     api_request = {
         "model": normalized_dict.pop("model"),
         "request": normalized_dict,
@@ -159,7 +159,6 @@ async def stream_generate_content(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
-    cache_session_key = extract_cache_session_key(normalized_dict, request.headers)
 
     # 处理模型名称和功能检测
     use_anti_truncation = is_anti_truncation_model(model)
@@ -177,6 +176,7 @@ async def stream_generate_content(
         normalized_req = await normalize_antigravity_request(normalized_dict.copy())
 
         # 准备API请求格式 - 提取model并将其他字段放入request中
+        cache_session_key = extract_cache_session_key(normalized_dict, request.headers, gemini_request=normalized_req)
         api_request = {
             "model": normalized_req.pop("model"),
             "request": normalized_req,

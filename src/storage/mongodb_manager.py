@@ -35,6 +35,7 @@ class MongoDBManager:
         "preview",
         "tier",
         "enable_credit",
+        "supported_models",
     }
 
     @staticmethod
@@ -729,6 +730,7 @@ class MongoDBManager:
 
             if mode != "antigravity":
                 valid_updates.pop("enable_credit", None)
+                valid_updates.pop("supported_models", None)
 
             if not valid_updates:
                 return True
@@ -807,6 +809,7 @@ class MongoDBManager:
                 }
                 if mode == "antigravity":
                     state["enable_credit"] = doc.get("enable_credit", False)
+                    state["supported_models"] = doc.get("supported_models", [])
                 return state
 
             # 返回默认状态
@@ -846,6 +849,7 @@ class MongoDBManager:
                 "preview": 1,
                 "tier": 1,
                 "enable_credit": 1,
+                "supported_models": 1,
                 "_id": 0
             }
 
@@ -876,6 +880,7 @@ class MongoDBManager:
                 }
                 if mode == "antigravity":
                     state["enable_credit"] = doc.get("enable_credit", False)
+                    state["supported_models"] = doc.get("supported_models", [])
                 states[filename] = state
 
             return states

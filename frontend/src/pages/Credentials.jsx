@@ -146,9 +146,11 @@ export default function Credentials() {
       detail: "凭证详情",
       test: "测试结果",
       "verify-project": "项目检验",
+      models: "账号支持的模型",
+      "refresh-models": "刷新账号模型",
     };
     try {
-      const method = ["test", "verify-project"].includes(type) ? "post" : "get";
+      const method = ["test", "verify-project", "refresh-models"].includes(type) ? "post" : "get";
       const { data: result } = await api[method](
         `/creds/${type}/${encodeURIComponent(item.filename)}`,
       );
@@ -624,7 +626,7 @@ export default function Credentials() {
                           <div
                             className={`menu-popover ${menuAbove ? "bottom-full mb-1" : "top-full mt-1"}`}
                           >
-                            {["detail", "errors", "verify-project"].map(
+                            {["detail", "errors", "verify-project", "models", "refresh-models"].map(
                               (type) => (
                                 <button
                                   key={type}
@@ -635,6 +637,8 @@ export default function Credentials() {
                                       detail: "查看凭证",
                                       errors: "错误详情",
                                       "verify-project": "检验项目",
+                                       models: "支持的模型",
+                                       "refresh-models": "刷新模型列表",
                                     }[type]
                                   }
                                 </button>

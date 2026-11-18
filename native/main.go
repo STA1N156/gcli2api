@@ -27,14 +27,23 @@ type accountPool struct {
 type bridge struct {
 	secret string
 	mu     sync.Mutex
-	pools  map[string]accountPool
+	pools  sync.Map
 }
 
 func (b *bridge) transport(account, proxyURL string) (*http.Transport, error) {
+	if value, ok := b.pools.Load(account); ok {
+		pool := value.(accountPool)
+		if pool.proxy == proxyURL {
+			return pool.transport, nil
+		}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if pool, ok := b.pools[account]; ok && pool.proxy == proxyURL {
-		return pool.transport, nil
+	if value, ok := b.pools.Load(account); ok {
+		pool := value.(accountPool)
+		if pool.proxy == proxyURL {
+			return pool.transport, nil
+		}
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ForceAttemptHTTP2 = false
@@ -82,10 +91,10 @@ func (b *bridge) transport(account, proxyURL string) (*http.Transport, error) {
 		}
 	}
 	tr = CloneAntigravityTransport(tr)
-	if old, ok := b.pools[account]; ok {
-		old.transport.CloseIdleConnections()
+	if old, ok := b.pools.Load(account); ok {
+		old.(accountPool).transport.CloseIdleConnections()
 	}
-	b.pools[account] = accountPool{proxyURL, tr}
+	b.pools.Store(account, accountPool{proxyURL, tr})
 	return tr, nil
 }
 
@@ -175,7 +184,7 @@ func main() {
 	if _, err = rand.Read(key[:]); err != nil {
 		log.Fatal("Cannot initialize local HTTP transport")
 	}
-	b := &bridge{secret: hex.EncodeToString(key[:]), pools: make(map[string]accountPool)}
+	b := &bridge{secret: hex.EncodeToString(key[:])}
 	json.NewEncoder(os.Stdout).Encode(map[string]string{"url": "http://" + listener.Addr().String(), "key": b.secret})
 	go func() { io.Copy(io.Discard, os.Stdin); listener.Close() }()
 	server := &http.Server{Handler: b, ReadHeaderTimeout: 10 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}

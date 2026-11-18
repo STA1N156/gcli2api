@@ -68,6 +68,9 @@ class HttpxClientManager:
         account_id = client_kwargs.pop("account_id", "")
         cache_key = account_id + self._client_cache_key(client_kwargs)
 
+        client = self._clients.get(cache_key)
+        if client and not client.is_closed:
+            return client
         async with self._lock:
             client = self._clients.get(cache_key)
             if client and not client.is_closed:

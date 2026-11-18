@@ -12,12 +12,13 @@ import aiosqlite
 
 from test_failure_state import load_class
 from src.model_cooldown import has_active_model_cooldown
+from src.model_support import supports_model
 
 
 def manager(adapter):
     cls = load_class("src/credential_manager.py", "CredentialManager")
     cls.get_valid_credential.__globals__.update(
-        hashlib=hashlib, has_active_model_cooldown=has_active_model_cooldown,
+        hashlib=hashlib, has_active_model_cooldown=has_active_model_cooldown, supports_model=supports_model,
         SESSION_BINDING_MAX_ENTRIES=50000, SESSION_BINDING_PRUNE_INTERVAL_SECONDS=60,
         SESSION_BINDING_CACHE_SECONDS=10, SESSION_BINDING_RENEW_SECONDS=60, ROUND_ROBIN_MAX_KEYS=4096,
         get_session_affinity_enabled=AsyncMock(return_value=False),
