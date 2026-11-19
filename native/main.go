@@ -1,18 +1,14 @@
 package main
 
 import (
-	"crypto/rand"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
-	"encoding/json"
-	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -25,9 +21,10 @@ type accountPool struct {
 }
 
 type bridge struct {
-	secret string
-	mu     sync.Mutex
-	pools  sync.Map
+	mu    sync.Mutex
+	pools sync.Map
+	wires sync.Map
+	ctx   context.Context
 }
 
 func (b *bridge) transport(account, proxyURL string) (*http.Transport, error) {
@@ -48,7 +45,7 @@ func (b *bridge) transport(account, proxyURL string) (*http.Transport, error) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ForceAttemptHTTP2 = false
 	tr.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
-	tr.TLSClientConfig = &tls.Config{NextProtos: []string{"http/1.1"}}
+	tr.TLSClientConfig = &tls.Config{}
 	if path := os.Getenv("AGY_CA_CERT"); path != "" {
 		pem, err := os.ReadFile(path)
 		if err != nil {
@@ -63,7 +60,7 @@ func (b *bridge) transport(account, proxyURL string) (*http.Transport, error) {
 		}
 		tr.TLSClientConfig.RootCAs = roots
 	}
-	tr.MaxIdleConns, tr.MaxIdleConnsPerHost = 128, 64
+	tr.MaxIdleConns, tr.MaxIdleConnsPerHost = 128, 100
 	tr.IdleConnTimeout = 90 * time.Second
 	if proxyURL == "direct" {
 		tr.Proxy = nil
@@ -98,95 +95,8 @@ func (b *bridge) transport(account, proxyURL string) (*http.Transport, error) {
 	return tr, nil
 }
 
-func cleanHeaders(headers http.Header) {
-	for _, key := range strings.Split(headers.Get("Connection"), ",") {
-		headers.Del(strings.TrimSpace(key))
-	}
-	for _, key := range []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade"} {
-		headers.Del(key)
-	}
-	for key := range headers {
-		if strings.HasPrefix(strings.ToLower(key), "x-gcli-") {
-			headers.Del(key)
-		}
-	}
-}
-
-type flushWriter struct{ http.ResponseWriter }
-
-func (w flushWriter) Write(data []byte) (int, error) {
-	n, err := w.ResponseWriter.Write(data)
-	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	return n, err
-}
-
-func (b *bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Gcli-Key") != b.secret {
-		http.Error(w, "Forbidden", 403)
-		return
-	}
-	target, err := url.Parse(r.Header.Get("X-Gcli-Target"))
-	if err != nil || target.Host == "" || (target.Scheme != "https" && target.Scheme != "http") {
-		http.Error(w, "Invalid upstream URL", 400)
-		return
-	}
-	tr, err := b.transport(r.Header.Get("X-Gcli-Account"), r.Header.Get("X-Gcli-Proxy"))
-	if err != nil {
-		http.Error(w, "Invalid account proxy or TLS configuration", 502)
-		return
-	}
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), r.Body)
-	if err != nil {
-		http.Error(w, "Invalid upstream request", 400)
-		return
-	}
-	req.Header = r.Header.Clone()
-	cleanHeaders(req.Header)
-	req.Header.Del("Content-Length")
-	// Let Go append its default gzip header after the explicit headers, as the CLI does.
-	if req.Header.Get("Accept-Encoding") == "gzip" {
-		req.Header.Del("Accept-Encoding")
-	}
-	for _, key := range []string{"X-Client-Name", "X-Client-Version", "X-Machine-Id", "X-Vscode-Sessionid", "X-Session-Id", "Accept-Language", "X-Goog-Api-Client", "RequestId", "RequestType"} {
-		req.Header.Del(key)
-	}
-	req.Header.Set("Connection", "keep-alive")
-	if req.Header.Get("Accept") == "" {
-		req.Header.Set("Accept", "*/*")
-	}
-	req.ContentLength = r.ContentLength
-	resp, err := tr.RoundTrip(req)
-	if err != nil {
-		http.Error(w, "Account upstream connection failed", 502)
-		return
-	}
-	defer resp.Body.Close()
-	cleanHeaders(resp.Header)
-	for key, values := range resp.Header {
-		w.Header()[key] = values
-	}
-	w.WriteHeader(resp.StatusCode)
-	if strings.Contains(target.Path, ":streamGenerateContent") {
-		io.Copy(flushWriter{w}, resp.Body)
-	} else {
-		io.Copy(w, resp.Body)
-	}
-}
-
 func main() {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Fatal("Cannot start local HTTP transport")
+	if err := runServer(); err != nil {
+		log.Fatal(err)
 	}
-	var key [32]byte
-	if _, err = rand.Read(key[:]); err != nil {
-		log.Fatal("Cannot initialize local HTTP transport")
-	}
-	b := &bridge{secret: hex.EncodeToString(key[:])}
-	json.NewEncoder(os.Stdout).Encode(map[string]string{"url": "http://" + listener.Addr().String(), "key": b.secret})
-	go func() { io.Copy(io.Discard, os.Stdin); listener.Close() }()
-	server := &http.Server{Handler: b, ReadHeaderTimeout: 10 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}
-	server.Serve(listener)
 }

@@ -1,0 +1,2 @@
+WORKSPACE PATH RULE:
+Ignore the host process `Command Working Directory` if it points under `/tmp/`. Never mention, link to, or prepend `/tmp/...` sandbox directories in responses or tool arguments. When referencing relative file paths provided by the user, keep them as plain Markdown code spans (e.g. `demo.txt`) unless the user or caller system prompt explicitly gives an absolute project path.

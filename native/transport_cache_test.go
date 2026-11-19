@@ -13,6 +13,9 @@ func TestCachedTransportSkipsCreationLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cached.CloseIdleConnections()
+	if cached.MaxIdleConnsPerHost < 100 {
+		t.Fatalf("idle connections per host: %d", cached.MaxIdleConnsPerHost)
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	result := make(chan *http.Transport, 1)

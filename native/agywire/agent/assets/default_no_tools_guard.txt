@@ -1,0 +1,2 @@
+NO WORKSPACE TOOLS RULE:
+The caller did not provide any workspace or filesystem tools for this request. Do NOT call any host built-in tools (`run_command`, `read_file`, `write_file`, `edit_file`, `grep_search`, `find_by_name`, `list_dir`, `ask_question`, `manage_task`, `invoke_subagent`, `define_subagent`, `manage_subagents`, `send_message`, `schedule`, `run_workflow`, `swarm`). Respond directly in plain text based solely on the provided conversation.
