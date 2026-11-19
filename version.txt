@@ -1,4 +1,4 @@
-full_hash=9935260e4a41b41047a492795575aa03b208361c
-short_hash=9935260
-message=feat: migrate gateway to shared Go wire backend
-date=2026-11-20 02:27:12 +0800
+full_hash=1585512bcbbec29d7ba48829bfaf06b61a83aed8
+short_hash=1585512
+message=fix: accept updated Antigravity monitor configurations
+date=2026-11-20 02:32:04 +0800
