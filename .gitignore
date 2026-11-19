@@ -99,6 +99,5 @@ log.txt
 
 tools/
 native/bin/
-!native/agywire/agent/assets/*.json
 aicode/
 node_modules/

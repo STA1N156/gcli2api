@@ -1,4 +1,4 @@
-full_hash=1585512bcbbec29d7ba48829bfaf06b61a83aed8
-short_hash=1585512
-message=fix: accept updated Antigravity monitor configurations
-date=2026-11-20 02:32:04 +0800
+full_hash=1023ca4ae4f641ba50e86b619ad3432149ca3041
+short_hash=1023ca4
+message=fix: improve Antigravity routing and stream handling
+date=2026-11-18 20:11:55 +0800

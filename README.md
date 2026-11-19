@@ -1,44 +1,830 @@
-# GCLI2API — Go backend
+# Antigravity API
 
-Antigravity API gateway with the existing React control panel. The complete
-runtime is Go: model requests, OpenAI/Claude/Gemini conversion, account selection,
-OAuth, quotas, SQLite, session caches and panel endpoints.
+**将 Antigravity 转换为 OpenAI 、GEMINI 和 Claude API 兼容接口**
 
-## Run
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License: CNC-1.0](https://img.shields.io/badge/License-CNC--1.0-red.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/docker-available-blue.svg)](https://github.com/su-kaka/gcli2api/pkgs/container/gcli2api)
 
-```sh
-docker build -t gcli2api .
-docker run --rm -p 7861:7861 -e PASSWORD=change-me -v ./creds:/app/creds gcli2api
+[English](docs/README_EN.md) | 中文 | [日本語](docs/README_JA.md)
+
+## 🚀 快速部署 
+
+[![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/templates/97VMEF?referralCode=sukaka)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/su-kaka/gcli2api)
+---
+
+## 安装指南
+
+### 本地控制面板开发
+
+```bash
+cd frontend
+npm install
+npm run demo -- --port 5173
 ```
 
-Open the service URL to use the panel. Existing `creds/credentials.db` data is
-loaded directly. Back up this directory before replacing an existing service.
+打开 `http://127.0.0.1:5173/` 预览示例界面，不连接线上服务或使用真实账号。
+连接本地 Python 服务时使用 `npm run dev`；直接运行 Python 服务前先执行
+`npm run build`。Docker 镜像会自动构建前端。
 
-For local builds, set `AGY_GO` to the pinned Go compiler described in
-[native/README.md](native/README.md), then run `start.sh` or `start.ps1`.
-The frontend requires Node.js only when building its assets.
+控制台基于上游 AGY2API React 界面，保留本分支的额度汇总和运行日志。
+Ultra Lite 单独识别、显示和筛选；凭证测试使用 `gemini-3.5-flash-lite`。
 
-## Endpoints
+符合原有规则的 429 会在当前请求中转移系统提示词并重试；提示词不再记录或查询。
+使用 `python web.py` 启动 SQLite 服务时，主进程会先备份并核验账号、状态、配置和会话，
+清除旧 `marked_prompts` 及其历史备份表，压缩数据库，再启动工作进程。
+非提示词数据的恢复备份保存在凭证目录下的 `backups/`。
 
-- OpenAI: `/antigravity/v1/chat/completions`
-- Claude: `/antigravity/v1/messages`
-- Gemini: `/antigravity/v1beta/models/{model}:generateContent` and `:streamGenerateContent`
-- Model list: `/antigravity/v1/models` or `/antigravity/v1beta/models`
+### 版本与账号导入
 
-Prefix a model with `抗截断/` to return the reply through the hidden `output_reply`
-tool. Client-owned tool choices and parallel real tool calls remain available.
+出站标识固定为 `antigravity/hub/2.28.0 (aidev_client; os_type=windows; arch=amd64; cl=1008300195)`，
+不再查询 GitHub CLI 版本。
 
-## Runtime
+Google 请求继续通过常驻 Go 传输进程和每账号独立连接池发送，使用 HTTP/1.1，
+TLS 握手及请求头顺序对齐 agy2api 的 HTTPX/OpenSSL 3 请求。
+Docker 自动构建该进程；本地运行需安装 Go 1.27.4，执行 `python native/build.py`。
+Go 不在 PATH 时，可设置 `AGY_GO` 为 `go` 可执行文件的路径。首次请求也会按需构建。
 
-One Go process shares account selection and conversation caches. Every account
-has its own proxy and connection pool, with up to 100 idle connections per host.
-SQLite is read at startup; runtime counters and cooldown changes are batched.
-The native wire engine retains the reference request structure, system templates,
-signed history and TLS implementation. Ordinary generation uses `chat`.
+凭证列表的「更多 → 账号代理」可设置每个账号的 HTTP、HTTPS 或 SOCKS5 代理，
+也可在导入 JSON 中填写 `proxy_url`。留空沿用全局代理，`direct` 表示直接连接。
+代理覆盖生成、令牌刷新、用户信息、项目初始化、模型列表和额度查询。
 
-Existing password, endpoint and retry settings remain in the panel. `WORKERS`,
-`HTTPX_*`, Python GC and jemalloc variables are no longer used. This version uses
-SQLite; it does not connect to external PostgreSQL, MongoDB or Redis databases.
+选号保留轮询和会话亲和，优先选择已知支持目标模型的账号，未探测账号作为后备。
+每账号支持的模型存入数据库，可在「更多 → 支持的模型 / 刷新模型列表」查看或更新。
+公开模型列表沿用单账号查询，不做跨账号汇总或自动批量探测。
+模型返回 404 时更新该账号的模型记录并换号重试，不因此停用整个账号。
 
-See [.env.example](.env.example) for environment settings. Local start scripts
-do not pull, reset, push or deploy repository changes.
+普通和工具请求统一发送 `requestType: "chat"`，保留工具定义和调用结果；图片使用 `image_gen`。
+请求信封、内部 JSON 字段顺序、五段 `requestId` 和七个 `labels` 字段对齐 agy2api。
+会话编号根据模型、系统提示词和前两条消息推导，步骤编号使用历史模型回复次数加一。
+标签中的 `model_enum` 使用模型名，不再保存旧的执行编号、额外标签或 `last_execution_id`。
+计算在内存完成，不增加请求时的数据库或 Google 查询。
+
+系统提示词统一为 `{role: "user", parts: [...]}`，工具按单函数拆分并保留顺序，
+工具参数的 schema 类型转为大写，`toolConfig` 保留调用方配置。
+默认返回思考；客户端显式思考等级优先，未指定时按原有模型后缀规则补充等级和映射模型别名。
+Claude 强制工具模式移除冲突的思考参数，正数思考预算下限为 1024。
+`maxOutputTokens` 默认 Claude 64000、其他模型 65536，保留调用方显式设置的其他值，
+不自动注入 `topK`。抗截断、续写、空输出重试继续使用本分支原有处理。
+精准 `Resource has been exhausted (e.g. check quota).` 的 429 不记录账号冷却，
+除模型 404 换号外，其他错误保持原有处理。
+
+JSON/ZIP 导入和 OAuth 重新登录均按邮箱识别账号，忽略邮箱大小写和首尾空格。
+同一邮箱更新原账号凭证，不新增副本；保留原有启停、冷却和会话绑定。
+JSON 必须含 `refresh_token`；缺少邮箱或项目时自动查询，获取失败则不导入该条。
+导出会带上已知邮箱和套餐。导入结果分别显示新增、更新和失败数量。
+
+数据库沿用现有 SQLite / PostgreSQL / MongoDB 存储，不执行上游删除旧凭证表的迁移。
+内部文件名保留兼容，新增账号使用邮箱生成稳定键；历史重复记录不会在启动时自动删除。
+
+### Termux 环境
+
+**初始安装**
+```bash
+curl -o termux-install.sh "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/termux-install.sh" && chmod +x termux-install.sh && ./termux-install.sh
+```
+
+**重启服务**
+```bash
+cd gcli2api
+bash termux-start.sh
+```
+
+### Windows 环境
+
+**初始安装**
+```powershell
+iex (iwr "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/install.ps1" -UseBasicParsing).Content
+```
+
+**重启服务**
+双击执行 `start.bat`
+
+### Linux 环境
+
+**初始安装**
+```bash
+curl -o install.sh "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/install.sh" && chmod +x install.sh && ./install.sh
+```
+
+**重启服务**
+```bash
+cd gcli2api
+bash start.sh
+```
+
+### macOS 环境
+
+**初始安装**
+```bash
+curl -o darwin-install.sh "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/darwin-install.sh" && chmod +x darwin-install.sh && ./darwin-install.sh
+```
+
+**重启服务**
+```bash
+cd gcli2api
+bash start.sh
+```
+
+### Docker 环境
+
+**Docker 运行命令**
+```bash
+# 使用通用密码
+docker run -d --name gcli2api --network host -e PASSWORD=pwd -e PORT=7861 -v $(pwd)/data/creds:/app/creds ghcr.io/su-kaka/gcli2api:latest
+
+# 使用分离密码
+docker run -d --name gcli2api --network host -e API_PASSWORD=api_pwd -e PANEL_PASSWORD=panel_pwd -e PORT=7861 -v $(pwd)/data/creds:/app/creds ghcr.io/su-kaka/gcli2api:latest
+```
+
+**Docker Mac**
+```bash
+# 使用通用密码
+docker run -d \
+  --name gcli2api \
+  -p 7861:7861 \
+  -p 8080:8080 \
+  -e PASSWORD=pwd \
+  -e PORT=7861 \
+  -v "$(pwd)/data/creds":/app/creds \
+  ghcr.io/su-kaka/gcli2api:latest
+```
+
+```bash
+# 使用分离密码
+docker run -d \
+--name gcli2api \
+-p 7861:7861 \
+-p 8080:8080 \
+-e API_PASSWORD=api_pwd \
+-e PANEL_PASSWORD=panel_pwd \
+-e PORT=7861 \
+-v $(pwd)/data/creds:/app/creds \
+ghcr.io/su-kaka/gcli2api:latest
+```
+
+**Docker Compose 运行命令**
+1. 将以下内容保存为 `docker-compose.yml` 文件：
+    ```yaml
+    version: '3.8'
+
+    services:
+      gcli2api:
+        image: ghcr.io/su-kaka/gcli2api:latest
+        container_name: gcli2api
+        restart: unless-stopped
+        network_mode: host
+        environment:
+          # 使用通用密码（推荐用于简单部署）
+          - PASSWORD=pwd
+          - PORT=7861
+          # 或使用分离密码（推荐用于生产环境）
+          # - API_PASSWORD=your_api_password
+          # - PANEL_PASSWORD=your_panel_password
+        volumes:
+          - ./data/creds:/app/creds
+        healthcheck:
+          test: ["CMD-SHELL", "python -c \"import sys, urllib.request, os; port = os.environ.get('PORT', '7861'); req = urllib.request.Request(f'http://localhost:{port}/antigravity/v1/models', headers={'Authorization': 'Bearer ' + os.environ.get('PASSWORD', 'pwd')}); sys.exit(0 if urllib.request.urlopen(req, timeout=5).getcode() == 200 else 1)\""]
+          interval: 30s
+          timeout: 10s
+          retries: 3
+          start_period: 40s
+    ```
+2. 启动服务：
+    ```bash
+    docker-compose up -d
+    ```
+
+## 核心功能
+
+### 🔄 API 端点和格式支持
+
+**多端点多格式支持**
+- **OpenAI 兼容端点**：`/antigravity/v1/chat/completions` 和 `/antigravity/v1/models`
+  - 支持标准 OpenAI 格式（messages 结构）
+  - 支持 Gemini 原生格式（contents 结构）
+  - 自动格式检测和转换，无需手动切换
+  - 支持多模态输入（文本 + 图像）
+- **Gemini 原生端点**：`/antigravity/v1/models/{model}:generateContent` 和 `streamGenerateContent`
+  - 支持完整的 Gemini 原生 API 规范
+  - 多种认证方式：Bearer Token、x-goog-api-key 头部、URL 参数 key
+- **Claude 格式兼容**：完整支持 Claude API 格式
+  - 端点：`/v1/messages`（遵循 Claude API 规范）
+  - 支持 Claude 标准的 messages 格式
+  - 支持 system 参数和 Claude 特有功能
+  - 自动转换为后端支持的格式
+- **Antigravity API 支持**：同时支持 OpenAI、Gemini 和 Claude 格式
+  - OpenAI 格式端点：`/antigravity/v1/chat/completions`
+  - Gemini 格式端点：`/antigravity/v1/models/{model}:generateContent` 和 `streamGenerateContent`
+  - Claude 格式端点：`/antigravity/v1/messages`
+  - 支持所有 Antigravity 模型（Claude、Gemini 等）
+  - 自动模型名称映射和思维模式检测
+
+### 🔐 认证和安全管理
+
+**灵活的密码管理**
+- **分离密码支持**：API 密码（聊天端点）和控制面板密码可独立设置
+- **多种认证方式**：支持 Authorization Bearer、x-goog-api-key 头部、URL 参数等
+- **JWT Token 认证**：控制面板支持 JWT 令牌认证
+- **用户邮箱获取**：自动获取和显示 Google 账户邮箱地址
+
+### 📊 智能凭证管理系统
+
+**高级凭证管理**
+- 多个 Google OAuth 凭证自动轮换
+- 通过冗余认证增强稳定性
+- 负载均衡与并发请求支持
+- 自动故障检测和凭证禁用
+- 凭证使用统计和配额管理
+- 支持手动启用/禁用凭证文件
+- 批量凭证文件操作（启用、禁用、删除）
+
+**凭证状态监控**
+- 实时凭证健康检查
+- 错误码追踪（429、403、500 等）
+- 自动封禁机制（可配置）
+
+### 🌊 流式传输和响应处理
+
+**多种流式支持**
+- 真正的实时流式响应
+- 抗截断功能（防止回答被截断）
+- 异步任务管理和超时处理
+
+**响应优化**
+- 思维链（Thinking）内容分离
+- 推理过程（reasoning_content）处理
+- 多轮对话上下文管理
+- 兼容性模式（将 system 消息转换为 user 消息）
+
+### 🎛️ Web 管理控制台
+
+**全功能 Web 界面**
+- OAuth 认证流程管理（支持 Antigravity）
+- 凭证文件上传、下载、管理
+- 实时日志查看（WebSocket）
+- 系统配置管理
+- 使用统计和监控面板
+- 移动端适配界面
+
+**批量操作支持**
+- ZIP 文件批量上传凭证（Antigravity）
+- 批量启用/禁用/删除凭证
+- 批量获取用户邮箱
+- 批量配置管理
+- 统一批量上传界面管理所有凭证类型
+
+### 📈 使用监控
+
+**实时监控**
+- WebSocket 实时日志流
+- 系统状态监控
+- 凭证健康状态
+
+### 🔧 高级配置和自定义
+
+**网络和代理配置**
+- HTTP/HTTPS 代理支持
+- 代理端点配置（OAuth、Google APIs、元数据服务）
+- 超时和重试配置
+- 网络错误处理和恢复
+
+**性能和稳定性配置**
+- 429 错误自动重试（可配置间隔和次数）
+- 抗截断最大重试次数
+
+**日志和调试**
+- 多级日志系统（DEBUG、INFO、WARNING、ERROR）
+- 日志文件管理
+- 实时日志流
+- 日志下载和清空
+
+### 🔄 环境变量和配置管理
+
+**灵活的配置方式**
+- 环境变量配置
+- 热配置更新（部分配置项）
+- 配置锁定（环境变量优先级）
+
+## 支持的模型
+
+所有模型均具备 1M 上下文窗口容量。每个凭证文件提供 1000 次请求额度。
+
+### 🤖 基础模型
+- `gemini-2.5-pro`
+- `gemini-3-pro-preview`
+- `gemini-3.1-pro-preview`
+
+### 🧠 思维模型（Thinking Models）
+- `gemini-2.5-pro-high`：思考模式
+- `gemini-2.5-pro-low`：低思考模式
+- 支持自定义思考预算配置
+- 自动分离思维内容和最终回答
+
+### 🔍 搜索增强模型
+- `gemini-2.5-pro-search`：集成搜索功能的模型
+
+### 🖼️ 图像生成模型（Antigravity）
+- `gemini-3.1-flash-image`：基础图像生成模型
+- **分辨率后缀**：
+  - `-2k`：2K 分辨率
+  - `-4k`：4K 高清分辨率
+- **比例后缀**：
+  - `-1x1`：正方形（头像）
+  - `-16x9`：横屏（电脑壁纸）
+  - `-9x16`：竖屏（手机壁纸）
+  - `-21x9`：超宽屏（带鱼屏）
+  - `-4x3`：传统显示器
+  - `-3x4`：竖版海报
+- **组合使用示例**：
+  - `gemini-3.1-flash-image-4k-16x9`：4K 横屏
+  - `gemini-3.1-flash-image-2k-9x16`：2K 竖屏
+- 不指定比例时，API 自动决定横竖比例
+
+### 🌊 特殊功能变体
+- **抗截断模式**：在模型名称前添加 `抗截断/` 前缀
+  - 例：`抗截断/gemini-2.5-pro`
+  - 模型列表使用 `抗截断/`；旧配置里的 `流式抗截断/` 前缀仍可使用。
+  - 参考 RP-Hub：通过内部 `output_reply` 工具传递正文，再还原成普通回复；流式和非流式共用相同处理。
+  - 流式请求收到普通正文就立即发送，结束时不重复回放；工具正文仍按原有规则完整校验后返回，不强制分段。若模型同时输出普通正文与工具正文，两者可能重复；非流式请求仍收集完整结果。
+  - 保留思考、原有工具调用与用量，不再依赖 `[done]` 标记或自动续写。
+  - 客户端已提供 `output_reply` 或明确指定工具选择时，保持客户端的工具协议；该模式不能突破上游输出长度限制。
+- **空回重试**（Antigravity 的普通模型和抗截断模型，流式与非流式均生效）：
+  - 没有正文、工具调用或图片等有效输出才重试；只有思考仍算空回，英文拒绝正文不重试。
+  - 普通模型空回后，将最新用户原文放入配对的 `read_user_input` 工具结果再试一次，仍空回则返回 400；普通流式正文直接输出。
+  - 抗截断模型首次请求就使用上述输入包装；本轮已有完整配对时不重复添加，空回直接返回 400。图片和抗截断提醒保留在工具结果外，原始聊天记录不变。
+  - Antigravity 的所有普通和抗截断模型，遇到对应的无恢复时间 429 时均可搬迁系统提示词后重试；同一请求只搬迁一次，已记录的完整系统提示词命中时提前搬迁。搬迁和换凭证重试独立于空回重试。
+
+### 🔧 模型功能自动检测
+- 系统自动识别模型名称中的功能标识
+- 透明地处理功能模式转换
+- 支持功能组合使用
+
+---
+
+## 配置说明
+
+1. 访问 `http://127.0.0.1:7861` （默认端口，可通过 PORT 环境变量修改）
+2. 完成 OAuth 认证流程（默认密码：`pwd`，可通过环境变量修改）
+   - **Antigravity 模式**：用于获取 Google Antigravity API 凭证
+3. 配置客户端：
+
+**OpenAI 兼容客户端：**
+   - **端点地址**：`http://127.0.0.1:7861/antigravity/v1`
+   - **API 密钥**：`pwd`（默认值，可通过 API_PASSWORD 或 PASSWORD 环境变量修改）
+
+**Gemini 原生客户端：**
+   - **端点地址**：`http://127.0.0.1:7861/antigravity`
+   - **认证方式**：
+     - `Authorization: Bearer your_api_password`
+     - `x-goog-api-key: your_api_password`
+     - URL 参数：`?key=your_api_password`
+
+### Antigravity 认证
+
+支持 OAuth 登录、批量导入 JSON/ZIP 凭证、账号管理及额度查询。
+
+## 💾 数据存储模式
+
+### 🌟 存储后端支持
+
+gcli2api 支持两种存储后端：**本地 SQLite（默认）** 和 **MongoDB（云端分布式存储）**
+
+### 📁 本地 SQLite 存储（默认）
+
+**默认存储方式**
+- 无需配置，开箱即用
+- 数据存储在本地 SQLite 数据库中
+- 适合单机部署和个人使用
+- 自动创建和管理数据库文件
+
+### 🍃 MongoDB 云端存储模式
+
+**云端分布式存储方案**
+
+当需要多实例部署或云端存储时，可以启用 MongoDB 存储模式。
+
+### ⚙️ 启用 MongoDB 模式
+
+**步骤 1: 配置 MongoDB 连接**
+```bash
+# 本地 MongoDB
+export MONGODB_URI="mongodb://localhost:27017"
+
+# MongoDB Atlas 云服务
+export MONGODB_URI="mongodb+srv://username:password@cluster.mongodb.net"
+
+# 带认证的 MongoDB
+export MONGODB_URI="mongodb://admin:password@localhost:27017/admin"
+
+# 可选：自定义数据库名称（默认: gcli2api）
+export MONGODB_DATABASE="my_gcli_db"
+```
+
+**步骤 2: 启动应用**
+```bash
+# 应用会自动检测 MongoDB 配置并使用 MongoDB 存储
+python web.py
+```
+
+**Docker 环境使用 MongoDB**
+```bash
+# 单机 MongoDB 部署
+docker run -d --name gcli2api \
+  -e MONGODB_URI="mongodb://mongodb:27017" \
+  -e API_PASSWORD=your_password \
+  --network your_network \
+  ghcr.io/su-kaka/gcli2api:latest
+
+# 使用 MongoDB Atlas
+docker run -d --name gcli2api \
+  -e MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/gcli2api" \
+  -e API_PASSWORD=your_password \
+  -p 7861:7861 \
+  ghcr.io/su-kaka/gcli2api:latest
+```
+
+**Docker Compose 示例**
+```yaml
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: gcli2api-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+    volumes:
+      - mongodb_data:/data/db
+    ports:
+      - "27017:27017"
+
+  gcli2api:
+    image: ghcr.io/su-kaka/gcli2api:latest
+    container_name: gcli2api
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+    environment:
+      - MONGODB_URI=mongodb://admin:password123@mongodb:27017/admin
+      - MONGODB_DATABASE=gcli2api
+      - API_PASSWORD=your_api_password
+      - PORT=7861
+    ports:
+      - "7861:7861"
+
+volumes:
+  mongodb_data:
+```
+
+
+### 🔧 高级配置
+
+**MongoDB 连接优化**
+```bash
+# 连接池和超时配置
+export MONGODB_URI="mongodb://localhost:27017?maxPoolSize=10&serverSelectionTimeoutMS=5000"
+
+# 副本集配置
+export MONGODB_URI="mongodb://host1:27017,host2:27017,host3:27017/gcli2api?replicaSet=myReplicaSet"
+
+# 读写分离配置
+export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryPreferred"
+```
+
+### 环境变量配置
+
+**基础配置**
+- `PORT`: 服务端口（默认：7861）
+- `HOST`: 服务器监听地址（默认：0.0.0.0）
+
+**密码配置**
+- `API_PASSWORD`: 聊天 API 访问密码（默认：继承 PASSWORD 或 pwd）
+- `PANEL_PASSWORD`: 控制面板访问密码（默认：继承 PASSWORD 或 pwd）  
+- `PASSWORD`: 通用密码，设置后覆盖上述两个（默认：pwd）
+
+**性能和稳定性配置**
+- `CREDENTIAL_RETRY_LIMIT_ENABLED`: 是否限制单次请求尝试的凭证数量（默认：false；关闭时遍历全部可用凭证）
+- `MAX_RETRY_CREDENTIALS`: 开启限制后最多尝试的凭证总数，包含第一次（默认：5）
+- `CREDENTIAL_RETRY_INTERVAL`: 切换凭证前的等待时间，秒（默认：1.0）
+- `SESSION_AFFINITY_ENABLED`: 是否启用粘性会话（默认：true）
+- `SESSION_AFFINITY_TTL_SECONDS`: 粘性会话有效期，秒（默认：3600）
+- `ANTI_TRUNCATION_MAX_ATTEMPTS`: 抗截断最大重试次数（默认：3）
+
+**网络和代理配置**
+- `PROXY`: HTTP/HTTPS 代理地址（格式：`http://host:port`）
+- `OAUTH_PROXY_URL`: OAuth 认证代理端点
+- `GOOGLEAPIS_PROXY_URL`: Google APIs 代理端点
+- `METADATA_SERVICE_URL`: 元数据服务代理端点
+
+**自动化配置**
+- `AUTO_LOAD_ENV_CREDS`: 启动时自动加载环境变量凭证（默认：false）
+
+**兼容性配置**
+- `COMPATIBILITY_MODE`: 启用兼容性模式，将 system 消息转为 user 消息（默认：false）
+
+**日志配置**
+- `LOG_LEVEL`: 日志级别（DEBUG/INFO/WARNING/ERROR，默认：INFO）
+- `LOG_FILE`: 日志文件路径（默认：log.txt）
+
+**存储配置**
+
+**SQLite 配置（默认）**
+- 无需配置，自动使用本地 SQLite 数据库
+- 数据库文件自动创建在项目目录
+
+**MongoDB 配置（可选云端存储）**
+- `MONGODB_URI`: MongoDB 连接字符串（设置后启用 MongoDB 模式）
+- `MONGODB_DATABASE`: MongoDB 数据库名称（默认：gcli2api）
+
+**Docker 使用示例**
+```bash
+# 使用通用密码
+docker run -d --name gcli2api \
+  -e PASSWORD=mypassword \
+  -e PORT=7861 \
+  ghcr.io/su-kaka/gcli2api:latest
+
+# 使用分离密码
+docker run -d --name gcli2api \
+  -e API_PASSWORD=my_api_password \
+  -e PANEL_PASSWORD=my_panel_password \
+  -e PORT=7861 \
+  ghcr.io/su-kaka/gcli2api:latest
+```
+
+注意：当设置了凭证环境变量时，系统将优先使用环境变量中的凭证，忽略 `creds` 目录中的文件。
+
+### API 使用方式
+
+本服务支持三套完整的 API 端点：
+
+#### 4. Antigravity API 端点
+
+**支持三种格式：OpenAI、Gemini 和 Claude**
+
+##### Antigravity OpenAI 格式端点
+
+**端点：** `/antigravity/v1/chat/completions`
+**认证：** `Authorization: Bearer your_api_password`
+
+**请求示例：**
+```bash
+curl -X POST "http://127.0.0.1:7861/antigravity/v1/chat/completions" \
+  -H "Authorization: Bearer your_api_password" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4-5",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ],
+    "stream": true
+  }'
+```
+
+##### Antigravity Gemini 格式端点
+
+**非流式端点：** `/antigravity/v1/models/{model}:generateContent`
+**流式端点：** `/antigravity/v1/models/{model}:streamGenerateContent`
+
+**认证方式（任选一种）：**
+- `Authorization: Bearer your_api_password`
+- `x-goog-api-key: your_api_password`
+- URL 参数：`?key=your_api_password`
+
+**请求示例：**
+```bash
+# Gemini 格式非流式请求
+curl -X POST "http://127.0.0.1:7861/antigravity/v1/models/claude-sonnet-4-5:generateContent" \
+  -H "x-goog-api-key: your_api_password" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contents": [
+      {"role": "user", "parts": [{"text": "Hello"}]}
+    ],
+    "generationConfig": {
+      "temperature": 0.7
+    }
+  }'
+
+# Gemini 格式流式请求
+curl -X POST "http://127.0.0.1:7861/antigravity/v1/models/gemini-2.5-flash:streamGenerateContent?key=your_api_password" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contents": [
+      {"role": "user", "parts": [{"text": "Hello"}]}
+    ]
+  }'
+```
+
+##### Antigravity Claude 格式端点
+
+**端点：** `/antigravity/v1/messages`
+**认证：** `x-api-key: your_api_password`
+
+**请求示例：**
+```bash
+curl -X POST "http://127.0.0.1:7861/antigravity/v1/messages" \
+  -H "x-api-key: your_api_password" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4-5",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+
+**支持的 Antigravity 模型：**
+- Claude 系列：`claude-sonnet-4-5`、`claude-opus-4-5` 等
+- Gemini 系列：`gemini-2.5-flash`、`gemini-2.5-pro` 等
+- 自动支持思维模型（thinking models）
+
+**Gemini 原生示例：**
+```python
+from io import BytesIO
+from PIL import Image
+from google.genai import Client
+from google.genai.types import HttpOptions
+from google.genai import types
+# The client gets the API key from the environment variable `GEMINI_API_KEY`.
+
+client = Client(
+            api_key="pwd",
+            http_options=HttpOptions(base_url="http://127.0.0.1:7861"),
+        )
+
+prompt = (
+    """
+    画一只猫
+    """
+)
+
+response = client.models.generate_content(
+    model="gemini-3.1-flash-image",
+    contents=[prompt],
+    config=types.GenerateContentConfig(
+        image_config=types.ImageConfig(
+            aspect_ratio="16:9",
+        )
+    )
+)
+for part in response.candidates[0].content.parts:
+    if part.text is not None:
+        print(part.text)
+    elif part.inline_data is not None:
+        image = Image.open(BytesIO(part.inline_data.data))
+        image.save("generated_image.png")
+
+```
+
+**说明：**
+- OpenAI 端点返回 OpenAI 兼容格式
+- Gemini 端点返回 Gemini 原生格式
+- 两种端点使用相同的 API 密码
+
+## 📋 完整 API 参考
+
+### Web 控制台 API
+
+**认证端点**
+- `POST /auth/login` - 用户登录
+- `POST /auth/start` - 开始 OAuth 认证（支持 Antigravity 模式）
+- `POST /auth/callback` - 处理 OAuth 回调
+- `POST /auth/callback-url` - 从回调 URL 直接完成认证
+- `GET /auth/status/{project_id}` - 检查认证状态
+
+**凭证管理端点**（支持 `mode=antigravity` 参数）
+- `POST /creds/upload` - 批量上传凭证文件（支持 JSON 和 ZIP）
+- `GET /creds/status` - 获取凭证状态列表（支持分页和筛选）
+- `GET /creds/detail/{filename}` - 获取单个凭证详情
+- `POST /creds/action` - 单个凭证操作（启用/禁用/删除）
+- `POST /creds/batch-action` - 批量凭证操作
+- `GET /creds/download/{filename}` - 下载单个凭证文件
+- `GET /creds/download-all` - 打包下载所有凭证
+- `POST /creds/fetch-email/{filename}` - 获取用户邮箱
+- `POST /creds/refresh-all-emails` - 批量刷新用户邮箱
+- `POST /creds/deduplicate-by-email` - 按邮箱去重凭证
+- `POST /creds/verify-project/{filename}` - 检验凭证 Project ID
+- `GET /creds/quota/{filename}` - 获取凭证额度信息（仅 Antigravity）
+
+**配置管理端点**
+- `GET /config/get` - 获取当前配置
+- `POST /config/save` - 保存配置
+
+**日志管理端点**
+- `POST /logs/clear` - 清空日志
+- `GET /logs/download` - 下载日志文件
+- `WebSocket /logs/stream` - 实时日志流
+
+**版本信息端点**
+- `GET /version/info` - 获取版本信息（可选 `check_update=true` 参数检查更新）
+
+### 聊天 API 功能特性
+
+**多模态支持**
+```json
+{
+  "model": "gemini-2.5-pro",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "描述这张图片"},
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABA..."
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+**思维模式支持**
+```json
+{
+  "model": "gemini-2.5-pro-maxthinking",
+  "messages": [
+    {"role": "user", "content": "复杂数学问题"}
+  ]
+}
+```
+
+响应将包含分离的思维内容：
+```json
+{
+  "choices": [{
+    "message": {
+      "role": "assistant",
+      "content": "最终答案",
+      "reasoning_content": "详细的思考过程..."
+    }
+  }]
+}
+```
+
+**抗截断使用**
+```json
+{
+  "model": "抗截断/gemini-2.5-pro",
+  "messages": [
+    {"role": "user", "content": "写一篇长文章"}
+  ],
+  "stream": true
+}
+```
+
+**兼容性模式**
+```bash
+# 启用兼容性模式
+export COMPATIBILITY_MODE=true
+```
+此模式下，所有 `system` 消息会转换为 `user` 消息，提高与某些客户端的兼容性。
+
+---
+
+## 💬 交流群
+
+欢迎加入 QQ 群交流讨论！
+
+**QQ 群号：1083250744**
+
+<img src="docs/qq群.jpg" width="200" alt="QQ群二维码">
+
+---
+
+## 许可证与免责声明
+
+本项目仅供学习和研究用途。使用本项目表示您同意：
+- 不将本项目用于任何商业用途
+- 承担使用本项目的所有风险和责任
+- 遵守相关的服务条款和法律法规
+
+项目作者对因使用本项目而产生的任何直接或间接损失不承担责任。
+
+## ⚠️ 许可证声明
+
+**本项目采用 Cooperative Non-Commercial License (CNC-1.0)**
+
+这是一个反商业化的严格开源协议，详情请查看 [LICENSE](LICENSE) 文件。
+
+### ✅ 允许的用途：
+- 个人学习、研究、教育用途
+- 非营利组织使用
+- 开源项目集成（需遵循相同协议）
+- 学术研究和论文发表
+
+### ❌ 禁止的用途：
+- 任何形式的商业使用
+- 年收入超过100万美元的企业使用
+- 风投支持或公开交易的公司使用  
+- 提供付费服务或产品
+- 商业竞争用途

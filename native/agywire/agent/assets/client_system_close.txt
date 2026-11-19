@@ -1,5 +1,0 @@
-
-</client_system_instructions>
-
-[The block above holds the system instructions of the client application this conversation runs in. Follow them as you would follow system instructions.]
-
