@@ -1,4 +1,4 @@
-full_hash=1023ca4ae4f641ba50e86b619ad3432149ca3041
-short_hash=1023ca4
-message=fix: improve Antigravity routing and stream handling
-date=2026-11-18 20:11:55 +0800
+full_hash=b90508e0bff4a3aee45180e621e59cced598de2a
+short_hash=b90508e
+message=revert: restore pre-package Python backend
+date=2026-11-20 04:57:45 +0800
