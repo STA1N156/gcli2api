@@ -277,6 +277,10 @@ func moveSystem(raw []byte) ([]byte, bool) {
 	return raw, false
 }
 func errorStatus(err error) (int, []byte) {
+	var config *agent.ConfigurationError
+	if errors.As(err, &config) {
+		return http.StatusNotImplemented, encoded(object{"error": object{"code": http.StatusNotImplemented, "message": config.Error()}})
+	}
 	if errors.Is(err, agent.ErrAuth) {
 		return 401, encoded(object{"error": object{"code": 401, "message": "Google authentication required"}})
 	}
@@ -310,6 +314,10 @@ func precise429(err error) bool {
 	return true
 }
 func recordFailure(c *credential, model string, err error) {
+	var config *agent.ConfigurationError
+	if errors.As(err, &config) {
+		return
+	}
 	if precise429(err) {
 		return
 	}

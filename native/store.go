@@ -250,6 +250,9 @@ func openStore(ctx context.Context) (*store, error) {
 			state[k] = x
 		}
 		c := newCredential(name, data, state)
+		if clearLegacyConfigurationFailure(state) {
+			c.dirty.Store(true)
+		}
 		accounts.all = append(accounts.all, c)
 		accounts.byName[name] = c
 	}
@@ -275,6 +278,37 @@ func openStore(ctx context.Context) (*store, error) {
 	}()
 	ok = true
 	return s, nil
+}
+
+// Repair only the model state produced by the old local configuration gate.
+func clearLegacyConfigurationFailure(state object) bool {
+	messages := obj(state["error_messages"])
+	detail := obj(messages["404"])
+	message, model := text(detail["message"]), text(detail["model"])
+	if model == "" || !strings.Contains(message, "unknown model:") ||
+		(!strings.Contains(message, "目录里的安全监控配置未核对") && !strings.Contains(message, "目录里的系统提示模板未核对")) {
+		return false
+	}
+	delete(messages, "404")
+	delete(obj(state["model_cooldowns"]), model)
+	codes := []any{}
+	for _, code := range list(state["error_codes"]) {
+		if number(code) != 404 {
+			codes = append(codes, code)
+		}
+	}
+	state["error_codes"] = codes
+	models := list(state["supported_models"])
+	if len(models) > 0 {
+		found := false
+		for _, value := range models {
+			found = found || text(value) == model
+		}
+		if !found {
+			state["supported_models"] = append(models, model)
+		}
+	}
+	return true
 }
 func (s *store) value(key string) any {
 	return (*s.effective.Load())[key]

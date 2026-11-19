@@ -23,15 +23,19 @@ func Supported(m ModelInfo) bool {
 	return !m.TemplateOverride && (!m.NeedsMonitors || m.Monitors != nil)
 }
 
+type ConfigurationError struct{ Message string }
+
+func (e *ConfigurationError) Error() string { return e.Message }
+
 func unsupportedError(id string, m ModelInfo) error {
 	reason := "未知原因"
 	switch {
 	case m.TemplateOverride:
 		reason = "目录里的系统提示模板未核对"
 	case m.NeedsMonitors && m.Monitors == nil:
-		reason = "目录里的安全监控配置未核对 sha256=" + m.UnverifiedMonitorsSHA
+		reason = "目录里的安全监控配置无法解析 sha256=" + m.UnverifiedMonitorsSHA
 	}
-	return fmt.Errorf("unknown model: %s(%s)", id, reason)
+	return &ConfigurationError{Message: fmt.Sprintf("antigravity: %s(%s)", id, reason)}
 }
 
 type promptBlock struct {

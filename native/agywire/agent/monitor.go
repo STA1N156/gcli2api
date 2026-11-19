@@ -3,9 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"log"
 	"regexp"
@@ -29,12 +27,6 @@ func init() {
 	if err := json.Unmarshal(monitorPiecesRaw, &monitorPieces); err != nil {
 		panic(err)
 	}
-}
-
-var knownMonitorConfigs = map[string]bool{
-	"3f9d77e3a5264771ea9c6edc385746b997b7e07469bfca2679024f7ada2d69b0": true,
-
-	"bd1a2428b53a89d32e2f40fa4c426cc5e190335039da6258002f21f3a2e795da": true,
 }
 
 var monitorTierModel = map[string]string{
@@ -79,10 +71,6 @@ func setOf(xs []string) map[string]bool {
 }
 
 func parseMonitorsConfig(text string) *MonitorsConfig {
-	sum := sha256.Sum256([]byte(text))
-	if !knownMonitorConfigs[hex.EncodeToString(sum[:])] {
-		return nil
-	}
 	root, err := parseTextproto(text)
 	if err != nil {
 		log.Printf("监控配置解析失败: %v", err)
@@ -93,6 +81,9 @@ func parseMonitorsConfig(text string) *MonitorsConfig {
 		d := monitorDef{
 			Name: m.str("name"), Mode: m.str("mode"), Phase: m.str("execution_phases"),
 			Enabled: m.str("enabled") == "true", TimeoutSeconds: m.num("timeout_seconds"),
+		}
+		if d.Name == "" || (d.Enabled && (d.Phase == "" || (m.msg("tool_safety_config") == nil && m.msg("llm_config") == nil))) {
+			return nil
 		}
 		if dep := m.msg("dependency_config"); dep != nil {
 			d.ParentName = dep.str("parent_monitor_name")
@@ -118,6 +109,9 @@ func parseMonitorsConfig(text string) *MonitorsConfig {
 			d.MaxTrajectoryTokens = lc.num("max_trajectory_tokens")
 		}
 		cfg.Monitors = append(cfg.Monitors, d)
+	}
+	if len(cfg.Monitors) == 0 {
+		return nil
 	}
 	return cfg
 }

@@ -414,7 +414,7 @@ func (s *server) generateAPI(w http.ResponseWriter, r *http.Request, raw []byte,
 		if precise429(err) {
 			code = 400
 		}
-		if code != 401 && code != 403 && code != 404 && code != 429 && code < 500 {
+		if code == http.StatusNotImplemented || (code != 401 && code != 403 && code != 404 && code != 429 && code < 500) {
 			break
 		}
 		if delay := number(s.store.value("credential_retry_interval")); delay > 0 {
